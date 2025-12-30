@@ -1,0 +1,108 @@
+.holdings-wrapper {
+  margin-top: 24px;
+}
+
+.holdings-title {
+  font-size: 20px;
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+
+.holdings-subtitle {
+  font-size: 13px;
+  color: #6b7280;
+  margin-bottom: 16px;
+}
+
+.holdings-table-wrapper {
+  width: 100%;
+  overflow-x: auto;
+  background: #ffffff;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.05);
+}
+
+.holdings-table {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 720px;
+}
+
+.holdings-table thead {
+  background: #f9fafb;
+}
+
+.holdings-table th {
+  padding: 12px 14px;
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #6b7280;
+  text-align: left;
+  border-bottom: 2px solid #e5e7eb;
+}
+
+.holdings-table td {
+  padding: 14px;
+  font-size: 14px;
+  color: #111827;
+  border-bottom: 1px solid #f3f4f6;
+  background: #ffffff;
+}
+
+.holdings-table tbody tr:hover {
+  background: #fce7f3; /* Changed from #f5f7ff to light pink */
+  cursor: pointer;
+}
+
+.security-name {
+  font-weight: 600;
+}
+
+.security-code {
+  color: #4b5563;
+  font-family: "SFMono-Regular", Menlo, Monaco, Consolas, "Liberation Mono",
+    "Courier New", monospace;
+  font-size: 13px;
+}
+
+.holding-value {
+  font-weight: 700;
+  color: #111827;
+}
+
+.sold-badge {
+  background: #fee2e2;
+  color: #991b1b;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 4px 8px;
+  border-radius: 6px;
+  margin-left: 10px;
+}
+
+.view-cell {
+  text-align: right;
+}
+
+.view-btn {
+  background: linear-gradient(90deg, #c2185b, #8b1538); /* Changed from #6366f1, #7c3aed to pink/maroon */
+  color: white;
+  border: none;
+  padding: 10px 14px;
+  border-radius: 10px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 4px 10px rgba(194, 24, 91, 0.25); /* Changed from rgba(99, 102, 241, 0.25) */
+}
+
+.view-btn:hover {
+  opacity: 0.93;
+}
+
+.sold-row td {
+  background: #fff7f7;
+}

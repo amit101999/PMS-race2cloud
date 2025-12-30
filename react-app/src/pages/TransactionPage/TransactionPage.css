@@ -1,0 +1,140 @@
+.hd-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.35);
+  z-index: 1000;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+.hd-container {
+  background: white;
+  width: 92%;
+  max-height: 90vh;
+  border-radius: 16px;
+  padding: 24px;
+  overflow-y: auto;
+}
+
+.hd-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.hd-close {
+  border: none;
+  background: #f3f4f6;
+  padding: 8px 12px;
+  border-radius: 50%;
+  font-size: 18px;
+  cursor: pointer;
+}
+
+.hd-summary {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 16px;
+  margin: 24px 0;
+}
+
+.hd-card {
+  padding: 16px;
+  border-radius: 14px;
+  background: #f9fafb;
+}
+
+.hd-card p {
+  font-size: 12px;
+  color: #6b7280;
+}
+
+.hd-card h3 {
+  font-size: 22px;
+  margin-top: 6px;
+}
+
+.purple { background: #eef2ff; }
+.green { background: #ecfdf5; color: #065f46; }
+.red { background: #fef2f2; color: #991b1b; }
+.profit { background: #ecfdf5; color: #047857; }
+.blue { background: #eff6ff; color: #1d4ed8; }
+
+.hd-table-title {
+  margin: 20px 0 10px;
+}
+
+.hd-table-wrapper {
+  overflow-x: auto;
+  margin-top: 16px;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  background: white;
+}
+
+.hd-table {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 800px;
+}
+
+.hd-table thead {
+  background: #f9fafb;
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+
+.hd-table th {
+  padding: 12px 16px;
+  text-align: left;
+  font-weight: 600;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #6b7280;
+  border-bottom: 2px solid #e5e7eb;
+  white-space: nowrap;
+}
+
+.hd-table td {
+  padding: 12px 16px;
+  border-bottom: 1px solid #f3f4f6;
+  font-size: 13px;
+  color: #111827;
+  white-space: nowrap;
+}
+
+.hd-table tbody tr {
+  transition: background-color 0.15s ease;
+}
+
+.hd-table tbody tr:hover {
+  background-color: #f9fafb !important;
+}
+
+.hd-table tr.buy {
+  background: #f0fdf4;
+}
+
+.hd-table tr.sell {
+  background: #fef2f2;
+}
+
+.hd-table tr.bonus {
+  background: #eef2ff;
+}
+
+.hd-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.pl {
+  color: #059669;
+  font-weight: 600;
+}
+
+.pl.negative {
+  color: #dc2626;
+}
