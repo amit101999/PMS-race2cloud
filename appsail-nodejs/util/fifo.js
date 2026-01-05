@@ -264,6 +264,7 @@ export const runFifoEngine = (
   if (card) {
     const last = [...output].reverse().find((r) => r.costOfHoldings !== null);
     return {
+      holdings: last?.holdings || 0,
       holdingValue: last?.costOfHoldings || 0,
       averageCostOfHoldings: last?.averageCostOfHoldings || 0,
     };

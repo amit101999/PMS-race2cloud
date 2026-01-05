@@ -81,7 +81,7 @@ export const exportAllData = async (req, res) => {
       const accountCode = client.clientIds.WS_Account_code;
 
       const response = await fetch(
-        `${BASE_URL}/getHoldingsSummarySimple?accountCode=${accountCode}`
+        `${BASE_URL}/getHoldingsSummarySimple?accountCode=AYAN082`
       );
 
       if (!response.ok) continue;
