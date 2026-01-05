@@ -1,5 +1,6 @@
 import { PassThrough } from "stream";
 import { getAllAccountCodesFromDatabase } from "../util/allAccountCodes.js";
+import { calculateHoldingsSummary } from "./AnalyticsControllers.js";
 
 // export const exportAllData = async (req, res) => {
 //   try {
@@ -43,9 +44,9 @@ export const exportAllData = async (req, res) => {
     const stratus = catalystApp.stratus();
     const bucket = stratus.bucket("upload-data-bucket");
     const data = await bucket.getDetails();
-    const zohoCatalyst = req.catalystApp;
-    let zcql = zohoCatalyst.zcql();
-    let tableName = "clientIds";
+
+    const zcql = catalystApp.zcql();
+    const tableName = "clientIds";
 
     /* ---------------- GET CLIENT IDS ---------------- */
     const clientIds = await getAllAccountCodesFromDatabase(zcql, tableName);
@@ -58,7 +59,6 @@ export const exportAllData = async (req, res) => {
     const csvStream = new PassThrough();
     const fileName = `all-clients-export-${Date.now()}.csv`;
 
-    // Upload stream to Stratus (DOCUMENTED API)
     const uploadPromise = bucket.putObject(fileName, csvStream, {
       overwrite: true,
       contentType: "text/csv",
@@ -66,27 +66,25 @@ export const exportAllData = async (req, res) => {
 
     /* ---------------- CSV HEADER ---------------- */
     csvStream.write(
-      "ACCOUNT_CODE,SECURITY_NAME,SECURITY_CODE,HOLDING,WAP,HOLDING_VALUE,\n"
+      "ACCOUNT_CODE,SECURITY_NAME,SECURITY_CODE,HOLDING,WAP,HOLDING_VALUE\n"
     );
 
     /* ---------------- FETCH & WRITE DATA ---------------- */
-    const BASE_URL =
-      "https://backend-10114672040.development.catalystappsail.com/api/analytics";
-
     let count = 0;
 
     for (const client of clientIds) {
       if (count >= 1) break; // testing limit (remove later)
 
-      const accountCode = client.clientIds.WS_Account_code;
+      // const accountCode = client.clientIds.WS_Account_code;
+      const accountCode = "AYAN001";
 
-      const response = await fetch(
-        `${BASE_URL}/getHoldingsSummarySimple?accountCode=AYAN082`
-      );
+      // ✅ DIRECT FUNCTION CALL (NO HTTP)
+      const rows = await calculateHoldingsSummary({
+        catalystApp,
+        accountCode,
+      });
 
-      if (!response.ok) continue;
-
-      const rows = await response.json();
+      if (!Array.isArray(rows) || !rows.length) continue;
 
       for (const row of rows) {
         const line = [
@@ -97,8 +95,9 @@ export const exportAllData = async (req, res) => {
           row.avgPrice ?? "",
           row.holdingValue ?? "",
         ]
-          .map((v) => `"${v}"`)
+          .map((v) => `"${String(v).replace(/"/g, '""')}"`)
           .join(",");
+
         csvStream.write(line + "\n");
       }
 
@@ -107,17 +106,16 @@ export const exportAllData = async (req, res) => {
 
     /* ---------------- CLOSE STREAM ---------------- */
     csvStream.end();
-
-    // wait until upload finishes
     await uploadPromise;
-    res.status(200).json({
+
+    return res.status(200).json({
       message: "Export successful",
-      fileName: fileName,
+      fileName,
       bucketDetails: data,
     });
   } catch (error) {
     console.error("Export error:", error);
-    res.status(500).json({
+    return res.status(500).json({
       message: "Internal Server Error",
       error: error.message,
     });
