@@ -1,3 +1,4 @@
+import { getAllAccountCodesFromDatabase } from "../util/allAccountCodes.js";
 import { fetchBonusesForStock } from "../util/bonuses.js";
 import { runFifoEngine } from "../util/fifo.js";
 import { fetchStockTransactions } from "../util/transactions.js";
@@ -9,24 +10,8 @@ export const getAllAccountCodes = async (req, res) => {
     const zohoCatalyst = req.catalystApp;
     let zcql = zohoCatalyst.zcql();
     let tableName = "clientIds";
-
-    let offset = 0;
-    let limit = 270;
-    let hasNext = true;
-
-    let cliendIds = [];
-    while (hasNext) {
-      let query = `select WS_Account_code from ${tableName} limit ${limit} offset ${offset}`;
-      let result = await zcql.executeZCQLQuery(query);
-      cliendIds.push(...result);
-      offset = offset + limit;
-      if (result.length <= 0) {
-        hasNext = false;
-      }
-    }
-    return res.status(200).json({
-      data: cliendIds,
-    });
+    const cliendIds = await getAllAccountCodesFromDatabase(zcql, tableName);
+    return res.status(200).json({ data: cliendIds });
   } catch (error) {
     console.log("Error in fething data", error);
     res.status(400).json({ error: error.message });
@@ -51,7 +36,7 @@ export const getHoldingsSummarySimple = async (req, res) => {
     let txnDateCondition = "";
     let bonusDateCondition = "";
 
-    if(asOnDate && /^\d{4}-\d{2}-\d{2}$/.test(asOnDate)) {
+    if (asOnDate && /^\d{4}-\d{2}-\d{2}$/.test(asOnDate)) {
       const nextDay = new Date(asOnDate);
       nextDay.setDate(nextDay.getDate() + 1);
       const nextDayStr = nextDay.toISOString().split("T")[0];
@@ -62,7 +47,7 @@ export const getHoldingsSummarySimple = async (req, res) => {
 
     const transactions = [];
     let offset = 0;
-   
+
     while (true) {
       const rows = await zcql.executeZCQLQuery(`
         SELECT Security_Name, Security_code, Tran_Type, QTY, TRANDATE, NETRATE, Net_Amount
