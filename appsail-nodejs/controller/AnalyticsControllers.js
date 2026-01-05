@@ -29,12 +29,14 @@ export const getHoldingsSummarySimple = async (req, res) => {
     if (!accountCode) {
       return res.status(400).json({ message: "Valid accountCode required" });
     }
+
     const asOnDate = req.query.asOnDate;
     const zcql = app.zcql();
     const batchLimit = 250;
 
     let txnDateCondition = "";
     let bonusDateCondition = "";
+    let splitDateCondition = "";
 
     if (asOnDate && /^\d{4}-\d{2}-\d{2}$/.test(asOnDate)) {
       const nextDay = new Date(asOnDate);
@@ -43,36 +45,54 @@ export const getHoldingsSummarySimple = async (req, res) => {
 
       txnDateCondition = `AND TRANDATE < '${nextDayStr}'`;
       bonusDateCondition = `AND ExDate < '${nextDayStr}'`;
+      splitDateCondition = `AND Issue_Date < '${nextDayStr}'`;
     }
 
+    /* ================= FETCH TRANSACTIONS ================= */
     const transactions = [];
+    const uniqueSecurityCodes = new Set();
     let offset = 0;
 
     while (true) {
       const rows = await zcql.executeZCQLQuery(`
-        SELECT Security_Name, Security_code, Tran_Type, QTY, TRANDATE, NETRATE, Net_Amount
-        FROM Transaction
-        WHERE WS_Account_code = '${accountCode}'
-        ${txnDateCondition}
-        ORDER BY TRANDATE ASC
-        LIMIT ${batchLimit} OFFSET ${offset}
-      `);
+    SELECT Security_Name, Security_code, Tran_Type, QTY, TRANDATE, NETRATE, Net_Amount
+    FROM Transaction
+    WHERE WS_Account_code = '${accountCode}'
+    ${txnDateCondition}
+    ORDER BY TRANDATE ASC
+    LIMIT ${batchLimit} OFFSET ${offset}
+  `);
 
       if (!rows.length) break;
-      transactions.push(...rows.map((r) => r.Transaction || r));
+
+      for (const r of rows) {
+        const txn = r.Transaction || r;
+        transactions.push(txn);
+
+        if (txn.Security_code) {
+          uniqueSecurityCodes.add(txn.Security_code);
+        }
+      }
+
       if (rows.length < batchLimit) break;
       offset += batchLimit;
     }
+    // getting unique security codes from transactions
 
+    const securityCodes = [...uniqueSecurityCodes];
+    console.log("Unique securities for client:", securityCodes);
+
+    /* ================= FETCH BONUS ================= */
     const bonuses = [];
     offset = 0;
+
     while (true) {
       const rows = await zcql.executeZCQLQuery(`
-       SELECT SecurityName, BonusShare, ExDate
-       FROM Bonus
-       WHERE WS_Account_code = '${accountCode}'
+        SELECT SecurityName, BonusShare, ExDate
+        FROM Bonus
+        WHERE WS_Account_code = '${accountCode}'
         ${bonusDateCondition}
-       LIMIT ${batchLimit} OFFSET ${offset}
+        LIMIT ${batchLimit} OFFSET ${offset}
       `);
 
       if (!rows.length) break;
@@ -81,6 +101,27 @@ export const getHoldingsSummarySimple = async (req, res) => {
       offset += batchLimit;
     }
 
+    /* ================= FETCH SPLITS ================= */
+
+    const splits = [];
+
+    for (const code of securityCodes) {
+      const rows = await zcql.executeZCQLQuery(`
+    SELECT Security_Code, Security_Name, Issue_Date, Ratio1, Ratio2
+    FROM Split
+    WHERE Security_Code = '${code}'
+    ${splitDateCondition}
+    ORDER BY Issue_Date ASC
+  `);
+
+      if (!rows || !rows.length) continue;
+
+      splits.push(...rows.map((r) => r.Split || r));
+    }
+
+    console.log("Total splits fetched:", splits.length);
+
+    /* ================= NORMALIZATION ================= */
     const normalize = (s = "") =>
       s
         .toUpperCase()
@@ -90,8 +131,10 @@ export const getHoldingsSummarySimple = async (req, res) => {
 
     const txByStock = {};
     const bonusByStock = {};
+    const splitByStock = {};
     const holdingsMap = {};
 
+    /* ================= GROUP TRANSACTIONS ================= */
     transactions.forEach((t) => {
       const stock = normalize(t.Security_Name);
       if (!stock) return;
@@ -115,6 +158,7 @@ export const getHoldingsSummarySimple = async (req, res) => {
         holdingsMap[stock].sell += qty;
     });
 
+    /* ================= GROUP BONUS ================= */
     bonuses.forEach((b) => {
       const stock = normalize(b.SecurityName);
       if (!stock) return;
@@ -128,8 +172,26 @@ export const getHoldingsSummarySimple = async (req, res) => {
 
       holdingsMap[stock].bonus += Number(b.BonusShare) || 0;
     });
-    const split = [];
+
+    /* ================= GROUP SPLITS ================= */
+    splits.forEach((s) => {
+      const stock = normalize(s.Security_Name);
+      if (!stock) return;
+
+      if (!splitByStock[stock]) splitByStock[stock] = [];
+      splitByStock[stock].push({
+        securityCode: s.Security_Code,
+        securityName: s.Security_Name, // display only
+        date: s.Issue_Date,
+        ratio1: s.Ratio1,
+        ratio2: s.Ratio2,
+        issueDate: s.Issue_Date,
+      });
+    });
+
+    /* ================= FINAL FIFO ================= */
     const result = [];
+    console.log("calcuating ", splitByStock);
 
     for (const stock of Object.keys(holdingsMap)) {
       const { buy, sell, bonus, securityCode } = holdingsMap[stock];
@@ -139,15 +201,16 @@ export const getHoldingsSummarySimple = async (req, res) => {
       const fifo = runFifoEngine(
         txByStock[stock] || [],
         bonusByStock[stock] || [],
-        split || [],
+        splitByStock[stock] || [],
         true
       );
-      if (fifo.holdingValue <= 0) continue;
+
+      if (!fifo || fifo.holdingValue <= 0) continue;
 
       result.push({
         stockName: stock,
         securityCode,
-        currentHolding,
+        currentHolding: fifo.holdings,
         holdingValue: fifo.holdingValue,
         avgPrice: fifo.averageCostOfHoldings,
       });
