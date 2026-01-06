@@ -162,6 +162,7 @@ function TransactionPage({ stock, accountCode, asOnDate, onClose }) {
                 <tr>
                   <th>Date</th>
                   <th>Type</th>
+                  <th>ISIN</th>
                   <th>Quantity</th>
                   <th>Price</th>
                   <th>Total Amount</th>
@@ -190,6 +191,7 @@ function TransactionPage({ stock, accountCode, asOnDate, onClose }) {
                     <tr key={idx} className={getRowClass(tx.tranType)}>
                       <td>{tx.trandate || "-"}</td>
                       <td>{tx.tranType || "-"}</td>
+                      <td>{tx.isin || "-"}</td>
                       <td>
                         {formatNumber(tx.qty)}
                         <span>

@@ -73,10 +73,8 @@ export const exportAllData = async (req, res) => {
     let count = 0;
 
     for (const client of clientIds) {
-      if (count >= 1) break; // testing limit (remove later)
-
-      // const accountCode = client.clientIds.WS_Account_code;
-      const accountCode = "AYAN001";
+      console.log(`Processing client ${count + 1}/${clientIds.length}`);
+      const accountCode = client.clientIds.WS_Account_code;
 
       // ✅ DIRECT FUNCTION CALL (NO HTTP)
       const rows = await calculateHoldingsSummary({

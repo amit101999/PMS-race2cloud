@@ -73,6 +73,7 @@ function AnalyticsPage() {
       const data = await res.json();
 
       if (Array.isArray(data)) {
+        console.log("Fetched holdings:", data);
         setHoldings(data);
       } else {
         console.error("Unexpected holdings response:", data);
@@ -175,7 +176,7 @@ function AnalyticsPage() {
     setSearchQuery(option.label);
     setAccountCode(option.value);
     setShowDropdown(false);
-    fetchHoldings(option.value,asOnDate);
+    fetchHoldings(option.value, asOnDate);
   };
 
   const handleStockSelect = (stock) => {
@@ -238,19 +239,19 @@ function AnalyticsPage() {
           </div>
 
           <TextInput
-          label="Filter by Date"
-          type="date"
-          value={asOnDate}
-          onChange={(e) => {
-            const selectedDate = e.target.value;
-            setAsOnDate(selectedDate);
-            setCurrentPage(1);
+            label="Filter by Date"
+            type="date"
+            value={asOnDate}
+            onChange={(e) => {
+              const selectedDate = e.target.value;
+              setAsOnDate(selectedDate);
+              setCurrentPage(1);
 
-            if (accountCode) {
-              fetchHoldings(accountCode, selectedDate);
-            }
-          }}
-        />
+              if (accountCode) {
+                fetchHoldings(accountCode, selectedDate);
+              }
+            }}
+          />
         </div>
       </Card>
 
@@ -335,6 +336,7 @@ function AnalyticsPage() {
             <tr>
               <th>Security Name</th>
               <th>Security Code</th>
+              <th>Security ISIN</th>
               <th>Current Holding</th>
               <th>Average Holding Value</th>
               <th>Holding Value</th>
@@ -355,6 +357,7 @@ function AnalyticsPage() {
               >
                 <td>{row.stockName}</td>
                 <td>{row.securityCode || "–"}</td>
+                <td>{row.isin || "–"}</td>
                 <td>{formatNumber(row.currentHolding)}</td>
                 <td>{formatNumber(row.avgPrice)}</td>
                 <td>{formatNumber(row.holdingValue)}</td>
@@ -392,7 +395,7 @@ function AnalyticsPage() {
 
       {selectedStock && (
         <TransactionPage
-          key={`${selectedStock.securityCode}-${asOnDate}`}  
+          key={`${selectedStock.securityCode}-${asOnDate}`}
           stock={selectedStock}
           accountCode={accountCode}
           asOnDate={asOnDate}

@@ -66,7 +66,7 @@ export const calculateHoldingsSummary = async ({
 
   while (true) {
     const rows = await zcql.executeZCQLQuery(`
-      SELECT Security_Name, Security_code, Tran_Type, QTY, TRANDATE, NETRATE, Net_Amount
+      SELECT Security_Name, Security_code, Tran_Type, QTY, TRANDATE, NETRATE, Net_Amount,ISIN
       FROM Transaction
       WHERE WS_Account_code = '${accountCode}'
       ${txnDateCondition}
@@ -92,7 +92,7 @@ export const calculateHoldingsSummary = async ({
 
   while (true) {
     const rows = await zcql.executeZCQLQuery(`
-      SELECT SecurityName, BonusShare, ExDate
+      SELECT SecurityName, BonusShare, ExDate ,ISIN
       FROM Bonus
       WHERE WS_Account_code = '${accountCode}'
       ${bonusDateCondition}
@@ -113,7 +113,7 @@ export const calculateHoldingsSummary = async ({
     const inClause = securityCodes.map((c) => `'${c}'`).join(",");
 
     const rows = await zcql.executeZCQLQuery(`
-      SELECT Security_Code, Security_Name, Issue_Date, Ratio1, Ratio2
+      SELECT Security_Code, Security_Name, Issue_Date, Ratio1, Ratio2 ,ISIN
       FROM Split
       WHERE Security_Code IN (${inClause})
       ${splitDateCondition}
@@ -147,6 +147,7 @@ export const calculateHoldingsSummary = async ({
         sell: 0,
         bonus: 0,
         securityCode: t.Security_code,
+        isin: t.ISIN,
       };
     }
 
@@ -163,7 +164,13 @@ export const calculateHoldingsSummary = async ({
     bonusByStock[stock].push(b);
 
     if (!holdingsMap[stock])
-      holdingsMap[stock] = { buy: 0, sell: 0, bonus: 0, securityCode: "" };
+      holdingsMap[stock] = {
+        buy: 0,
+        sell: 0,
+        bonus: 0,
+        securityCode: "",
+        isin: b.ISIN,
+      };
 
     holdingsMap[stock].bonus += Number(b.BonusShare) || 0;
   }
@@ -175,6 +182,7 @@ export const calculateHoldingsSummary = async ({
       issueDate: s.Issue_Date,
       ratio1: s.Ratio1,
       ratio2: s.Ratio2,
+      isin: s.ISIN || "",
     });
   }
 
@@ -208,8 +216,8 @@ export const calculateHoldingsSummary = async ({
     );
 
     if (!fifo || fifo.holdings <= 0) continue;
-
     result.push({
+      isin: fifo.isin,
       stockName: stock,
       securityCode: holdingsMap[stock].securityCode,
       currentHolding: fifo.holdings,

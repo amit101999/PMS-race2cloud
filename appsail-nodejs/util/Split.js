@@ -5,7 +5,7 @@ export const fetchSplitForStock = async ({ zcql, securityCode, tableName }) => {
 
   while (true) {
     const query = `
-        SELECT Security_Code , Security_Name,Issue_Date,Ratio1,Ratio2
+        SELECT Security_Code , Security_Name,Issue_Date,Ratio1,Ratio2,ISIN
         FROM ${tableName}
         WHERE Security_Code = '${securityCode.replace(/'/g, "''")}'
         LIMIT ${limit} OFFSET ${offset}
@@ -28,6 +28,7 @@ export const fetchSplitForStock = async ({ zcql, securityCode, tableName }) => {
       ratio1: b.Ratio1,
       ratio2: b.Ratio2,
       issueDate: b.Issue_Date,
+      isin: b.ISIN,
     };
   });
 };
