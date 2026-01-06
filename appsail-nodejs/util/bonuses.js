@@ -4,24 +4,23 @@ export const fetchBonusesForStock = async ({
   securityCode,
   asOnDate,
 }) => {
-
   let dateCondition = "";
 
-if (asOnDate && /^\d{4}-\d{2}-\d{2}$/.test(asOnDate)) {
-  const nextDay = new Date(asOnDate);
-  nextDay.setDate(nextDay.getDate() + 1);
+  if (asOnDate && /^\d{4}-\d{2}-\d{2}$/.test(asOnDate)) {
+    const nextDay = new Date(asOnDate);
+    nextDay.setDate(nextDay.getDate() + 1);
 
-  const nextDayStr = nextDay.toISOString().split("T")[0];
+    const nextDayStr = nextDay.toISOString().split("T")[0];
 
-  dateCondition = ` AND ExDate < '${nextDayStr}'`;
-}
+    dateCondition = ` AND ExDate < '${nextDayStr}'`;
+  }
   const rows = [];
   let offset = 0;
   const limit = 250;
 
   while (true) {
     const query = `
-        SELECT SecurityCode,SecurityName,ExDate,BonusShare
+        SELECT SecurityCode,SecurityName,ExDate,BonusShare,ISIN
         FROM Bonus
         WHERE WS_Account_code = '${accountCode.replace(/'/g, "''")}'
         AND SecurityCode = '${securityCode.replace(/'/g, "''")}'
@@ -44,6 +43,7 @@ if (asOnDate && /^\d{4}-\d{2}-\d{2}$/.test(asOnDate)) {
       securityName: b.SecurityName, // display only
       exDate: b.ExDate,
       bonusShare: Number(b.BonusShare) || 0,
+      isin: b.ISIN || "",
     };
   });
-}; 
+};

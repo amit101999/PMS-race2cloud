@@ -21,6 +21,7 @@ function HoldingsGrid({ holdings = [], onSelectStock }) {
             <tr>
               <th>Security Name</th>
               <th>Security Code</th>
+              <th>Security ISIN</th>
               <th>Current Holding</th>
               <th>Average Holding Value</th>
               <th>Holding Value</th>
@@ -38,6 +39,7 @@ function HoldingsGrid({ holdings = [], onSelectStock }) {
                 >
                   <td className="security-name">{item.stockName}</td>
                   <td className="security-code">{item.securityCode || "—"}</td>
+                  <td className="security-code">{item.isin || "—"}</td>
                   <td className="holding-value">
                     {formatNumber(item.currentHolding)}
                     {isSold && <span className="sold-badge">FULLY SOLD</span>}

@@ -32,6 +32,7 @@ export const runFifoEngine = (
         netrate: t.NETRATE || t.netrate,
         netAmount: t.NETAMOUNT || t.netAmount,
         trandate: t.TRANDATE || t.trandate,
+        isin: t.ISIN || t.isin,
       },
     })),
     ...bonuses.map((b) => ({
@@ -40,6 +41,7 @@ export const runFifoEngine = (
       data: {
         bonusShare: b.BonusShare || b.bonusShare,
         exDate: b.ExDate || b.exDate,
+        isin: b.ISIN || b.isin,
       },
     })),
     ...splits.map((s) => ({
@@ -49,10 +51,12 @@ export const runFifoEngine = (
         ratio1: s.ratio1,
         ratio2: s.ratio2,
         issueDate: s.issueDate,
+        isin: s.isin,
       },
     })),
   ].sort((a, b) => new Date(a.date) - new Date(b.date));
 
+  console.log("Fifo events:", events);
   /* ---------------- HELPERS ---------------- */
   const isBuy = (t) => /^BY-|SQB|OPI/.test(String(t).toUpperCase());
   const isSell = (t) => /^SL\+|SQS|OPO|NF-/.test(String(t).toUpperCase());
@@ -100,6 +104,7 @@ export const runFifoEngine = (
           averageCostOfHoldings: getWAP(),
           profitLoss: null,
           isActive: true,
+          isin: t.ISIN || t.isin,
         });
       }
 
@@ -135,6 +140,7 @@ export const runFifoEngine = (
           averageCostOfHoldings: getWAP(),
           profitLoss: qty * price - fifoCost,
           isActive: false, // 🔥 mark inactive
+          isin: t.ISIN || t.isin,
         });
       }
     }
@@ -169,6 +175,7 @@ export const runFifoEngine = (
         averageCostOfHoldings: getWAP(),
         profitLoss: null,
         isActive: true,
+        isin: e.data.isin,
       });
     }
 
@@ -252,6 +259,7 @@ export const runFifoEngine = (
           averageCostOfHoldings: runningWAP,
           profitLoss: null,
           isActive: true,
+          isin: e.data.isin,
         });
       }
 
@@ -264,6 +272,7 @@ export const runFifoEngine = (
   if (card) {
     const last = [...output].reverse().find((r) => r.costOfHoldings !== null);
     return {
+      isin: last?.isin || "",
       holdings: last?.holdings || 0,
       holdingValue: last?.costOfHoldings || 0,
       averageCostOfHoldings: last?.averageCostOfHoldings || 0,
