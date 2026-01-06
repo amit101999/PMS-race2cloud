@@ -13,6 +13,9 @@ function MainLayout({ title, rightContent, children }) {
     if (location.pathname === "/split") {
       return "split";
     }
+    if (location.pathname === "/bhav-copy") {
+      return "bhav-copy";
+    }
     return "dashboard";
   };
 
@@ -20,6 +23,7 @@ function MainLayout({ title, rightContent, children }) {
     { key: "dashboard", label: "Dashboard" },
     { key: "analytics", label: "Analytics" },
     { key: "split", label: "Split" },
+    { key: "bhav-copy", label: "Bhav Copy" },
   ];
 
   const contentStyle = {
