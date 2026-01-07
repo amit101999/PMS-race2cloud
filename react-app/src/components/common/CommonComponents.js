@@ -568,7 +568,9 @@ export function Sidebar({ items = [], activeKey }) {
       window.location.hash = "#/split";
     } else if (item.key === "bhav-copy") {
       window.location.hash = "#/bhav-copy";
-    }
+    } else if (item.key === "transaction-upload") {   
+      window.location.hash = "#/transaction-upload";
+    } 
   };
 
   return (
@@ -624,9 +626,6 @@ export function Topbar({ title, rightContent }) {
     <header style={bar}>
       <div>
         <h1 style={titleStyle}>{title}</h1>
-      </div>
-      <div>
-        <Button onClick={handleexport}>Import File (Excel/CSV) </Button>
       </div>
     </header>
   );

@@ -7,12 +7,11 @@
     border-radius: 14px;
     padding: 24px;
     display: grid;
-    grid-template-columns: repeat(2, 1fr);
-    gap: 20px;
+    grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+    gap: 16px 18px;
   }
   
   .split-field {
-    position: relative;
     display: flex;
     flex-direction: column;
   }
@@ -25,7 +24,8 @@
   }
   
   .split-field input {
-    padding: 10px 12px;
+    height: 44px;
+    padding: 12px 14px;
     border-radius: 10px;
     border: 1px solid #e5e7eb;
     font-size: 14px;
@@ -40,7 +40,20 @@
     background: #f3f4f6;
     color: #6b7280;
   }
-  
+  /* search box spacing aligns with inputs */
+.account-code-search {
+  margin-bottom: 0;
+}
+  /* search input height align with other inputs */
+.search-input-wrapper {
+  height: 44px;
+  padding: 0 14px;
+}
+
+.search-input {
+  height: 100%;
+  font-size: 14px;
+}
   /* ===========================
      SECURITY DROPDOWN
      =========================== */
@@ -73,10 +86,10 @@
      =========================== */
   
   .split-actions {
-    grid-column: span 2;
+    grid-column: 1 / -1;
     display: flex;
     justify-content: flex-end;
-    margin-top: 10px;
+    margin-top: 8px;
   }
   
   .split-submit {

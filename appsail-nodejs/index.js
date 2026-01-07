@@ -9,7 +9,8 @@ import DashboardRouter from "./router/DashboardRouter.js";
 import SplitRouter from "./router/SplitRouter.js";
 import ExportRouter from "./router/ExportRouter.js";
 import catalyst from "zcatalyst-sdk-node";
-import BhavRouter from "./router/BhavRouter.js";
+import BhavUploaderRouter from "./router/uploaderRouter/BhavUploaderRouter.js";
+import TransactionUploaderRouter from "./router/uploaderRouter/TransactionUploaderRouter.js";
 app.use(cors());
 app.use(Express.json());
 
@@ -39,7 +40,8 @@ app.use("/api/transaction", TransactionsRouter);
 app.use("/api/dashboard", DashboardRouter);
 app.use("/api/split", SplitRouter);
 app.use("/api/export", ExportRouter);
-app.use("/api/bhav", BhavRouter);
+app.use("/api/bhav", BhavUploaderRouter);
+app.use("/api/transaction-uploader", TransactionUploaderRouter);
 app.listen(port, () => {
   console.log(`Example app listening on port ${port}`);
   console.log(`http://localhost:${port}/`);

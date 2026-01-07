@@ -1,6 +1,7 @@
 import express from "express";
+
 import fileUpload from "express-fileupload";
-import { uploadBhavFileToStratus, triggerBhavBulkImport } from "../controller/BhavController.js";
+import { triggerBhavBulkImport, uploadBhavFileToStratus } from "../../controller/uploader/BhavUploader.js";
 const router = express.Router();
 router.use(fileUpload());
 
