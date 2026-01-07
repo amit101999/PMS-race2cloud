@@ -69,7 +69,6 @@ export const calculateHoldingsSummary = async ({
       SELECT Security_Name, Security_code, Tran_Type, QTY, TRANDATE, NETRATE, Net_Amount,ISIN
       FROM Transaction
       WHERE WS_Account_code = '${accountCode}'
-      and Security_code='HDFCBANK'
       ORDER BY TRANDATE ASC
       LIMIT ${batchLimit} OFFSET ${offset}
     `);

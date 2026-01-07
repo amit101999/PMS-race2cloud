@@ -7,25 +7,24 @@ import {
 } from "../../components/common/CommonComponents.js";
 import TransactionPage from "../TransactionPage/TransactionPage.js";
 import "./AnalyticsPage.css";
-import { BASE_URL } from "../../constant.js";
+import HoldingsGrid from "../Holding/HoldingCards.js";
+import { useAccountCodes } from "../../hooks/GetAllCodes.js";
+import { useHoldings } from "../../hooks/GetHolding.js";
 
 function AnalyticsPage() {
-  const [clientOptions, setClientOptions] = useState([]);
-  const [holdings, setHoldings] = useState([]);
-  const [loadingHoldings, setLoadingHoldings] = useState(false);
+  const { clientOptions } = useAccountCodes();
+  const { holdings, setHoldings, loadingHoldings, fetchHoldings } =
+    useHoldings();
+
   const [selectedStock, setSelectedStock] = useState(null);
   const [accountCode, setAccountCode] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
   const [showDropdown, setShowDropdown] = useState(false);
   const dropdownRef = useRef(null);
-  const [viewMode, setViewMode] = useState("all"); // all | equity | cash
+  const [viewMode, setViewMode] = useState("all");
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
   const [asOnDate, setAsOnDate] = useState("");
-
-  useEffect(() => {
-    fetchClientIds();
-  }, []);
 
   useEffect(() => {
     const handleClickOutside = (e) => {
@@ -37,58 +36,22 @@ function AnalyticsPage() {
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
-  const fetchClientIds = async () => {
-    try {
-      const res = await fetch(`${BASE_URL}/analytics/getAllAccountCodes`);
-      const data = await res.json();
-
-      const options = data.data.map((row) => ({
-        value: row.clientIds.WS_Account_code,
-        label: row.clientIds.WS_Account_code,
-      }));
-
-      setClientOptions(options);
-    } catch (err) {
-      console.error("Failed to fetch account codes:", err);
-    }
-  };
-
-  const fetchHoldings = async (code, date = asOnDate) => {
-    if (!code) return;
-
-    setAccountCode(code);
-    if (date !== undefined) {
-      setAsOnDate(date);
-    }
-    setLoadingHoldings(true);
-    setHoldings([]);
-    setSelectedStock(null);
-
-    try {
-      const params = new URLSearchParams({ accountCode: code });
-      if (date) params.set("asOnDate", date);
-      const res = await fetch(
-        `${BASE_URL}/analytics/getHoldingsSummarySimple?${params.toString()}`
-      );
-      const data = await res.json();
-
-      if (Array.isArray(data)) {
-        console.log("Fetched holdings:", data);
-        setHoldings(data);
-      } else {
-        console.error("Unexpected holdings response:", data);
-        setHoldings([]);
-      }
-    } catch (err) {
-      console.error("Failed to fetch holdings:", err);
-    } finally {
-      setLoadingHoldings(false);
-    }
-  };
-
   const filteredOptions = clientOptions.filter((opt) =>
     opt.label.toLowerCase().includes(searchQuery.toLowerCase())
   );
+  const handleInputChange = (e) => {
+    setSearchQuery(e.target.value);
+    setShowDropdown(true);
+  };
+
+  const handlePageChange = (page) => {
+    setCurrentPage(page);
+  };
+
+  const handlePageSizeChange = (size) => {
+    setPageSize(size);
+    setCurrentPage(1);
+  };
 
   const summaryCards = useMemo(
     () => [
@@ -142,48 +105,18 @@ function AnalyticsPage() {
             holdingValue: "—",
           },
         ]
-      : displayedHoldings.map((h) => ({
-          ...h,
-          // For any fields not present originally, we keep them out or default to 0 later if needed
-        }));
+      : displayedHoldings;
 
   const paginatedRows = useMemo(() => {
     const start = (currentPage - 1) * pageSize;
     return rowsForTable.slice(start, start + pageSize);
   }, [rowsForTable, currentPage, pageSize]);
 
-  const formatNumber = (value) => {
-    const n = Number(value);
-    if (!Number.isFinite(n)) return "—";
-    return n.toLocaleString("en-IN", {
-      minimumFractionDigits: 0,
-      maximumFractionDigits: 2,
-    });
-  };
-
-  const handlePageChange = (page) => setCurrentPage(page);
-  const handlePageSizeChange = (size) => {
-    setPageSize(size);
-    setCurrentPage(1);
-  };
-
-  const handleInputChange = (e) => {
-    setSearchQuery(e.target.value);
-    setShowDropdown(true);
-  };
-
   const handleSelect = (option) => {
     setSearchQuery(option.label);
     setAccountCode(option.value);
     setShowDropdown(false);
     fetchHoldings(option.value, asOnDate);
-  };
-
-  const handleStockSelect = (stock) => {
-    setSelectedStock({
-      ...stock,
-      accountCode: accountCode,
-    });
   };
 
   return (
@@ -330,57 +263,15 @@ function AnalyticsPage() {
       </div>
 
       {/* Holdings Table */}
-      <div className="holdings-table-wrapper analytics-table-wrapper">
-        <table className="analytics-table">
-          <thead>
-            <tr>
-              <th>Security Name</th>
-              <th>Security Code</th>
-              <th>Security ISIN</th>
-              <th>Current Holding</th>
-              <th>Average Holding Value</th>
-              <th>Holding Value</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {paginatedRows.map((row, i) => (
-              <tr
-                key={row.stockName + i}
-                onClick={() =>
-                  setSelectedStock({
-                    ...row,
-                    accountCode: accountCode,
-                  })
-                }
-                style={{ cursor: "pointer" }}
-              >
-                <td>{row.stockName}</td>
-                <td>{row.securityCode || "–"}</td>
-                <td>{row.isin || "–"}</td>
-                <td>{formatNumber(row.currentHolding)}</td>
-                <td>{formatNumber(row.avgPrice)}</td>
-                <td>{formatNumber(row.holdingValue)}</td>
-                <td className="analytics-action-cell">
-                  <button
-                    type="button"
-                    className="analytics-view-btn"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setSelectedStock({
-                        ...row,
-                        accountCode: accountCode,
-                      });
-                    }}
-                  >
-                    View
-                  </button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+      <HoldingsGrid
+        holdings={paginatedRows}
+        onSelectStock={(stock) =>
+          setSelectedStock({
+            ...stock,
+            accountCode: accountCode,
+          })
+        }
+      />
 
       {/* Pagination */}
       <div className="analytics-pagination">
