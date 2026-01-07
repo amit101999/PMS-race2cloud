@@ -566,6 +566,8 @@ export function Sidebar({ items = [], activeKey }) {
       window.location.hash = "#/analytics";
     } else if (item.key === "split") {
       window.location.hash = "#/split";
+    } else if (item.key === "bhav-copy") {
+      window.location.hash = "#/bhav-copy";
     }
   };
 
