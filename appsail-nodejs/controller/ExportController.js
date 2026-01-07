@@ -2,41 +2,6 @@ import { PassThrough } from "stream";
 import { getAllAccountCodesFromDatabase } from "../util/allAccountCodes.js";
 import { calculateHoldingsSummary } from "./AnalyticsControllers.js";
 
-// export const exportAllData = async (req, res) => {
-//   try {
-//     const catalystApp = req.catalystApp;
-//     const stratus = catalystApp.stratus();
-//     const bucket = stratus.bucket("upload-data-bucket");
-//     const data = await bucket.getDetails();
-//     const zohoCatalyst = req.catalystApp;
-//     let zcql = zohoCatalyst.zcql();
-//     let tableName = "clientIds";
-
-//     let clientData = [];
-//     const cliendIds = await getAllAccountCodesFromDatabase(zcql, tableName);
-//     let count = 0;
-//     for (let clientid of cliendIds) {
-//       if (count >= 3) break; // Limit to first 5 clients for testing
-//       const id = clientid.clientIds.WS_Account_code;
-//       const URL =
-//         "https://backend-10114672040.development.catalystappsail.com/api/analytics";
-//       const data = await fetch(
-//         `${URL}/getHoldingsSummarySimple?accountCode=${id}`
-//       );
-//       const json = await data.json();
-//       const holding = [...json, id];
-//       clientData.push(holding);
-//       count++;
-//     }
-
-//     res.status(200).send({ data: clientData });
-//   } catch (error) {
-//     return res
-//       .status(500)
-//       .send({ message: "Internal Server Error", error: error.message });
-//   }
-// };
-
 export const exportAllData = async (req, res) => {
   try {
     /* ---------------- INIT ---------------- */
@@ -66,15 +31,19 @@ export const exportAllData = async (req, res) => {
 
     /* ---------------- CSV HEADER ---------------- */
     csvStream.write(
-      "ACCOUNT_CODE,SECURITY_NAME,SECURITY_CODE,HOLDING,WAP,HOLDING_VALUE\n"
+      "ACCOUNT_CODE,SECURITY_NAME,SECURITY_CODE,ISIN,HOLDING,WAP,HOLDING_VALUE\n"
     );
 
     /* ---------------- FETCH & WRITE DATA ---------------- */
     let count = 0;
 
     for (const client of clientIds) {
-      console.log(`Processing client ${count + 1}/${clientIds.length}`);
       const accountCode = client.clientIds.WS_Account_code;
+      console.log(
+        `Processing client ${count + 1}/${
+          clientIds.length
+        } account code : ${accountCode}`
+      );
 
       // ✅ DIRECT FUNCTION CALL (NO HTTP)
       const rows = await calculateHoldingsSummary({
@@ -82,13 +51,18 @@ export const exportAllData = async (req, res) => {
         accountCode,
       });
 
-      if (!Array.isArray(rows) || !rows.length) continue;
+      if (!Array.isArray(rows) || !rows.length) {
+        count++;
+        console.log(`No data for account code: ${accountCode}`);
+        continue;
+      }
 
       for (const row of rows) {
         const line = [
           accountCode,
           row.stockName ?? "",
           row.securityCode ?? "",
+          row.isin ?? "",
           row.currentHolding ?? "",
           row.avgPrice ?? "",
           row.holdingValue ?? "",
