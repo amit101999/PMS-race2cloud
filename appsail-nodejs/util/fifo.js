@@ -56,7 +56,6 @@ export const runFifoEngine = (
     })),
   ].sort((a, b) => new Date(a.date) - new Date(b.date));
 
-  console.log("Fifo events:", events);
   /* ---------------- HELPERS ---------------- */
   const isBuy = (t) => /^BY-|SQB|OPI/.test(String(t).toUpperCase());
   const isSell = (t) => /^SL\+|SQS|OPO|NF-/.test(String(t).toUpperCase());
@@ -106,6 +105,7 @@ export const runFifoEngine = (
           isActive: true,
           isin: t.ISIN || t.isin,
         });
+        // console.log("Output Queue:", output);
       }
 
       /* ---- SELL ---- */
@@ -142,6 +142,7 @@ export const runFifoEngine = (
           isActive: false, // 🔥 mark inactive
           isin: t.ISIN || t.isin,
         });
+        // console.log("Output Queue:", output);
       }
     }
 
@@ -271,6 +272,7 @@ export const runFifoEngine = (
   /* ---------------- CARD MODE ---------------- */
   if (card) {
     const last = [...output].reverse().find((r) => r.costOfHoldings !== null);
+    // console.log("Final Output Queue:", last);
     return {
       isin: last?.isin || "",
       holdings: last?.holdings || 0,

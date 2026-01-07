@@ -69,13 +69,12 @@ export const calculateHoldingsSummary = async ({
       SELECT Security_Name, Security_code, Tran_Type, QTY, TRANDATE, NETRATE, Net_Amount,ISIN
       FROM Transaction
       WHERE WS_Account_code = '${accountCode}'
-      ${txnDateCondition}
+      and Security_code='HDFCBANK'
       ORDER BY TRANDATE ASC
       LIMIT ${batchLimit} OFFSET ${offset}
     `);
 
     if (!rows.length) break;
-
     for (const r of rows) {
       const t = r.Transaction || r;
       transactions.push(t);
@@ -190,23 +189,7 @@ export const calculateHoldingsSummary = async ({
   const result = [];
 
   for (const stock of Object.keys(holdingsMap)) {
-    const needsFifo =
-      splitByStock[stock]?.length || bonusByStock[stock]?.length;
-
-    // if (!needsFifo) {
-    //   const { buy, sell, bonus, securityCode } = holdingsMap[stock];
-    //   const holding = buy - sell + bonus;
-    //   if (holding <= 0) continue;
-
-    //   result.push({
-    //     stockName: stock,
-    //     securityCode,
-    //     currentHolding: holding,
-    //     holdingValue: 0,
-    //     avgPrice: 0,
-    //   });
-    //   continue;
-    // }
+    const { buy, sell, bonus, securityCode } = holdingsMap[stock];
 
     const fifo = runFifoEngine(
       txByStock[stock],
