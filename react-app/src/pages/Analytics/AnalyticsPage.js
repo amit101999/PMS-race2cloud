@@ -7,9 +7,12 @@ import {
 } from "../../components/common/CommonComponents.js";
 import TransactionPage from "../TransactionPage/TransactionPage.js";
 import "./AnalyticsPage.css";
-import HoldingsGrid from "../Holding/HoldingCards.js";
 import { useAccountCodes } from "../../hooks/GetAllCodes.js";
 import { useHoldings } from "../../hooks/GetHolding.js";
+import Holdingtabs from "./tabs/holding/HoldingTab";
+import Allocation from "./tabs/allocations/AllocationTab";
+import Performance from "./tabs/performance/PerformanceTab";
+import TransactionTab from "./tabs/transaction/TransactionTab";
 
 function AnalyticsPage() {
   const { clientOptions } = useAccountCodes();
@@ -89,36 +92,37 @@ function AnalyticsPage() {
     []
   );
 
-  const displayedHoldings = useMemo(() => {
-    if (viewMode === "cash") return [];
-    return Array.isArray(holdings) ? holdings : [];
-  }, [viewMode, holdings]);
-
-  const rowsForTable =
-    displayedHoldings.length === 0
-      ? [
-          {
-            stockName: viewMode === "cash" ? "Cash and Equivalent" : "—",
-            securityCode: "—",
-            currentHolding: "—",
-            avgPrice: "—",
-            holdingValue: "—",
-          },
-        ]
-      : displayedHoldings;
-
-  const paginatedRows = useMemo(() => {
-    const start = (currentPage - 1) * pageSize;
-    return rowsForTable.slice(start, start + pageSize);
-  }, [rowsForTable, currentPage, pageSize]);
-
   const handleSelect = (option) => {
     setSearchQuery(option.label);
     setAccountCode(option.value);
     setShowDropdown(false);
     fetchHoldings(option.value, asOnDate);
   };
-
+  const TAB_ITEMS = [
+    {
+      key: "holding",
+      label: "Holding",
+      component: () => (
+        <Holdingtabs
+          viewMode={viewMode}
+          setViewMode={setViewMode}
+          holdings={holdings}
+          accountCode={accountCode}
+          asOnDate={asOnDate}
+          selectedStock={selectedStock}
+          setSelectedStock={setSelectedStock}
+          pageSize={pageSize}
+          currentPage={currentPage}
+          onPageChange={handlePageChange}
+          onPageSizeChange={handlePageSizeChange}
+        />
+      ),
+    },
+    { key: "allocation", label: "Allocation", component: Allocation },
+    { key: "performance", label: "Performance", component: Performance },
+    { key: "transaction", label: "Transaction", component: TransactionTab },
+  ];
+  const [activeTab, setActiveTab] = useState("holding");
   return (
     <MainLayout title="Analytics Filters">
       <Card className="filters-card">
@@ -188,101 +192,30 @@ function AnalyticsPage() {
         </div>
       </Card>
 
-      {loadingHoldings && <p className="loading-text">Loading holdings...</p>}
-
-      {/* Holding Summary Table */}
-      <div className="holding-summary-table">
-        <div className="summary-table-header">
-          <h3>Holding Summary</h3>
-          <span className="summary-sort-icon">⇅</span>
-        </div>
-        <div className="summary-table-wrapper">
-          <table className="summary-table">
-            <thead>
-              <tr>
-                <th>Description</th>
-                <th>Cost</th>
-                <th>Mkt Val</th>
-                <th>Income</th>
-                <th>G/L</th>
-                <th>% G/L</th>
-                <th>% Assets</th>
-              </tr>
-            </thead>
-            <tbody>
-              {summaryCards.map((c) => {
-                const isActive =
-                  (c.key === "total" && viewMode === "all") ||
-                  (c.key === "equity" && viewMode === "equity") ||
-                  (c.key === "cash" && viewMode === "cash");
-
-                const handleRowClick = () => {
-                  if (c.key === "total") setViewMode("all");
-                  else if (c.key === "equity") setViewMode("equity");
-                  else if (c.key === "cash") setViewMode("cash");
-                };
-
-                return (
-                  <tr
-                    key={c.key}
-                    className={isActive ? "summary-row active" : "summary-row"}
-                    onClick={handleRowClick}
-                  >
-                    <td className="summary-desc">
-                      <span
-                        className={`summary-dot ${c.key}`}
-                        aria-hidden="true"
-                      ></span>
-                      {c.label}
-                    </td>
-                    <td>{c.cost}</td>
-                    <td>{c.mktVal}</td>
-                    <td>–</td>
-                    <td>{c.gl}</td>
-                    <td>{c.glPct}</td>
-                    <td>{c.pctAssets}</td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      {/* Tabs */}
-      <div className="holding-tabs">
-        {["all", "equity", "cash"].map((m) => (
+      {/* Analytics Tabs */}
+      <div className="analytics-tabs">
+        {TAB_ITEMS.map((tab) => (
           <button
-            key={m}
-            className={`holding-tab ${viewMode === m ? "active" : ""}`}
-            onClick={() => setViewMode(m)}
+            key={tab.key}
+            className={`analytics-tab ${activeTab === tab.key ? "active" : ""}`}
+            onClick={() => setActiveTab(tab.key)}
           >
-            {m === "all" ? "All" : m === "equity" ? "Equity" : "Cash"}
+            {tab.label}
           </button>
         ))}
       </div>
 
-      {/* Holdings Table */}
-      <HoldingsGrid
-        holdings={paginatedRows}
-        onSelectStock={(stock) =>
-          setSelectedStock({
-            ...stock,
-            accountCode: accountCode,
-          })
-        }
-      />
-
-      {/* Pagination */}
-      <div className="analytics-pagination">
-        <Pagination
-          currentPage={currentPage}
-          pageSize={pageSize}
-          totalRows={rowsForTable.length}
-          onPageChange={handlePageChange}
-          onPageSizeChange={handlePageSizeChange}
-        />
+      {/* Active Tab Content */}
+      <div className="analytics-tab-content">
+        {(() => {
+          const tab = TAB_ITEMS.find((t) => t.key === activeTab);
+          if (!tab) return null;
+          const Component = tab.component;
+          return <Component />;
+        })()}
       </div>
+
+      {loadingHoldings && <p className="loading-text">Loading holdings...</p>}
 
       {selectedStock && (
         <TransactionPage
