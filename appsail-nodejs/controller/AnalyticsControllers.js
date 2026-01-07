@@ -192,8 +192,12 @@ export const calculateHoldingsSummary = async ({
 
   /* ---- SPLITS ---- */
   for (const s of splits) {
+    console.log("Processing Split:", s);
     if (!s.ISIN) continue;
     const key = s.ISIN;
+    // if (s.ISIN == "INE089A01031") {
+    //   console.log("Split for ISIN:", s);
+    // }
 
     if (!splitByISIN[key]) splitByISIN[key] = [];
     splitByISIN[key].push({

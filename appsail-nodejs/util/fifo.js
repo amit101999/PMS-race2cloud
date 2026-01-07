@@ -267,19 +267,26 @@ export const runFifoEngine = (
       // 8️⃣ Final authoritative holdings
       holdings = runningHoldings;
     }
-    if (e.data.isin == "INE089A01031") {
-      console.log("After Event::", output);
-    }
   }
 
   /* ---------------- CARD MODE ---------------- */
   if (card) {
-    const last = [...output].reverse().find((r) => r.costOfHoldings !== null);
+    if (!output.length) {
+      return {
+        isin: "",
+        holdings: 0,
+        holdingValue: 0,
+        averageCostOfHoldings: 0,
+      };
+    }
+
+    const last = output[output.length - 1];
+
     return {
-      isin: last?.isin || "",
-      holdings: last?.holdings || 0,
-      holdingValue: last?.costOfHoldings || 0,
-      averageCostOfHoldings: last?.averageCostOfHoldings || 0,
+      isin: last.isin || "",
+      holdings: last.holdings || 0,
+      holdingValue: last.costOfHoldings || 0,
+      averageCostOfHoldings: last.averageCostOfHoldings || 0,
     };
   }
 
