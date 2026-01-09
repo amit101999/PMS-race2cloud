@@ -38,7 +38,6 @@ export const exportAllData = async (req, res) => {
     let count = 0;
 
     for (const client of clientIds) {
-      if (count >= 1) break;
       const accountCode = client.clientIds.WS_Account_code;
       console.log(
         `Processing client ${count + 1}/${
