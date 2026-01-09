@@ -1,6 +1,6 @@
 import { PassThrough } from "stream";
-import { getAllAccountCodesFromDatabase } from "../util/allAccountCodes.js";
-import { calculateHoldingsSummary } from "./AnalyticsControllers.js";
+import { getAllAccountCodesFromDatabase } from "../../../util/allAccountCodes.js";
+import { calculateHoldingsSummary } from "./analyticsController.js";
 
 export const exportAllData = async (req, res) => {
   try {
@@ -38,6 +38,7 @@ export const exportAllData = async (req, res) => {
     let count = 0;
 
     for (const client of clientIds) {
+      if (count >= 1) break;
       const accountCode = client.clientIds.WS_Account_code;
       console.log(
         `Processing client ${count + 1}/${
@@ -80,10 +81,13 @@ export const exportAllData = async (req, res) => {
     csvStream.end();
     await uploadPromise;
 
+    const downloadUrl = await bucket.generatePreSignedUrl(fileName, "GET", {
+      expiresIn: 3600, // 1 hour
+    });
+
     return res.status(200).json({
-      message: "Export successful",
-      fileName,
-      bucketDetails: data,
+      message: "Single client export successful",
+      downloadUrl: downloadUrl,
     });
   } catch (error) {
     console.error("Export error:", error);
