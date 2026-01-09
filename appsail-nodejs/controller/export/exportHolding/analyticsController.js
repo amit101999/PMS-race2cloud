@@ -1,37 +1,4 @@
-import { getAllAccountCodesFromDatabase } from "../util/allAccountCodes.js";
-import { runFifoEngine } from "../util/fifo.js";
-
-export const getAllAccountCodes = async (req, res) => {
-  try {
-    const zohoCatalyst = req.catalystApp;
-    let zcql = zohoCatalyst.zcql();
-    let tableName = "clientIds";
-    const cliendIds = await getAllAccountCodesFromDatabase(zcql, tableName);
-    return res.status(200).json({ data: cliendIds });
-  } catch (error) {
-    console.log("Error in fetching data", error);
-    res.status(400).json({ error: error.message });
-  }
-};
-
-export const getHoldingsSummarySimple = async (req, res) => {
-  try {
-    const accountCode = req.query.accountCode;
-    if (!accountCode)
-      return res.status(400).json({ message: "accountCode required" });
-
-    const data = await calculateHoldingsSummary({
-      catalystApp: req.catalystApp,
-      accountCode,
-      asOnDate: req.query.asOnDate,
-    });
-
-    return res.json(data);
-  } catch (err) {
-    console.error("Holding summary error:", err);
-    res.status(500).json({ message: "Failed", error: err.message });
-  }
-};
+import { runFifoEngine } from "../../../util/export/fifo.js";
 
 export const calculateHoldingsSummary = async ({
   catalystApp,

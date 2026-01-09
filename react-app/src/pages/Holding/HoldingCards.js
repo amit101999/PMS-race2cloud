@@ -46,6 +46,8 @@ function HoldingsGrid({ holdings = [], onSelectStock }) {
               <th>Current Holding</th>
               <th>Average Holding Value</th>
               <th>Holding Value</th>
+              <th>Last Price</th>
+              <th>Market value</th>
               <th></th>
             </tr>
           </thead>
@@ -72,6 +74,12 @@ function HoldingsGrid({ holdings = [], onSelectStock }) {
                   </td>
                   <td className="security-code">
                     {formatNumber(item.holdingValue)}
+                  </td>
+                  <td className="security-code">
+                    {formatNumber(item.lastPrice)}
+                  </td>
+                  <td className="security-code">
+                    {formatNumber(item.marketValue)}
                   </td>
                   <td className="view-cell">
                     <button

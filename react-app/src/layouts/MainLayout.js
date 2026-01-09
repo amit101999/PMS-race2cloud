@@ -19,6 +19,9 @@ function MainLayout({ title, rightContent, children }) {
     if (location.pathname === "/transaction-upload") {
     return "transaction-upload";
 }
+    if (location.pathname === "/reports") {
+      return "reports";
+    }
     
     return "dashboard";
   };
@@ -29,6 +32,7 @@ function MainLayout({ title, rightContent, children }) {
     { key: "split", label: "Split" },
     { key: "bhav-copy", label: "Bhav Copy" },
     { key: "transaction-upload", label: "Transaction Upload" },
+    { key: "reports", label: "Reports" },
   ];
 
   const contentStyle = {
