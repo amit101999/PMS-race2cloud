@@ -8,5 +8,12 @@
       "source": "appsail-nodejs",
       "name": "backend"
     }
-  ]
+  ],
+  "functions": {
+    "targets": [
+      "ExportAllCustomerHoldingData"
+    ],
+    "ignore": [],
+    "source": "functions"
+  }
 }
