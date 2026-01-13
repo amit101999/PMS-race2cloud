@@ -45,6 +45,36 @@ function HoldingsTab() {
     setAccountCode("");
     setShowDropdown(false);
   };
+  const pollExportStatus = async (fileName = "all-clients-export.csv") => {
+    const interval = setInterval(async () => {
+      try {
+        const res = await fetch(
+          `${BASE_URL}/export/check-status?fileName=${fileName}`,
+          { credentials: "include" }
+        );
+
+        const data = await res.json();
+
+        if (data.status === "READY") {
+          clearInterval(interval);
+
+          // 🔽 Now fetch download URL
+          const downloadRes = await fetch(
+            `${BASE_URL}/export/download?fileName=${fileName}`,
+            { credentials: "include" }
+          );
+
+          const downloadData = await downloadRes.json();
+          setDownloadUrl(downloadData.downloadUrl);
+          setLoading(false);
+        }
+      } catch (err) {
+        console.error("Polling failed:", err);
+        clearInterval(interval);
+        setLoading(false);
+      }
+    }, 8000); // poll every 8 sec
+  };
 
   const handleExport = async () => {
     try {
@@ -56,18 +86,35 @@ function HoldingsTab() {
       setLoading(true);
       setDownloadUrl("");
 
-      const params = new URLSearchParams();
-
+      // 🔹 SINGLE CLIENT (UNCHANGED)
       if (exportType === "single") {
+        const params = new URLSearchParams();
+
         params.append("accountCode", accountCode);
+        if (asOnDate) params.append("asOnDate", asOnDate);
+
+        const response = await fetch(
+          `${BASE_URL}/export/export-single?${params.toString()}`,
+          {
+            method: "GET",
+            credentials: "include",
+          }
+        );
+
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.message);
+
+        setDownloadUrl(data.downloadUrl.signature);
+        setLoading(false);
+        return;
       }
 
-      if (asOnDate) {
-        params.append("asOnDate", asOnDate);
-      }
+      // 🔹 EXPORT ALL CLIENTS (FIXED: GET + params)
+      const params = new URLSearchParams();
+      if (asOnDate) params.append("asOnDate", asOnDate);
 
       const response = await fetch(
-        `${BASE_URL}/export/export-single?${params.toString()}`,
+        `${BASE_URL}/export/export-all?${params.toString()}`,
         {
           method: "GET",
           credentials: "include",
@@ -75,16 +122,19 @@ function HoldingsTab() {
       );
 
       const data = await response.json();
-      console.log("Export response data:", data);
 
-      if (!response.ok) {
-        throw new Error(data.message || "Export failed");
+      if (data.status === "READY") {
+        // ✅ File already exists → download immediately
+        setDownloadUrl(data.downloadUrl);
+        setLoading(false);
+      } else if (data.status === "QUEUED") {
+        // ⏳ Start polling for fixed filename
+        pollExportStatus("all-clients-export.csv");
+      } else {
+        throw new Error("Unexpected export status");
       }
-
-      setDownloadUrl(data.downloadUrl.signature);
     } catch (error) {
       alert(error.message);
-    } finally {
       setLoading(false);
     }
   };

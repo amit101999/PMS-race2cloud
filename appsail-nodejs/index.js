@@ -11,7 +11,7 @@ import ExportRouter from "./router/export/ExportRouter.js";
 import catalyst from "zcatalyst-sdk-node";
 import BhavUploaderRouter from "./router/uploaderRouter/BhavUploaderRouter.js";
 import TransactionUploaderRouter from "./router/uploaderRouter/TransactionUploaderRouter.js";
-app.use(cors());
+// app.use(cors());
 app.use(
   cors({
     origin: "http://localhost:3000",
