@@ -32,7 +32,7 @@ module.exports = async (jobRequest, context) => {
 
     /* ---------------- CREATE STREAM ---------------- */
     const csvStream = new PassThrough();
-    const fileName = `all-clients-export-${Date.now()}.csv`;
+    const fileName = `all-clients-export.csv`;
 
     const uploadPromise = bucket.putObject(fileName, csvStream, {
       overwrite: true,
@@ -41,13 +41,14 @@ module.exports = async (jobRequest, context) => {
 
     /* ---------------- CSV HEADER ---------------- */
     csvStream.write(
-      "ACCOUNT_CODE,SECURITY_NAME,SECURITY_CODE,ISIN,HOLDING,WAP,HOLDING_VALUE\n"
+      "ACCOUNT_CODE,SECURITY_NAME,SECURITY_CODE,ISIN,HOLDING,WAP,HOLDING_VALUE,LAST_PRICE, MARKET_VALUE\n"
     );
 
     /* ---------------- FETCH & WRITE DATA ---------------- */
     let count = 0;
 
     for (const client of clientIds) {
+      if (count >= 2) break;
       const accountCode = client.clientIds.WS_Account_code;
 
       console.log(
@@ -74,6 +75,8 @@ module.exports = async (jobRequest, context) => {
           row.currentHolding ?? "",
           row.avgPrice ?? "",
           row.holdingValue ?? "",
+          row.lastPrice ?? "",
+          row.marketValue ?? "",
         ]
           .map((v) => `"${String(v).replace(/"/g, '""')}"`)
           .join(",");
