@@ -1,7 +1,7 @@
 import Express from "express";
 const app = Express();
 const port = process.env.X_ZOHO_CATALYST_LISTEN_PORT || 9000;
-// import cors from "cors";
+import cors from "cors";
 
 import AnalyticsRouter from "./router/AnalyticsRouter.js";
 import TransactionsRouter from "./router/TransactionRouter.js";
@@ -11,15 +11,15 @@ import ExportRouter from "./router/export/ExportRouter.js";
 import catalyst from "zcatalyst-sdk-node";
 import BhavUploaderRouter from "./router/uploaderRouter/BhavUploaderRouter.js";
 import TransactionUploaderRouter from "./router/uploaderRouter/TransactionUploaderRouter.js";
-// app.use(cors());
-// app.use(
-//   cors({
-//     origin: "http://localhost:3000",
-//     credentials: true,
-//     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-//     allowedHeaders: ["Content-Type", "Authorization"],
-//   })
-// );
+app.use(cors());
+app.use(
+  cors({
+    origin: "http://localhost:3000",
+    credentials: true,
+    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"],
+  })
+);
 
 app.use((req, res, next) => {
   try {
