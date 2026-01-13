@@ -1,0 +1,101 @@
+.transaction-table-wrapper {
+    border: 1px solid #e8ecef;
+    border-radius: 12px;
+    overflow: hidden;
+    background: #fff;
+  }
+  
+  .transaction-table {
+    width: 100%;
+    border-collapse: separate;
+    border-spacing: 0;
+    table-layout: fixed; 
+    font-size: 14px;
+  }
+  
+  .transaction-table thead th {
+    background: #f7f9fa;
+    color: #374151;
+    font-weight: 600;
+    padding: 14px 16px;
+    text-align: left;
+    text-transform: uppercase;
+    letter-spacing: 0.02em;
+    border-bottom: 1px solid #e5e7eb;
+    vertical-align: middle;
+  }
+  
+  .transaction-table thead th.num {
+    text-align: right;
+  }
+  
+  .transaction-table tbody tr:nth-child(odd) {
+    background: #f9fbf7;
+  }
+  
+  .transaction-table tbody tr:nth-child(even) {
+    background: #ffffff;
+  }
+  
+  .transaction-table td {
+    padding: 14px 16px;
+    color: #1f2933;
+    border-bottom: 1px solid #e5e7eb;
+    text-align: left;
+    vertical-align: middle;
+  }
+  
+  .transaction-table td.num {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+  
+  .transaction-table .empty-cell {
+    text-align: center;
+    padding: 20px;
+    color: #6b7280;
+  }
+  .filters-grid {
+    display: grid;
+    grid-template-columns: 1.2fr 0.8fr; /* account (wider) | date */
+    gap: 16px;
+    align-items: start;
+  }
+  
+  .filters-grid .account-code-search {
+    width: 100%;
+  }
+  
+  .filters-grid .security-name-search {
+  width: 320px; /* adjust as needed */
+  justify-self: end; /* push to the right */
+}
+
+.security-name-search .search-dropdown {
+  z-index: 10001; /* keep above table */
+}
+
+.transaction-tab-header {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.transaction-tab-header .security-name-search {
+  margin-left: auto;
+  position: relative;
+  width: 320px;
+}
+
+.transaction-tab-header h3 {
+  margin: 0;
+}
+
+.security-name-search .search-dropdown {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  right: 0;
+  width: 100%;
+}

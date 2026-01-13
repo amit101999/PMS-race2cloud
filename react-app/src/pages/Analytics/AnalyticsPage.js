@@ -158,7 +158,7 @@ function AnalyticsPage() {
         return <Performance />;
 
       case "transaction":
-        return <TransactionTab />;
+        return <TransactionTab accountCode={accountCode} asOnDate={asOnDate} />;
 
       default:
         return null;
