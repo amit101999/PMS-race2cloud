@@ -1,5 +1,5 @@
 import { getAllAccountCodesFromDatabase } from "../util/allAccountCodes.js";
-import { runFifoEngine } from "../util/fifo.js";
+import { runFifoEngine } from "../util/analytics/transactionHistory/fifo.js";
 
 export const getAllAccountCodes = async (req, res) => {
   try {
