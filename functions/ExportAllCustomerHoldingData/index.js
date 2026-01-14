@@ -8,18 +8,24 @@ const catalyst = require("zcatalyst-sdk-node");
  * @param {import("./types/job").Context} context
  */
 module.exports = async (jobRequest, context) => {
+  const catalystApp = catalyst.initialize(context);
+  const zcql = catalystApp.zcql();
   try {
     console.log("Export job started");
-    const catalystApp = catalyst.initialize(context);
 
-    const jobDetails = jobRequest.getJobDetails();
-    const { asOnDate } = jobDetails || {};
+    const jobDetails = jobRequest.getAllJobParams();
+    const { asOnDate, jobName, fileName } = jobDetails;
 
     const stratus = catalystApp.stratus();
     const bucket = stratus.bucket("upload-data-bucket");
 
-    const zcql = catalystApp.zcql();
     const tableName = "clientIds";
+
+    // make the jobs status as 'Pending' in the Jobs table
+    await zcql.executeZCQLQuery(`
+      INSERT INTO Jobs (jobName, status)
+      VALUES ('${jobName}', 'PENDING')
+    `);
 
     /* ---------------- GET CLIENT IDS ---------------- */
     const clientIds = await getAllAccountCodesFromDatabase(zcql, tableName);
@@ -32,7 +38,6 @@ module.exports = async (jobRequest, context) => {
 
     /* ---------------- CREATE STREAM ---------------- */
     const csvStream = new PassThrough();
-    const fileName = `all-clients-export.csv`;
 
     const uploadPromise = bucket.putObject(fileName, csvStream, {
       overwrite: true,
@@ -48,7 +53,6 @@ module.exports = async (jobRequest, context) => {
     let count = 0;
 
     for (const client of clientIds) {
-      if (count >= 2) break;
       const accountCode = client.clientIds.WS_Account_code;
 
       console.log(
@@ -93,9 +97,22 @@ module.exports = async (jobRequest, context) => {
 
     console.log("Export job completed successfully");
 
+    // make the jobs status as 'Completed' in the Jobs table
+    await zcql.executeZCQLQuery(`
+        UPDATE Jobs
+        SET status='COMPLETED'
+       WHERE jobName='${jobName}'
+    `);
     context.closeWithSuccess();
   } catch (error) {
     console.error("Export job failed:", error);
+
+    // make the jobs status as 'Failed' in the Jobs table
+    await zcql.executeZCQLQuery(`
+        UPDATE Jobs
+        SET status='FAILED'
+       WHERE jobName='${jobName}'
+    `);
     context.closeWithFailure();
   }
 };
