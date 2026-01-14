@@ -1,49 +1,43 @@
 export const exportAllData = async (req, res) => {
   try {
     const catalystApp = req.catalystApp;
-    const { asOnDate } = req.query;
-
     const zcql = catalystApp.zcql();
     const jobScheduling = catalystApp.jobScheduling();
 
+    const { asOnDate } = req.query;
     const dateStr = asOnDate || new Date().toISOString().split("T")[0];
 
     const jobName = `EXPORT_ALL_${dateStr}`;
     const fileName = `all-clients-export-${dateStr}.csv`;
-
-    // 🔍 Check if job already exists for this date
-    const existingJob = await zcql.executeZCQLQuery(`
-      SELECT ROWID, status 
-      FROM Jobs 
+    
+    const existing = await zcql.executeZCQLQuery(`
+      SELECT status
+      FROM Jobs
       WHERE jobName='${jobName}'
       LIMIT 1
     `);
 
-    if (existingJob.length) {
+    if (existing.length) {
       return res.json({
         jobName,
         fileName,
-        status: existingJob[0].Jobs.status,
+        status: existing[0].Jobs.status,
+        message: "Export job already exists",
       });
     }
 
-    const job = await jobScheduling.JOB.submitJob({
+    console.log("Scheduling export job:", jobName, fileName);
+    await jobScheduling.JOB.submitJob({
       job_name: "ExportAll",
       jobpool_name: "Export",
       target_name: "ExportAllCustomerHoldingData",
       target_type: "Function",
-      job_details: {
+      params: {
         asOnDate: dateStr,
         jobName,
         fileName,
       },
     });
-
-    // 📝 Insert into Jobs table
-    await zcql.executeZCQLQuery(`
-      INSERT INTO Jobs (JobIds, jobName, status)
-      VALUES (${job.job_id}, '${jobName}', 'PENDING')
-    `);
 
     return res.json({
       jobName,
@@ -65,12 +59,14 @@ export const getExportAllJobStatus = async (req, res) => {
     const catalystApp = req.catalystApp;
     const zcql = catalystApp.zcql();
 
-    const today = new Date().toISOString().split("T")[0];
-    const jobName = `EXPORT_ALL_${today}`;
+    const { asOnDate } = req.query;
+    const dateStr = asOnDate || new Date().toISOString().split("T")[0];
+    const jobName = `EXPORT_ALL_${dateStr}`;
+    const fileName = `all-clients-export-${dateStr}.csv`;
 
     const result = await zcql.executeZCQLQuery(`
-      SELECT jobName, status 
-      FROM Jobs 
+      SELECT status
+      FROM Jobs
       WHERE jobName='${jobName}'
       LIMIT 1
     `);
@@ -82,7 +78,7 @@ export const getExportAllJobStatus = async (req, res) => {
     return res.json({
       jobName,
       status: result[0].Jobs.status,
-      fileName: "all-clients-export.csv",
+      fileName,
     });
   } catch (error) {
     console.error("Error fetching export job status:", error);
@@ -92,21 +88,73 @@ export const getExportAllJobStatus = async (req, res) => {
   }
 };
 
+export const getExportAllHistory = async (req, res) => {
+  try {
+    const catalystApp = req.catalystApp;
+    const zcql = catalystApp.zcql();
+
+    const limit = Number(req.query.limit || 10);
+
+    const result = await zcql.executeZCQLQuery(`
+      SELECT jobName, status
+      FROM Jobs
+      WHERE jobName LIKE 'EXPORT_ALL_*'
+      ORDER BY ROWID DESC
+      LIMIT ${limit}
+    `);
+    console.log(result);
+
+    const jobs = result.map((row) => {
+      const jobName = row.Jobs.jobName;
+      const asOnDate = jobName.replace("EXPORT_ALL_", "");
+
+      return {
+        jobName,
+        asOnDate,
+        status: row.Jobs.status,
+      };
+    });
+
+    return res.json(jobs);
+  } catch (error) {
+    console.error("Error fetching export history:", error);
+    return res.status(500).json({
+      message: "Failed to fetch export history",
+    });
+  }
+};
+
 export const downloadExportFile = async (req, res) => {
   try {
     const catalystApp = req.catalystApp;
-    const { fileName } = req.query;
+    const zcql = catalystApp.zcql();
 
-    if (!fileName) {
+    const { asOnDate } = req.query;
+    if (!asOnDate) {
+      return res.status(400).json({ message: "asOnDate is required" });
+    }
+
+    const jobName = `EXPORT_ALL_${asOnDate}`;
+    const fileName = `all-clients-export-${asOnDate}.csv`;
+
+    const job = await zcql.executeZCQLQuery(`
+      SELECT status
+      FROM Jobs
+      WHERE jobName='${jobName}'
+      LIMIT 1
+    `);
+
+    if (!job.length || job[0].Jobs.status !== "COMPLETED") {
       return res.status(400).json({
-        message: "fileName is required",
+        status: "NOT_READY",
+        message: "Export not completed yet",
       });
     }
 
     const stratus = catalystApp.stratus();
     const bucket = stratus.bucket("upload-data-bucket");
 
-    await bucket.getObjectDetails(fileName);
+    // await bucket.getObjectDetails(fileName);
 
     const downloadUrl = await bucket.generatePreSignedUrl(fileName, "GET", {
       expiresIn: 3600,

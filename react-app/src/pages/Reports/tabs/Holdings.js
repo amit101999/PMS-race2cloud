@@ -11,29 +11,31 @@ function HoldingsTab() {
   const [loading, setLoading] = useState(false);
   const [downloadUrl, setDownloadUrl] = useState("");
 
-  const dropdownRef = useRef(null);
+  // ✅ Export All jobs (persisted from backend)
+  const [exportJobs, setExportJobs] = useState([]);
 
+  const dropdownRef = useRef(null);
   const { clientOptions } = useAccountCodes();
 
-  // 🔹 Filtered options
+  /* ---------------- FILTERED OPTIONS (UNCHANGED) ---------------- */
   const filteredOptions = useMemo(() => {
     return clientOptions.filter((opt) =>
       opt.label.toLowerCase().includes(searchQuery.toLowerCase())
     );
   }, [clientOptions, searchQuery]);
 
-  // 🔹 Close dropdown on outside click
+  /* ---------------- CLOSE DROPDOWN (UNCHANGED) ---------------- */
   useEffect(() => {
     const handleClickOutside = (e) => {
       if (dropdownRef.current && !dropdownRef.current.contains(e.target)) {
         setShowDropdown(false);
       }
     };
-
     document.addEventListener("mousedown", handleClickOutside);
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
+  /* ---------------- ACCOUNT SELECT (UNCHANGED) ---------------- */
   const handleAccountSelect = (option) => {
     setSearchQuery(option.label);
     setAccountCode(option.value);
@@ -45,60 +47,27 @@ function HoldingsTab() {
     setAccountCode("");
     setShowDropdown(false);
   };
-  const pollExportStatus = async (fileName = "all-clients-export.csv") => {
-    const interval = setInterval(async () => {
-      try {
-        const res = await fetch(
-          `${BASE_URL}/export/check-status?fileName=${fileName}`,
-          { credentials: "include" }
-        );
 
-        const data = await res.json();
-
-        if (data.status === "READY") {
-          clearInterval(interval);
-
-          // 🔽 Now fetch download URL
-          const downloadRes = await fetch(
-            `${BASE_URL}/export/download?fileName=${fileName}`,
-            { credentials: "include" }
-          );
-
-          const downloadData = await downloadRes.json();
-          setDownloadUrl(downloadData.downloadUrl);
-          setLoading(false);
-        }
-      } catch (err) {
-        console.error("Polling failed:", err);
-        clearInterval(interval);
-        setLoading(false);
-      }
-    }, 8000); // poll every 8 sec
-  };
-
+  /* ===================== EXPORT HANDLER ===================== */
   const handleExport = async () => {
     try {
-      if (exportType === "single" && !accountCode) {
-        alert("Please select an account code");
-        return;
-      }
-
-      setLoading(true);
-      setDownloadUrl("");
-
-      // 🔹 SINGLE CLIENT (UNCHANGED)
+      /* ---------- SINGLE CLIENT EXPORT (UNCHANGED) ---------- */
       if (exportType === "single") {
-        const params = new URLSearchParams();
+        if (!accountCode) {
+          alert("Please select an account code");
+          return;
+        }
 
+        setLoading(true);
+        setDownloadUrl("");
+
+        const params = new URLSearchParams();
         params.append("accountCode", accountCode);
         if (asOnDate) params.append("asOnDate", asOnDate);
 
         const response = await fetch(
           `${BASE_URL}/export/export-single?${params.toString()}`,
-          {
-            method: "GET",
-            credentials: "include",
-          }
+          { method: "GET", credentials: "include" }
         );
 
         const data = await response.json();
@@ -109,41 +78,116 @@ function HoldingsTab() {
         return;
       }
 
-      // 🔹 EXPORT ALL CLIENTS (FIXED: GET + params)
-      const params = new URLSearchParams();
-      if (asOnDate) params.append("asOnDate", asOnDate);
+      /* ---------- EXPORT ALL CLIENTS (JOB BASED) ---------- */
+      if (!asOnDate) {
+        alert("Please select As On Date");
+        return;
+      }
+
+      setLoading(true);
 
       const response = await fetch(
-        `${BASE_URL}/export/export-all?${params.toString()}`,
-        {
-          method: "GET",
-          credentials: "include",
-        }
+        `${BASE_URL}/export/export-all?asOnDate=${asOnDate}`,
+        { method: "GET", credentials: "include" }
       );
 
       const data = await response.json();
 
-      if (data.status === "READY") {
-        // ✅ File already exists → download immediately
-        setDownloadUrl(data.downloadUrl);
-        setLoading(false);
-      } else if (data.status === "QUEUED") {
-        // ⏳ Start polling for fixed filename
-        pollExportStatus("all-clients-export.csv");
-      } else {
-        throw new Error("Unexpected export status");
-      }
+      // Merge job safely
+      setExportJobs((prev) => {
+        const exists = prev.find((j) => j.jobName === data.jobName);
+        if (exists) {
+          return prev.map((j) =>
+            j.jobName === data.jobName ? { ...j, status: data.status } : j
+          );
+        }
+
+        return [
+          {
+            jobName: data.jobName,
+            asOnDate,
+            status: data.status,
+          },
+          ...prev,
+        ];
+      });
+
+      setLoading(false);
     } catch (error) {
       alert(error.message);
       setLoading(false);
     }
   };
 
+  /* ===================== LOAD LAST 10 EXPORTS (ON MOUNT) ===================== */
+  useEffect(() => {
+    if (exportType !== "all") return;
+
+    const fetchHistory = async () => {
+      try {
+        const res = await fetch(
+          `${BASE_URL}/export/export-all/history?limit=10`,
+          { credentials: "include" }
+        );
+        const data = await res.json();
+
+        if (Array.isArray(data)) {
+          setExportJobs(data);
+        }
+      } catch (err) {
+        console.error("Failed to load export history", err);
+      }
+    };
+
+    fetchHistory();
+  }, [exportType]);
+
+  /* ===================== SAFE POLLING (ONLY RUNNING JOBS) ===================== */
+  useEffect(() => {
+    if (exportJobs.length === 0) return;
+
+    const interval = setInterval(async () => {
+      const updated = await Promise.all(
+        exportJobs.map(async (job) => {
+          // ✅ NEVER overwrite completed / failed history
+          if (job.status === "COMPLETED" || job.status === "FAILED") {
+            return job;
+          }
+
+          const res = await fetch(
+            `${BASE_URL}/export/check-status?asOnDate=${job.asOnDate}`,
+            { credentials: "include" }
+          );
+          const data = await res.json();
+
+          if (!data.status || data.status === "NOT_STARTED") {
+            return job;
+          }
+
+          return { ...job, status: data.status };
+        })
+      );
+
+      setExportJobs(updated);
+    }, 15000);
+
+    return () => clearInterval(interval);
+  }, [exportJobs]);
+
+  /* ===================== DOWNLOAD EXPORT ===================== */
+  const handleExportAllDownload = async (date) => {
+    const res = await fetch(`${BASE_URL}/export/download?asOnDate=${date}`, {
+      credentials: "include",
+    });
+    const data = await res.json();
+    window.open(data.downloadUrl.signature, "_blank");
+  };
+
+  /* ===================== UI ===================== */
   return (
     <>
       <h3 className="section-heading">Holdings Export</h3>
 
-      {/* Export Type */}
       <div className="export-type">
         <label>
           <input
@@ -164,7 +208,6 @@ function HoldingsTab() {
         </label>
       </div>
 
-      {/* Form */}
       <div className="form-grid">
         {exportType === "single" && (
           <div className="account-code-search" ref={dropdownRef}>
@@ -228,7 +271,6 @@ function HoldingsTab() {
         </div>
       </div>
 
-      {/* Footer */}
       <div className="action-footer">
         {!downloadUrl ? (
           <button
@@ -250,6 +292,56 @@ function HoldingsTab() {
           </a>
         )}
       </div>
+
+      {exportType === "all" && exportJobs.length > 0 && (
+        <div className="export-jobs-container">
+          <h4>Previous Export History</h4>
+
+          <table className="export-table">
+            <thead>
+              <tr>
+                <th>Job Name</th>
+                <th>As On Date</th>
+                <th>Status</th>
+                <th>Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              {exportJobs.map((job) => (
+                <tr key={job.jobName}>
+                  <td>{job.jobName}</td>
+                  <td>{job.asOnDate}</td>
+                  <td>
+                    <span
+                      className={`export-status ${
+                        job.status === "COMPLETED"
+                          ? "completed"
+                          : job.status === "FAILED"
+                          ? "failed"
+                          : "pending"
+                      }`}
+                    >
+                      {job.status}
+                    </span>
+                  </td>
+                  <td>
+                    {job.status === "COMPLETED" ? (
+                      <button
+                        className="export-btn"
+                        onClick={() => handleExportAllDownload(job.asOnDate)}
+                      >
+                        Download
+                      </button>
+                    ) : (
+                      <span style={{ color: "#9ca3af" }}>-</span>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </>
   );
 }
