@@ -1,7 +1,8 @@
-import { fetchBonusesForStock } from "../util/bonuses.js";
-import { runFifoEngine } from "../util/fifo.js";
-import { fetchSplitForStock } from "../util/Split.js";
-import { fetchStockTransactions } from "../util/transactions.js";
+import { fetchBonusesForStock } from "../util/analytics/transactionHistory/bonuses.js";
+import { runFifoEngine } from "../util/analytics/transactionHistory/fifo.js";
+import { getCashBalance } from "../util/analytics/transactionHistory/getAllCashBalance.js";
+import { fetchSplitForStock } from "../util/analytics/transactionHistory/Split.js";
+import { fetchStockTransactions } from "../util/analytics/transactionHistory/transactions.js";
 
 export const getStockTransactionHistory = async (req, res) => {
   try {
@@ -16,6 +17,16 @@ export const getStockTransactionHistory = async (req, res) => {
         message: "accountCode and securityCode are required",
       });
     }
+
+    const cashbalance = 0;
+
+    // get all the cash balance for the account
+    // const getAllCashbalance = await getCashBalance({
+    //   zcql,
+    //   tableName: "Transaction",
+    //   accountCode,
+    //   asOnDate,
+    // });
 
     const zcql = app.zcql();
 
@@ -40,7 +51,6 @@ export const getStockTransactionHistory = async (req, res) => {
       securityCode,
       tableName: "Split",
     });
-    console.log("split data ::::::", split);
 
     const result = runFifoEngine(transactions, bonuses, split, false);
     return res.json(result);
