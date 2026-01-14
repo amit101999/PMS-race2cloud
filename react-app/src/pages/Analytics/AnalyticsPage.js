@@ -31,7 +31,6 @@ function AnalyticsPage() {
   const [pageSize, setPageSize] = useState(10);
 
   const dropdownRef = useRef(null);
-
   /* -------------------- EFFECTS -------------------- */
   useEffect(() => {
     const handleClickOutside = (e) => {

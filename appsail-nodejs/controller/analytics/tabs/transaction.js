@@ -10,7 +10,6 @@ export const getPaginatedTransactions = async (req, res) => {
 
     const accountCode = (req.query.accountCode || "").trim();
     const rawAsOnDate = (req.query.asOnDate || "").trim();
-    
     const normalizeDate = (d) => {
       if (!d) return null;
       if (/^\d{4}-\d{2}-\d{2}$/.test(d)) return d;
@@ -106,7 +105,6 @@ export const getPaginatedTransactions = async (req, res) => {
       .json({ message: "Failed to fetch transactions", error: err.message });
   }
 };
-
 export const getSecurityNameOptions = async (req, res) => {
   try {
     const app = req.catalystApp;
