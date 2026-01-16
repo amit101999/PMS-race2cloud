@@ -123,7 +123,17 @@ export const calculateHoldingsSummary = async ({
       `);
 
       if (!rows.length) break;
-      splits.push(...rows.map((r) => r.Split || r));
+      splits.push(
+        ...rows.map((r) => {
+          const s = r.Split || r;
+          return {
+            issueDate: s.Issue_Date,
+            ratio1: s.Ratio1,
+            ratio2: s.Ratio2,
+            isin: s.ISIN,
+          };
+        })
+      );
 
       if (rows.length < batchLimit) break;
       offset += batchLimit;
@@ -159,9 +169,9 @@ export const calculateHoldingsSummary = async ({
   }
 
   for (const s of splits) {
-    if (!s.ISIN) continue;
-    if (!splitByISIN[s.ISIN]) splitByISIN[s.ISIN] = [];
-    splitByISIN[s.ISIN].push(s);
+    if (!s.isin) continue;
+    if (!splitByISIN[s.isin]) splitByISIN[s.isin] = [];
+    splitByISIN[s.isin].push(s);
   }
 
   /* ================= FETCH BHAV PRICES ================= */
@@ -193,6 +203,8 @@ export const calculateHoldingsSummary = async ({
   /* ================= FINAL FIFO ================= */
 
   const result = [];
+
+  console.log("split are : ", splitByISIN);
 
   for (const key of Object.keys(holdingsMap)) {
     const fifo = runFifoEngine(
