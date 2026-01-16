@@ -11,7 +11,8 @@
   ],
   "functions": {
     "targets": [
-      "ExportAllCustomerHoldingData"
+      "ExportAllCustomerHoldingData",
+      "CashCalculation"
     ],
     "ignore": [],
     "source": "functions"
