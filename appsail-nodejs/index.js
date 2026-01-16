@@ -11,15 +11,16 @@ import ExportRouter from "./router/export/ExportRouter.js";
 import catalyst from "zcatalyst-sdk-node";
 import BhavUploaderRouter from "./router/uploaderRouter/BhavUploaderRouter.js";
 import TransactionUploaderRouter from "./router/uploaderRouter/TransactionUploaderRouter.js";
-app.use(cors());
-// app.use(
-//   cors({
-//     origin: "http://localhost:3000",
-//     credentials: true,
-//     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-//     allowedHeaders: ["Content-Type", "Authorization"],
-//   })
-// );
+import CashBalanceRouter from "./router/cashBalanceRouter/CashbalanceRouter.js";
+// app.use(cors());
+app.use(
+  cors({
+    origin: "http://localhost:3000",
+    credentials: true,
+    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"],
+  })
+);
 
 app.use((req, res, next) => {
   try {
@@ -49,6 +50,7 @@ app.use("/api/split", SplitRouter);
 app.use("/api/export", ExportRouter);
 app.use("/api/bhav", BhavUploaderRouter);
 app.use("/api/transaction-uploader", TransactionUploaderRouter);
+app.use("/api/cash-balance", CashBalanceRouter);
 app.listen(port, () => {
   console.log(`Example app listening on port ${port}`);
   console.log(`http://localhost:${port}/`);
