@@ -30,6 +30,8 @@ function AnalyticsPage() {
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
 
+  const [cashBalance, setCashBalance] = useState(0);
+
   const dropdownRef = useRef(null);
   /* -------------------- EFFECTS -------------------- */
   useEffect(() => {
@@ -50,41 +52,77 @@ function AnalyticsPage() {
     );
   }, [clientOptions, searchQuery]);
 
-  const summaryCards = useMemo(
-    () => [
-      {
-        key: "total",
-        label: "Total",
-        cost: "3.46 Cr",
-        mktVal: "3.50 Cr",
-        income: "54.73 K",
-        gl: "4.49 L",
-        glPct: "1.30 %",
-        pctAssets: "100.00 %",
-      },
-      {
-        key: "equity",
-        label: "Equity",
-        cost: "3.14 Cr",
-        mktVal: "3.18 Cr",
-        income: "54.73 K",
-        gl: "4.49 L",
-        glPct: "1.43 %",
-        pctAssets: "90.89 %",
-      },
-      {
-        key: "cash",
-        label: "Cash and Equivalent",
-        cost: "31.92 L",
-        mktVal: "31.92 L",
-        income: "–",
-        gl: "–",
-        glPct: "0.00 %",
-        pctAssets: "9.11 %",
-      },
-    ],
-    []
+function formatAmount(value) {
+  if (value === null || value === undefined) return "–";
+
+  const absValue = Math.abs(value);
+
+  // Crores (1 Cr = 1,00,00,000)
+  if (absValue >= 1e7) {
+    const cr = Math.floor((absValue / 1e7) * 100) / 100;
+    return `${cr} Cr`;
+  }
+
+  // Lakhs (1 L = 1,00,000)
+  if (absValue >= 1e5) {
+    const l = Math.floor((absValue / 1e5) * 100) / 100;
+    return `${l} L`;
+  }
+
+  return value.toLocaleString("en-IN");
+}
+
+
+ const summaryCards = useMemo(() => {
+  const equityMktValue = holdings.reduce(
+    (sum, h) => sum + (h.marketValue || 0),
+    0
   );
+
+  const totalAssets = equityMktValue + cashBalance;
+
+  const equityPct = totalAssets
+    ? ((equityMktValue / totalAssets) * 100).toFixed(2)
+    : "0.00";
+
+  const cashPct = totalAssets
+    ? ((cashBalance / totalAssets) * 100).toFixed(2)
+    : "0.00";
+
+  return [
+    {
+      key: "total",
+      label: "Total",
+      cost: formatAmount(totalAssets),
+      mktVal: formatAmount(totalAssets),
+      income: "–",
+      gl: "–",
+      glPct: "–",
+      pctAssets: "100.00 %",
+    },
+    {
+      key: "equity",
+      label: "Equity",
+      cost: formatAmount(equityMktValue),
+      mktVal: formatAmount(equityMktValue),
+      income: "–",
+      gl: "–",
+      glPct: "–",
+      pctAssets: `${equityPct} %`,
+    },
+    {
+      key: "cash",
+      label: "Cash and Equivalent",
+      cost: formatAmount(cashBalance),
+      mktVal: formatAmount(cashBalance),
+      income: "–",
+      gl: "–",
+      glPct: "0.00 %",
+      pctAssets: `${cashPct} %`,
+    },
+  ];
+}, [holdings, cashBalance]);
+
 
   /* -------------------- HANDLERS -------------------- */
   const handleSearchChange = (e) => {
@@ -97,6 +135,7 @@ function AnalyticsPage() {
     setAccountCode(option.value);
     setShowDropdown(false);
     fetchHoldings(option.value, asOnDate);
+    fetchCashBalance(option.value, asOnDate);
   };
 
   const clearAccountSelection = () => {
@@ -111,8 +150,10 @@ function AnalyticsPage() {
     setAsOnDate(date);
     setCurrentPage(1);
 
+
     if (accountCode) {
       fetchHoldings(accountCode, date);
+      fetchCashBalance(accountCode, date);
     }
   };
 
@@ -122,6 +163,27 @@ function AnalyticsPage() {
     setPageSize(size);
     setCurrentPage(1);
   };
+
+  const fetchCashBalance = async (accountCode, asOnDate) => {
+  if (!accountCode) return;
+
+  try {
+    let url = `http://localhost:3001/api/analytics/getCashBalanceSummary?accountCode=${accountCode}`;
+
+
+    if (asOnDate) {
+      url += `&asOnDate=${asOnDate}`;
+    }
+
+    const response = await fetch(url);
+    const data = await response.json();
+
+    setCashBalance(data?.cashBalance || 0);
+  } catch (error) {
+    console.error("Error fetching cash balance:", error);
+    setCashBalance(0);
+  }
+};
 
   /* -------------------- TABS CONFIG -------------------- */
   const TAB_ITEMS = [
