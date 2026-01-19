@@ -4,6 +4,14 @@ export const runFifoEngine = (
   splits = [],
   card = false
 ) => {
+  const activeIsin =
+    transactions[0]?.ISIN ||
+    transactions[0]?.isin ||
+    bonuses[0]?.ISIN ||
+    bonuses[0]?.isin ||
+    splits[0]?.isin ||
+    null;
+
   let holdings = 0;
   let lotCounter = 0;
 
@@ -23,38 +31,80 @@ export const runFifoEngine = (
   };
 
   /* ---------------- MERGE EVENTS ---------------- */
+  // const events = [
+  //   ...transactions.map((t) => ({
+  //     type: "TXN",
+  //     date: normalizeDate(t.TRANDATE || t.trandate),
+  //     data: {
+  //       tranType: t.Tran_Type || t.tranType,
+  //       qty: t.QTY || t.qty,
+  //       netrate: t.NETRATE || t.netrate,
+  //       netAmount: t.NETAMOUNT || t.netAmount,
+  //       trandate: t.TRANDATE || t.trandate,
+  //       isin: t.ISIN || t.isin,
+  //     },
+  //   })),
+  //   ...bonuses.map((b) => ({
+  //     type: "BONUS",
+  //     date: normalizeDate(b.ExDate || b.exDate),
+  //     data: {
+  //       bonusShare: b.BonusShare || b.bonusShare,
+  //       exDate: b.ExDate || b.exDate,
+  //       isin: b.ISIN || b.isin,
+  //     },
+  //   })),
+  //   ...splits.map((s) => ({
+  //     type: "SPLIT",
+  //     date: normalizeDate(s.issueDate),
+  //     data: {
+  //       ratio1: s.ratio1,
+  //       ratio2: s.ratio2,
+  //       issueDate: s.issueDate,
+  //       isin: s.isin,
+  //     },
+  //   })),
+  // ].sort((a, b) => new Date(a.date) - new Date(b.date));
+
   const events = [
-    ...transactions.map((t) => ({
-      type: "TXN",
-      date: normalizeDate(t.TRANDATE || t.trandate),
-      data: {
-        tranType: t.Tran_Type || t.tranType,
-        qty: t.QTY || t.qty,
-        netrate: t.NETRATE || t.netrate,
-        netAmount: t.NETAMOUNT || t.netAmount,
-        trandate: t.TRANDATE || t.trandate,
-        isin: t.ISIN || t.isin,
-      },
-    })),
-    ...bonuses.map((b) => ({
-      type: "BONUS",
-      date: normalizeDate(b.ExDate || b.exDate),
-      data: {
-        bonusShare: b.BonusShare || b.bonusShare,
-        exDate: b.ExDate || b.exDate,
-        isin: b.ISIN || b.isin,
-      },
-    })),
-    ...splits.map((s) => ({
-      type: "SPLIT",
-      date: normalizeDate(s.issueDate),
-      data: {
-        ratio1: s.ratio1,
-        ratio2: s.ratio2,
-        issueDate: s.issueDate,
-        isin: s.isin,
-      },
-    })),
+    ...transactions
+      .filter((t) => (t.ISIN || t.isin) === activeIsin)
+      .map((t) => ({
+        type: "TXN",
+        date: normalizeDate(t.TRANDATE || t.trandate),
+        data: {
+          tranType: t.Tran_Type || t.tranType,
+          qty: t.QTY || t.qty,
+          netrate: t.NETRATE || t.netrate,
+          netAmount: t.NETAMOUNT || t.netAmount || t.Net_Amount || 0,
+          trandate: t.TRANDATE || t.trandate,
+          isin: t.ISIN || t.isin,
+        },
+      })),
+
+    ...bonuses
+      .filter((b) => (b.ISIN || b.isin) === activeIsin)
+      .map((b) => ({
+        type: "BONUS",
+        date: normalizeDate(b.ExDate || b.exDate),
+        data: {
+          bonusShare: b.BonusShare || b.bonusShare,
+          exDate: b.ExDate || b.exDate,
+          isin: b.ISIN || b.isin,
+        },
+      })),
+
+    ...splits
+      .filter((s) => s.isin === activeIsin)
+      .map((s) => ({
+        type: "SPLIT",
+        date: normalizeDate(s.issueDate),
+        data: {
+          ratio1: s.ratio1,
+          ratio2: s.ratio2,
+          issueDate: s.issueDate,
+          isin: s.isin,
+        },
+      })),
   ].sort((a, b) => new Date(a.date) - new Date(b.date));
 
   /* ---------------- HELPERS ---------------- */
@@ -135,6 +185,8 @@ export const runFifoEngine = (
         Number(t.netAmount || 0)
       );
       const qty = Math.abs(Number(t.qty) || 0);
+      // const qty = Math.min(Math.abs(Number(t.qty) || 0), holdings);
+
       if (!qty) continue;
 
       const price =
@@ -175,7 +227,8 @@ export const runFifoEngine = (
 
       /* ---- SELL ---- */
       if (isSell(t.tranType)) {
-        let remaining = qty;
+        const sellQty = Math.min(qty, holdings);
+        let remaining = sellQty;
         let fifoCost = 0;
 
         while (remaining > 0 && buyQueue.length) {
@@ -192,7 +245,7 @@ export const runFifoEngine = (
           }
         }
 
-        holdings -= qty;
+        holdings -= sellQty;
 
         output.push({
           trandate: t.trandate,
@@ -203,7 +256,7 @@ export const runFifoEngine = (
           holdings,
           costOfHoldings: getCostOfHoldings(),
           averageCostOfHoldings: getWAP(),
-          profitLoss: qty * price - fifoCost,
+          profitLoss: sellQty * price - fifoCost,
           isActive: false, // 🔥 mark inactive
           isin: t.ISIN || t.isin,
           cashBalance: Balance,
@@ -355,6 +408,12 @@ export const runFifoEngine = (
       holdingValue: last.costOfHoldings || 0,
       averageCostOfHoldings: last.averageCostOfHoldings || 0,
     };
+    // return {
+    //   isin: key || "",
+    //   holdings,
+    //   holdingValue: getCostOfHoldings(),
+    //   averageCostOfHoldings: getWAP(),
+    // };
   }
 
   return output;

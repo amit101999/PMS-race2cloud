@@ -9,11 +9,11 @@ export const getStockTransactionHistory = async (req, res) => {
     if (!app) throw new Error("Catalyst missing");
 
     const accountCode = String(req.query.accountCode).trim();
-    const securityCode = decodeURIComponent(req.query.securityCode).trim();
+    const isin = decodeURIComponent(req.query.isin || "").trim();
 
-    if (!accountCode || !securityCode) {
+    if (!accountCode || !isin) {
       return res.status(400).json({
-        message: "accountCode and securityCode are required",
+        message: "accountCode and isin are required",
       });
     }
 
@@ -25,19 +25,22 @@ export const getStockTransactionHistory = async (req, res) => {
       zcql,
       tableName: "Transaction",
       accountCode,
-      securityCode,
+      // securityCode,
+      isin,
       asOnDate,
     });
 
     const bonuses = await fetchBonusesForStock({
       zcql,
       accountCode,
-      securityCode,
+      // securityCode,
+      isin,
       asOnDate,
     });
     const split = await fetchSplitForStock({
       zcql,
-      securityCode,
+      // securityCode,
+      isin,
       tableName: "Split",
     });
 
@@ -55,11 +58,13 @@ export const getTotalBuyQty = async (req, res) => {
       return res.status(500).json({ message: "Catalyst app missing" });
     }
 
-    const { accountCode, securityCode, asOnDate } = req.query;
+    const accountCode = String(req.query.accountCode || "").trim();
+    const isin = decodeURIComponent(req.query.isin || "").trim();
+    const asOnDate = req.query.asOnDate;
 
-    if (!accountCode || !securityCode) {
+    if (!accountCode || !isin) {
       return res.status(400).json({
-        message: "accountCode and securityCode are required",
+        message: "accountCode and isin are required",
       });
     }
 
@@ -72,7 +77,7 @@ export const getTotalBuyQty = async (req, res) => {
       zcql,
       tableName: "Transaction",
       accountCode,
-      securityCode,
+      isin,
       asOnDate,
     });
 
@@ -82,7 +87,7 @@ export const getTotalBuyQty = async (req, res) => {
     const bonuses = await fetchBonusesForStock({
       zcql,
       accountCode,
-      securityCode,
+      isin,
       asOnDate,
     });
 
@@ -107,7 +112,7 @@ export const getTotalBuyQty = async (req, res) => {
 
     return res.status(200).json({
       accountCode,
-      securityCode,
+      isin,
       asOnDate: asOnDate || null,
       totalBuyQty,
     });
@@ -127,11 +132,13 @@ export const getTotalSellQty = async (req, res) => {
       return res.status(500).json({ message: "Catalyst app missing" });
     }
 
-    const { accountCode, securityCode, asOnDate } = req.query;
+    const accountCode = String(req.query.accountCode || "").trim();
+    const isin = decodeURIComponent(req.query.isin || "").trim();
+    const asOnDate = req.query.asOnDate;
 
-    if (!accountCode || !securityCode) {
+    if (!accountCode || !isin) {
       return res.status(400).json({
-        message: "accountCode and securityCode are required",
+        message: "accountCode and isin are required",
       });
     }
 
@@ -144,7 +151,7 @@ export const getTotalSellQty = async (req, res) => {
       zcql,
       tableName: "Transaction",
       accountCode,
-      securityCode,
+      isin,
       asOnDate,
     });
 
@@ -163,7 +170,7 @@ export const getTotalSellQty = async (req, res) => {
 
     return res.status(200).json({
       accountCode,
-      securityCode,
+      isin,
       totalSellQty,
       asOnDate: asOnDate || null,
     });

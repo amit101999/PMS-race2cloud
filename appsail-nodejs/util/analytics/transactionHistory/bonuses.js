@@ -1,7 +1,8 @@
 export const fetchBonusesForStock = async ({
   zcql,
   accountCode,
-  securityCode,
+  // securityCode,
+  isin,
   asOnDate,
 }) => {
   let dateCondition = "";
@@ -20,13 +21,14 @@ export const fetchBonusesForStock = async ({
 
   while (true) {
     const query = `
-        SELECT SecurityCode,SecurityName,ExDate,BonusShare,ISIN
-        FROM Bonus
-        WHERE WS_Account_code = '${accountCode.replace(/'/g, "''")}'
-        AND SecurityCode = '${securityCode.replace(/'/g, "''")}'
-        ${dateCondition}
-        LIMIT ${limit} OFFSET ${offset}
-      `;
+      SELECT SecurityCode, SecurityName, ExDate, BonusShare, ISIN
+      FROM Bonus
+      WHERE WS_Account_code = '${accountCode.replace(/'/g, "''")}'
+      AND ISIN = '${isin.replace(/'/g, "''")}'
+      ${dateCondition}
+      ORDER BY ExDate ASC, ROWID ASC
+      LIMIT ${limit} OFFSET ${offset}
+    `;
 
     const batch = await zcql.executeZCQLQuery(query);
     if (!batch || batch.length === 0) break;
@@ -39,8 +41,13 @@ export const fetchBonusesForStock = async ({
   return rows.map((row) => {
     const b = row.Bonus || row;
     return {
+      // securityCode: b.SecurityCode,
+      // securityName: b.SecurityName, // display only
+      // exDate: b.ExDate,
+      // bonusShare: Number(b.BonusShare) || 0,
+      // isin: b.ISIN || "",
       securityCode: b.SecurityCode,
-      securityName: b.SecurityName, // display only
+      securityName: b.SecurityName,
       exDate: b.ExDate,
       bonusShare: Number(b.BonusShare) || 0,
       isin: b.ISIN || "",

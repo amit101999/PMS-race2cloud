@@ -10,10 +10,10 @@ function TransactionPage({ stock, accountCode, asOnDate, onClose }) {
   const [error, setError] = useState(null);
 
   useEffect(() => {
-    if (stock && accountCode && stock.securityCode) {
+    if (stock && accountCode && stock.isin) {
       fetchAllData();
-    } else if (stock && accountCode && !stock.securityCode) {
-      setError("Security code not available for this stock");
+    } else if (stock && accountCode && !stock.isin) {
+      setError("ISIN not available for this stock");
       setLoading(false);
     }
   }, [stock, accountCode, asOnDate]);
@@ -26,7 +26,7 @@ function TransactionPage({ stock, accountCode, asOnDate, onClose }) {
       const baseUrl = `${BASE_URL}/transaction`;
       const params = new URLSearchParams({
         accountCode,
-        securityCode: stock.securityCode,
+        isin: stock.isin,
       });
 
       if (asOnDate) {
