@@ -67,7 +67,7 @@ export const calculateHoldingsSummary = async ({
       FROM Transaction
       WHERE WS_Account_code = '${accountCode}'
       ${txnDateCondition}
-      ORDER BY TRANDATE ASC, ROWID ASC
+      ORDER BY ROWID ASC
       LIMIT ${batchLimit} OFFSET ${offset}
     `);
 
@@ -93,7 +93,7 @@ export const calculateHoldingsSummary = async ({
       FROM Bonus
       WHERE WS_Account_code = '${accountCode}'
       ${bonusDateCondition}
-      ORDER BY ExDate ASC, ROWID ASC
+      ORDER BY  ROWID ASC
       LIMIT ${batchLimit} OFFSET ${offset}
     `);
 
@@ -118,7 +118,7 @@ export const calculateHoldingsSummary = async ({
         FROM Split
         WHERE ISIN IN (${inClause})
         ${splitDateCondition}
-        ORDER BY Issue_Date ASC, ROWID ASC
+        ORDER BY  ROWID ASC
         LIMIT ${batchLimit} OFFSET ${offset}
       `);
 

@@ -10,6 +10,7 @@ import Holdingtabs from "./tabs/holding/HoldingTab";
 import Allocation from "./tabs/allocations/AllocationTab";
 import Performance from "./tabs/performance/PerformanceTab";
 import TransactionTab from "./tabs/transaction/TransactionTab";
+import { BASE_URL } from "../../constant.js";
 
 function AnalyticsPage() {
   /* -------------------- DATA HOOKS -------------------- */
@@ -52,77 +53,75 @@ function AnalyticsPage() {
     );
   }, [clientOptions, searchQuery]);
 
-function formatAmount(value) {
-  if (value === null || value === undefined) return "–";
+  function formatAmount(value) {
+    if (value === null || value === undefined) return "–";
 
-  const absValue = Math.abs(value);
+    const absValue = Math.abs(value);
 
-  // Crores (1 Cr = 1,00,00,000)
-  if (absValue >= 1e7) {
-    const cr = Math.floor((absValue / 1e7) * 100) / 100;
-    return `${cr} Cr`;
+    // Crores (1 Cr = 1,00,00,000)
+    if (absValue >= 1e7) {
+      const cr = Math.floor((absValue / 1e7) * 100) / 100;
+      return `${cr} Cr`;
+    }
+
+    // Lakhs (1 L = 1,00,000)
+    if (absValue >= 1e5) {
+      const l = Math.floor((absValue / 1e5) * 100) / 100;
+      return `${l} L`;
+    }
+
+    return value.toLocaleString("en-IN");
   }
 
-  // Lakhs (1 L = 1,00,000)
-  if (absValue >= 1e5) {
-    const l = Math.floor((absValue / 1e5) * 100) / 100;
-    return `${l} L`;
-  }
+  const summaryCards = useMemo(() => {
+    const equityMktValue = holdings.reduce(
+      (sum, h) => sum + (h.marketValue || 0),
+      0
+    );
 
-  return value.toLocaleString("en-IN");
-}
+    const totalAssets = equityMktValue + cashBalance;
 
+    const equityPct = totalAssets
+      ? ((equityMktValue / totalAssets) * 100).toFixed(2)
+      : "0.00";
 
- const summaryCards = useMemo(() => {
-  const equityMktValue = holdings.reduce(
-    (sum, h) => sum + (h.marketValue || 0),
-    0
-  );
+    const cashPct = totalAssets
+      ? ((cashBalance / totalAssets) * 100).toFixed(2)
+      : "0.00";
 
-  const totalAssets = equityMktValue + cashBalance;
-
-  const equityPct = totalAssets
-    ? ((equityMktValue / totalAssets) * 100).toFixed(2)
-    : "0.00";
-
-  const cashPct = totalAssets
-    ? ((cashBalance / totalAssets) * 100).toFixed(2)
-    : "0.00";
-
-  return [
-    {
-      key: "total",
-      label: "Total",
-      cost: formatAmount(totalAssets),
-      mktVal: formatAmount(totalAssets),
-      income: "–",
-      gl: "–",
-      glPct: "–",
-      pctAssets: "100.00 %",
-    },
-    {
-      key: "equity",
-      label: "Equity",
-      cost: formatAmount(equityMktValue),
-      mktVal: formatAmount(equityMktValue),
-      income: "–",
-      gl: "–",
-      glPct: "–",
-      pctAssets: `${equityPct} %`,
-    },
-    {
-      key: "cash",
-      label: "Cash and Equivalent",
-      cost: formatAmount(cashBalance),
-      mktVal: formatAmount(cashBalance),
-      income: "–",
-      gl: "–",
-      glPct: "0.00 %",
-      pctAssets: `${cashPct} %`,
-    },
-  ];
-}, [holdings, cashBalance]);
-
+    return [
+      {
+        key: "total",
+        label: "Total",
+        cost: formatAmount(totalAssets),
+        mktVal: formatAmount(totalAssets),
+        income: "–",
+        gl: "–",
+        glPct: "–",
+        pctAssets: "100.00 %",
+      },
+      {
+        key: "equity",
+        label: "Equity",
+        cost: formatAmount(equityMktValue),
+        mktVal: formatAmount(equityMktValue),
+        income: "–",
+        gl: "–",
+        glPct: "–",
+        pctAssets: `${equityPct} %`,
+      },
+      {
+        key: "cash",
+        label: "Cash and Equivalent",
+        cost: formatAmount(cashBalance),
+        mktVal: formatAmount(cashBalance),
+        income: "–",
+        gl: "–",
+        glPct: "0.00 %",
+        pctAssets: `${cashPct} %`,
+      },
+    ];
+  }, [holdings, cashBalance]);
 
   /* -------------------- HANDLERS -------------------- */
   const handleSearchChange = (e) => {
@@ -150,7 +149,6 @@ function formatAmount(value) {
     setAsOnDate(date);
     setCurrentPage(1);
 
-
     if (accountCode) {
       fetchHoldings(accountCode, date);
       fetchCashBalance(accountCode, date);
@@ -165,25 +163,24 @@ function formatAmount(value) {
   };
 
   const fetchCashBalance = async (accountCode, asOnDate) => {
-  if (!accountCode) return;
+    if (!accountCode) return;
 
-  try {
-    let url = `http://localhost:3001/api/analytics/getCashBalanceSummary?accountCode=${accountCode}`;
+    try {
+      let url = `${BASE_URL}/analytics/getCashBalanceSummary?accountCode=${accountCode}`;
 
+      if (asOnDate) {
+        url += `&asOnDate=${asOnDate}`;
+      }
 
-    if (asOnDate) {
-      url += `&asOnDate=${asOnDate}`;
+      const response = await fetch(url);
+      const data = await response.json();
+
+      setCashBalance(data?.cashBalance || 0);
+    } catch (error) {
+      console.error("Error fetching cash balance:", error);
+      setCashBalance(0);
     }
-
-    const response = await fetch(url);
-    const data = await response.json();
-
-    setCashBalance(data?.cashBalance || 0);
-  } catch (error) {
-    console.error("Error fetching cash balance:", error);
-    setCashBalance(0);
-  }
-};
+  };
 
   /* -------------------- TABS CONFIG -------------------- */
   const TAB_ITEMS = [
