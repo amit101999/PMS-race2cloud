@@ -213,6 +213,9 @@ exports.calculateHoldingsSummary = async ({
   const transactions = [];
   const uniqueISINs = new Set();
   let offset = 0;
+  const seenTxnRowIds = new Set();
+  const seenBonusRowIds = new Set();
+  const seenSplitRowIds = new Set();
 
   while (true) {
     const rows = await zcql.executeZCQLQuery(`
@@ -226,9 +229,10 @@ exports.calculateHoldingsSummary = async ({
     `);
 
     if (!rows.length) break;
-
     for (const r of rows) {
       const t = r.Transaction || r;
+      if (seenTxnRowIds.has(t.ROWID)) continue;
+      seenTxnRowIds.add(t.ROWID);
       transactions.push(t);
       if (t.ISIN) uniqueISINs.add(t.ISIN);
     }
@@ -252,7 +256,18 @@ exports.calculateHoldingsSummary = async ({
     `);
 
     if (!rows.length) break;
-    bonuses.push(...rows.map((r) => r.Bonus || r));
+    for (const r of rows) {
+      const b = r.Bonus || r;
+
+      // safety guard
+      if (!b || !b.ROWID) continue;
+
+      // duplicate protection
+      if (seenBonusRowIds.has(b.ROWID)) continue;
+
+      seenBonusRowIds.add(b.ROWID);
+      bonuses.push(b);
+    }
 
     if (rows.length < batchLimit) break;
     offset += batchLimit;
@@ -277,17 +292,19 @@ exports.calculateHoldingsSummary = async ({
       `);
 
       if (!rows.length) break;
-      splits.push(
-        ...rows.map((r) => {
-          const s = r.Split || r;
-          return {
-            issueDate: s.Issue_Date,
-            ratio1: s.Ratio1,
-            ratio2: s.Ratio2,
-            isin: s.ISIN,
-          };
-        })
-      );
+      for (const r of rows) {
+        const s = r.Split || r;
+        if (!s || !s.ROWID) continue;
+        // duplicate protection
+        if (seenSplitRowIds.has(s.ROWID)) continue;
+        seenSplitRowIds.add(s.ROWID);
+        splits.push({
+          issueDate: s.Issue_Date,
+          ratio1: s.Ratio1,
+          ratio2: s.Ratio2,
+          isin: s.ISIN,
+        });
+      }
 
       if (rows.length < batchLimit) break;
       offset += batchLimit;

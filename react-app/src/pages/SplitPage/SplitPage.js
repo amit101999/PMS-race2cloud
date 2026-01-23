@@ -13,6 +13,7 @@ function SplitPage() {
   const [ratio1, setRatio1] = useState("");
   const [ratio2, setRatio2] = useState("");
   const [date, setDate] = useState("");
+  const [isin, setIsin] = useState("");
 
   const [securityOptions, setSecurityOptions] = useState([]);
   const [searchQuery, setSearchQuery] = useState("");
@@ -54,6 +55,7 @@ function SplitPage() {
           value: sec.securityCode,
           label: sec.securityCode,
           name: sec.securityName || sec.securityCode,
+          isin: sec.ISIN || "",
         }));
         setSecurityOptions(options);
       }
@@ -86,6 +88,7 @@ function SplitPage() {
     setSearchQuery(option.label);
     setSecurityCode(option.value);
     setSecurityName(option.name);
+    setIsin(option.isin || "");
     setShowDropdown(false);
   };
 
@@ -130,6 +133,7 @@ function SplitPage() {
       setSearchQuery("");
       setRatio1("");
       setRatio2("");
+      setIsin("");
       setDate("");
 
       setTimeout(() => setSuccess(false), 3000);
@@ -153,6 +157,15 @@ function SplitPage() {
         {error && <div className="alert error">{error}</div>}
 
         <div className="split-card">
+          <div className="split-field">
+            <label>ISIN</label>
+            <input
+              type="text"
+              value={isin}
+              placeholder="Enter ISIN"
+              onChange={(e) => setIsin(e.target.value)}
+            />
+          </div>
           <div className="account-code-search" ref={dropdownRef}>
             <label className="search-label">Security Code</label>
             <div className="search-input-wrapper">

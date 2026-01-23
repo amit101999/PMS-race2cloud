@@ -6,7 +6,7 @@ import {
 import {
   getPaginatedTransactions,
   getSecurityNameOptions,
-} from "../controller/analytics/tabs/transaction.js";
+} from "../controller/analytics/tabs/transaction/transaction.js";
 import { getCashBalanceSummary } from "../controller/analytics/tabs/holding/CashController.js";
 const router = Express.Router();
 
