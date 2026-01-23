@@ -110,8 +110,9 @@ export const addStockSplit = async (req, res) => {
     const zohoCatalyst = req.catalystApp;
     let zcql = zohoCatalyst.zcql();
 
-    const { securityCode, securityName, ratio1, ratio2, issueDate } = req.body;
-    console.log(req.body);
+    console.log("boyd data is :::", req);
+    const { securityCode, securityName, ratio1, ratio2, issueDate, isin } =
+      req.body;
 
     if (!securityCode || !securityName || !ratio1 || !ratio2 || !issueDate) {
       return res.status(400).json({
@@ -129,7 +130,8 @@ export const addStockSplit = async (req, res) => {
           Security_Name,
           Ratio1,
           Ratio2,
-          Issue_Date
+          Issue_Date,
+          ISIN
         )
         VALUES
         (
@@ -137,7 +139,8 @@ export const addStockSplit = async (req, res) => {
           '${securityName}',
           ${Number(ratio1)},
           ${Number(ratio2)},
-          '${issueDate}'
+          '${issueDate}',
+          '${isin}'
         )
       `);
 
