@@ -15,13 +15,16 @@ import CashBalanceRouter from "./router/cashBalanceRouter/CashbalanceRouter.js";
 import BonusRouter from "./router/BonusRouter.js";
 
 // app.use(cors());
+
+app.use(Express.json());
+app.use(Express.urlencoded({ extended: true }));
 app.use(
   cors({
     origin: "http://localhost:3000",
     credentials: true,
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization"],
-  })
+  }),
 );
 
 app.use((req, res, next) => {
