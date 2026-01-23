@@ -1,10 +1,13 @@
 import express from "express";
-import { addStockSplit,getAllSecurityCodes } from "../controller/SplitController.js";
+import {
+  addStockSplit,
+  getAllSecuritiesISINs,
+} from "../controller/SplitController.js";
 
 const router = express.Router();
 
 router.post("/add", addStockSplit);
 
-router.get("/getAllSecurityCodes", getAllSecurityCodes);
+router.get("/getAllSecuritiesList", getAllSecuritiesISINs);
 
 export default router;
