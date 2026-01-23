@@ -12,6 +12,7 @@ import catalyst from "zcatalyst-sdk-node";
 import BhavUploaderRouter from "./router/uploaderRouter/BhavUploaderRouter.js";
 import TransactionUploaderRouter from "./router/uploaderRouter/TransactionUploaderRouter.js";
 import CashBalanceRouter from "./router/cashBalanceRouter/CashbalanceRouter.js";
+import BonusRouter from "./router/BonusRouter.js";
 
 // app.use(cors());
 app.use(
@@ -43,6 +44,7 @@ app.get("/", (req, res) => {
     message: "Catalyst Express backend is running",
   });
 });
+app.use(Express.json());
 
 app.use("/api/analytics", AnalyticsRouter);
 app.use("/api/transaction", TransactionsRouter);
@@ -52,6 +54,7 @@ app.use("/api/export", ExportRouter);
 app.use("/api/bhav", BhavUploaderRouter);
 app.use("/api/transaction-uploader", TransactionUploaderRouter);
 app.use("/api/cash-balance", CashBalanceRouter);
+app.use("/api/bonus", BonusRouter);
 
 app.listen(port, () => {
   console.log(`Example app listening on port ${port}`);
