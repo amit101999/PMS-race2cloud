@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useRef } from "react";
 import MainLayout from "../../layouts/MainLayout";
 import { Card } from "../../components/common/CommonComponents";
@@ -23,6 +22,26 @@ function BonusPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [success, setSuccess] = useState(false);
+
+  const [previewData, setPreviewData] = useState([]);
+  const [step, setStep] = useState("form"); // form | preview
+
+  /* ===========================
+     PAGINATION STATE
+     =========================== */
+  const PAGE_SIZE = 10;
+  const [page, setPage] = useState(1);
+
+  const totalPages = Math.ceil(previewData.length / PAGE_SIZE);
+
+  const paginatedPreview = previewData.slice(
+    (page - 1) * PAGE_SIZE,
+    page * PAGE_SIZE
+  );
+
+  useEffect(() => {
+    setPage(1);
+  }, [previewData]);
 
   const dropdownRef = useRef(null);
 
@@ -55,7 +74,8 @@ function BonusPage() {
       }
     };
     document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
+    return () =>
+      document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
   /* ===========================
@@ -65,7 +85,7 @@ function BonusPage() {
     (sec) =>
       sec.isin.toLowerCase().includes(searchQuery.toLowerCase()) ||
       sec.securityCode.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      sec.securityName.toLowerCase().includes(searchQuery.toLowerCase()),
+      sec.securityName.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
   /* ===========================
@@ -79,59 +99,6 @@ function BonusPage() {
     setShowDropdown(false);
   };
 
-  /* ===========================
-     SUBMIT Bonus FORM
-     =========================== */
-  const handleSubmit = async () => {
-    if (Number(ratio1) === Number(ratio2)) {
-      setError("Bonus ratio cannot be the same");
-      return;
-    }
-
-    try {
-      setLoading(true);
-      setError(null);
-      setSuccess(false);
-
-      const payload = {
-        isin,
-        securityCode,
-        securityName,
-        ratio1: Number(ratio1),
-        ratio2: Number(ratio2),
-        issueDate: date,
-      };
-
-      const res = await fetch(`${BASE_URL}/bonus/add`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-
-      if (!res.ok) {
-        const errData = await res.json().catch(() => ({}));
-        throw new Error(errData.message || "Failed to apply bonus");
-      }
-
-      setSuccess(true);
-
-      // Reset form
-      setIsin("");
-      setSearchQuery("");
-      setSecurityCode("");
-      setSecurityName("");
-      setRatio1("");
-      setRatio2("");
-      setDate("");
-
-      setTimeout(() => setSuccess(false), 3000);
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setLoading(false);
-    }
-  };
-
   return (
     <MainLayout title="Stock Bonus">
       <Card style={{ marginTop: 24 }}>
@@ -140,7 +107,7 @@ function BonusPage() {
         </h2>
 
         {success && (
-          <div className="alert success">Bonus saved successfully!</div>
+          <div className="alert success">Bonus applied successfully!</div>
         )}
         {error && <div className="alert error">{error}</div>}
 
@@ -184,7 +151,6 @@ function BonusPage() {
             {showDropdown && filteredSecurities.length > 0 && (
               <div className="search-dropdown">
                 <div className="dropdown-header">Search ISIN</div>
-
                 <div className="dropdown-options">
                   {filteredSecurities.map((sec) => (
                     <div
@@ -198,10 +164,6 @@ function BonusPage() {
                       </div>
                     </div>
                   ))}
-                </div>
-
-                <div className="dropdown-footer">
-                  {filteredSecurities.length} of {securities.length} ISINs
                 </div>
               </div>
             )}
@@ -247,26 +209,136 @@ function BonusPage() {
             />
           </div>
 
-          {/* ACTION */}
-          <div className="bonus-actions">
+          {/* FETCH PREVIEW */}
+          <div className="fetch-actions">
             <button
-              className="bonus-submit"
-              disabled={
-                !isin ||
-                !ratio1 ||
-                !ratio2 ||
-                !date ||
-                Number(ratio1) <= 0 ||
-                Number(ratio2) <= 0 ||
-                loading
-              }
-              onClick={handleSubmit}
+              className="bonus-submit fetch-btn"
+              disabled={!isin || Number(ratio1) <= 0 || !ratio2}
+              onClick={async () => {
+                setLoading(true);
+                setError(null);
+
+                const res = await fetch(`${BASE_URL}/bonus/preview`, {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({
+                    isin,
+                    ratio1: Number(ratio1),
+                    ratio2: Number(ratio2),
+                  }),
+                });
+
+                const data = await res.json();
+
+                if (data.success) {
+                  setPreviewData(data.data || []);
+                  setStep("preview");
+                } else {
+                  setError(data.message);
+                }
+
+                setLoading(false);
+              }}
             >
-              {loading ? "Saving..." : "Apply Bonus"}
+              Fetch Affected Accounts
             </button>
           </div>
         </div>
       </Card>
+
+      {/* ===========================
+         PREVIEW SECTION
+         =========================== */}
+      {step === "preview" && (
+        <div className="bonus-preview-wrapper full-width">
+          <h3 className="bonus-preview-title">Bonus Impact Preview</h3>
+
+          {previewData.length === 0 ? (
+            <div className="alert info">
+              No accounts available for this bonus ratio.
+            </div>
+          ) : (
+            <>
+              <div className="bonus-preview-table-wrapper">
+                <table className="bonus-preview-table">
+                  <thead>
+                    <tr>
+                      <th>Account Code</th>
+                      <th>ISIN</th>
+                      <th>Account Name</th>
+                      <th>Scheme</th>
+                      <th>Exchange</th>
+                      <th>Current Bonus</th>
+                      <th>New Bonus</th>
+                      <th>Δ Change</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {paginatedPreview.map((row) => (
+                      <tr key={row.rowId}>
+                        <td>{row.accountCode}</td>
+                        <td>{isin}</td>
+                        <td>{row.accountName}</td>
+                        <td>{row.schemeName}</td>
+                        <td>{row.exchange}</td>
+                        <td>{row.oldBonusShare}</td>
+                        <td>{row.newBonusShare}</td>
+                        <td style={{ color: "#166534", fontWeight: 600 }}>
+                          +{row.delta}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              {totalPages > 1 && (
+                <div className="pagination">
+                  <button
+                    disabled={page === 1}
+                    onClick={() => setPage((p) => p - 1)}
+                  >
+                    Prev
+                  </button>
+                  <span>
+                    Page {page} of {totalPages}
+                  </span>
+                  <button
+                    disabled={page === totalPages}
+                    onClick={() => setPage((p) => p + 1)}
+                  >
+                    Next
+                  </button>
+                </div>
+              )}
+
+              <div className="bonus-preview-actions">
+                <button
+                  className="bonus-submit"
+                  onClick={async () => {
+                    await fetch(`${BASE_URL}/bonus/apply`, {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({
+                        isin,
+                        ratio1: Number(ratio1),
+                        ratio2: Number(ratio2),
+                        exDate: date,
+                      }),
+                    });
+
+                    setSuccess(true);
+                    setStep("form");
+                    setPreviewData([]);
+                  }}
+                >
+                  Confirm & Apply Bonus
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+      )}
     </MainLayout>
   );
 }

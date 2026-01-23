@@ -1,35 +1,34 @@
+/* ===========================
+   GET ALL SECURITIES
+   =========================== */
 export const getAllSecuritiesISINs = async (req, res) => {
   try {
     const app = req.catalystApp;
     if (!app) {
-      return res.status(500).json({ message: "Catalyst app not initialized" });
+      return res.status(500).json({
+        success: false,
+        message: "Catalyst app not initialized",
+      });
     }
 
     const zcql = app.zcql();
-
     const LIMIT = 300;
     let offset = 0;
-    let hasMore = true;
 
     const securities = [];
 
-    while (hasMore) {
-      const query = `
+    while (true) {
+      const rows = await zcql.executeZCQLQuery(`
         SELECT ISIN, Security_Code, Security_Name
         FROM Security_List
         WHERE ISIN IS NOT NULL
         LIMIT ${LIMIT} OFFSET ${offset}
-      `;
+      `);
 
-      const response = await zcql.executeZCQLQuery(query);
+      if (!rows || rows.length === 0) break;
 
-      if (!response || response.length === 0) {
-        hasMore = false;
-        break;
-      }
-
-      response.forEach((row) => {
-        const sec = row.Security_List;
+      rows.forEach((r) => {
+        const sec = r.Security_List;
         securities.push({
           isin: sec.ISIN,
           securityCode: sec.Security_Code,
@@ -46,7 +45,7 @@ export const getAllSecuritiesISINs = async (req, res) => {
       data: securities,
     });
   } catch (error) {
-    console.error("Error fetching securities:", error);
+    console.error(error);
     return res.status(500).json({
       success: false,
       message: "Failed to fetch security list",
@@ -54,40 +53,153 @@ export const getAllSecuritiesISINs = async (req, res) => {
   }
 };
 
-export const addStockBonus = async (req, res) => {
+/* ===========================
+   PREVIEW BONUS
+   =========================== */
+export const previewStockBonus = async (req, res) => {
   try {
-    const zohoCatalyst = req.catalystApp;
-    let zcql = zohoCatalyst.zcql();
+    const { isin, ratio1, ratio2 } = req.body || {};
 
-    const { securityCode, securityName, /* there is no fields in the table */ } = req.body;
-    console.log(req.body);
+    const r1 = Number(ratio1);
+    const r2 = Number(ratio2);
 
-    if (!securityCode || !securityName /* there is no fields in the table */) {
+    // ✅ ratio1 must NOT be zero
+    if (!isin || !Number.isFinite(r1) || !Number.isFinite(r2) || r1 <= 0) {
       return res.status(400).json({
-        message: "Missing required fields",
+        success: false,
+        message: "Ratio 1 must be greater than zero",
       });
     }
 
-    await zcql.executeZCQLQuery(`
-        INSERT INTO Bonus
-        (
-          Security_Code,
-          Security_Name,
-          /* there is no fields in the table */
-        )
-        VALUES
-        (
-          '${securityCode}',
-          '${securityName}',
-            /* there is no fields in the table */
-        )
-      `);
+    const multiplier = r2 / r1;
+    const zcql = req.catalystApp.zcql();
+
+    // ✅ ONLY accounts with existing bonus
+    const rows = await zcql.executeZCQLQuery(`
+      SELECT
+        ROWID,
+        WS_Account_code,
+        OWNERNAME,
+        SCHEMENAME,
+        EXCHG,
+        BonusShare
+      FROM Bonus
+      WHERE ISIN = '${isin}'
+        AND BonusShare > 0
+    `);
+
+    const previewData = rows
+      .map((r) => {
+        const row = r.Bonus || r;
+
+        const oldBonus = Number(row.BonusShare);
+        const newBonus = Math.floor(oldBonus * multiplier);
+
+        // ❌ skip no-change rows
+        if (newBonus === oldBonus) return null;
+
+        return {
+          rowId: row.ROWID, // unique → no duplicates
+          accountCode: row.WS_Account_code,
+          accountName: row.OWNERNAME,
+          schemeName: row.SCHEMENAME,
+          exchange: row.EXCHG,
+          oldBonusShare: oldBonus,
+          newBonusShare: newBonus,
+          delta: newBonus - oldBonus,
+        };
+      })
+      .filter(Boolean);
+
+    // ✅ empty accounts message
+    if (previewData.length === 0) {
+      return res.status(200).json({
+        success: true,
+        data: [],
+        message: "No accounts available for this bonus ratio",
+      });
+    }
 
     return res.status(200).json({
-      message: "Stock bonus saved successfully",
+      success: true,
+      count: previewData.length,
+      data: previewData,
     });
   } catch (error) {
-    console.log("Error in saving bonus", error);
-    res.status(400).json({ error: error.message });
+    console.error("Preview bonus error:", error);
+    return res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+};
+
+/* ===========================
+   APPLY BONUS
+   =========================== */
+export const applyStockBonus = async (req, res) => {
+  try {
+    const { isin, ratio1, ratio2, exDate } = req.body || {};
+
+    const r1 = Number(ratio1);
+    const r2 = Number(ratio2);
+
+    if (
+      !isin ||
+      !Number.isFinite(r1) ||
+      !Number.isFinite(r2) ||
+      r1 <= 0 ||
+      !exDate
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid input values",
+      });
+    }
+
+    const multiplier = r2 / r1;
+    const zcql = req.catalystApp.zcql();
+
+    const rows = await zcql.executeZCQLQuery(`
+      SELECT ROWID, BonusShare
+      FROM Bonus
+      WHERE ISIN = '${isin}'
+        AND BonusShare > 0
+    `);
+
+    let updatedCount = 0;
+
+    for (const r of rows) {
+      const row = r.Bonus || r;
+
+      const oldBonus = Number(row.BonusShare);
+      const newBonus = Math.floor(oldBonus * multiplier);
+
+      if (newBonus === oldBonus) continue;
+
+      await zcql.executeZCQLQuery(`
+        UPDATE Bonus
+        SET BonusShare = ${newBonus},
+            ExDate = '${exDate}'
+        WHERE ROWID = ${row.ROWID}
+      `);
+
+      updatedCount++;
+    }
+
+    return res.status(200).json({
+      success: true,
+      updatedAccounts: updatedCount,
+      message:
+        updatedCount === 0
+          ? "No accounts required bonus update"
+          : "Bonus applied successfully",
+    });
+  } catch (error) {
+    console.error("Apply bonus error:", error);
+    return res.status(500).json({
+      success: false,
+      message: error.message,
+    });
   }
 };
