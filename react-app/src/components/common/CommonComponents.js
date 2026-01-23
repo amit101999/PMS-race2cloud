@@ -572,6 +572,8 @@ export function Sidebar({ items = [], activeKey }) {
       window.location.hash = "#/transaction-upload";
     } else if (item.key === "reports") {
       window.location.hash = "#/reports";
+    } else if (item.key === "bonus") {
+      window.location.hash = "#/bonus";
     }
   };
 

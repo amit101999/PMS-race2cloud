@@ -17,6 +17,9 @@ function MainLayout({ title, rightContent, children }) {
     if (location.pathname === "/split") {
       return "split";
     }
+    if(location.pathname === "/bonus"){
+      return "bonus";
+    }
     if (location.pathname === "/bhav-copy") {
       return "bhav-copy";
     }
@@ -34,6 +37,7 @@ function MainLayout({ title, rightContent, children }) {
     { key: "dashboard", label: "Dashboard" },
     { key: "analytics", label: "Analytics" },
     { key: "split", label: "Split" },
+    { key: "bonus", label: "Bonus" },
     { key: "bhav-copy", label: "Bhav Copy" },
     { key: "transaction-upload", label: "Transaction Upload" },
     { key: "reports", label: "Reports" },
