@@ -1,5 +1,8 @@
 import React, { useEffect, useState, useRef, useMemo } from "react";
-import { Card, Pagination } from "../../../../components/common/CommonComponents";
+import {
+  Card,
+  Pagination,
+} from "../../../../components/common/CommonComponents";
 import { BASE_URL } from "../../../../constant";
 import "./TransactionTab.css";
 
@@ -22,7 +25,10 @@ const TransactionTab = ({ accountCode, asOnDate }) => {
   // Close dropdown on outside click
   useEffect(() => {
     const handler = (e) => {
-      if (secDropdownRef.current && !secDropdownRef.current.contains(e.target)) {
+      if (
+        secDropdownRef.current &&
+        !secDropdownRef.current.contains(e.target)
+      ) {
         setShowSecDropdown(false);
       }
     };
@@ -61,7 +67,6 @@ const TransactionTab = ({ accountCode, asOnDate }) => {
 
   // Fetch security options (on open/typing, debounce 400ms)
   useEffect(() => {
-   
     const id = setTimeout(async () => {
       try {
         const params = new URLSearchParams({
@@ -74,9 +79,7 @@ const TransactionTab = ({ accountCode, asOnDate }) => {
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const json = await res.json();
         setSecOptions(json.data || []);
-      } catch {
-        
-      }
+      } catch {}
     }, 500);
     return () => clearTimeout(id);
   }, [secSearch, accountCode]);
@@ -179,6 +182,7 @@ const TransactionTab = ({ accountCode, asOnDate }) => {
                 <th className="num">Quantity</th>
                 <th className="num">Price</th>
                 <th className="num">Total Amount</th>
+                <th>Cash Balance</th>
               </tr>
             </thead>
             <tbody>
@@ -198,6 +202,7 @@ const TransactionTab = ({ accountCode, asOnDate }) => {
                     <td className="num">{formatNumber(t.quantity)}</td>
                     <td className="num">{formatNumber(t.price)}</td>
                     <td className="num">{formatNumber(t.totalAmount)}</td>
+                    <td className="num">{formatNumber(t.cashBalance)}</td>
                   </tr>
                 ))
               )}

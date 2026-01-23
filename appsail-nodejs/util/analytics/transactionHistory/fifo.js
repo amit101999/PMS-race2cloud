@@ -116,74 +116,74 @@ export const runFifoEngine = (
 
   const getWAP = () => (holdings > 0 ? getCostOfHoldings() / holdings : 0);
 
-  const calculateCashBalance = (currentBalance, tranType, amount) => {
-    let cashBalance = currentBalance;
+  // const calculateCashBalance = (currentBalance, tranType, amount) => {
+  //   let cashBalance = currentBalance;
 
-    if (
-      tranType === "CS+" || // Fund Deposit
-      tranType === "SL+" || // Sell
-      tranType === "DIO" || // Other Income
-      tranType === "DI0" || // Dividend
-      tranType === "CSI" || // Cash Interest
-      tranType === "DIS" || // Gain Distribution
-      tranType === "IN1" || // Interest Received
-      tranType === "OI1" || // Other Income
-      tranType === "SQS" || // Square up Sell
-      tranType === "DI1" || // Dividend Received
-      tranType === "IN+" // Interest
-    ) {
-      cashBalance += amount;
-    }
+  //   if (
+  //     tranType === "CS+" || // Fund Deposit
+  //     tranType === "SL+" || // Sell
+  //     tranType === "DIO" || // Other Income
+  //     tranType === "DI0" || // Dividend
+  //     tranType === "CSI" || // Cash Interest
+  //     tranType === "DIS" || // Gain Distribution
+  //     tranType === "IN1" || // Interest Received
+  //     tranType === "OI1" || // Other Income
+  //     tranType === "SQS" || // Square up Sell
+  //     tranType === "DI1" || // Dividend Received
+  //     tranType === "IN+" // Interest
+  //   ) {
+  //     cashBalance += amount;
+  //   }
 
-    // -------- CASH SUBTRACT --------
-    else if (
-      tranType === "BY-" || // Buy
-      tranType === "MGF" || // Management Fees
-      tranType === "TDO" || // TDS Trf to Capital A/c
-      tranType === "TDI" || // Trf to TDS A/c
-      tranType === "E22" || // Account Opening Charges
-      tranType === "E01" || // Other Expenses
-      tranType === "CUS" || // Custody Charges
-      tranType === "E23" || // Stamp Duty
-      tranType === "CS-" || // Fund Withdrawal
-      tranType === "MGE" || // Fund Accountant Fees
-      tranType === "E10" || // Audit Fee
-      tranType === "PRF" || // Performance Fees
-      tranType === "NF-" || // MF Applications
-      tranType === "SQB" // Square up Buy
-    ) {
-      cashBalance -= amount;
-    }
+  //   // -------- CASH SUBTRACT --------
+  //   else if (
+  //     tranType === "BY-" || // Buy
+  //     tranType === "MGF" || // Management Fees
+  //     tranType === "TDO" || // TDS Trf to Capital A/c
+  //     tranType === "TDI" || // Trf to TDS A/c
+  //     tranType === "E22" || // Account Opening Charges
+  //     tranType === "E01" || // Other Expenses
+  //     tranType === "CUS" || // Custody Charges
+  //     tranType === "E23" || // Stamp Duty
+  //     tranType === "CS-" || // Fund Withdrawal
+  //     tranType === "MGE" || // Fund Accountant Fees
+  //     tranType === "E10" || // Audit Fee
+  //     tranType === "PRF" || // Performance Fees
+  //     tranType === "NF-" || // MF Applications
+  //     tranType === "SQB" // Square up Buy
+  //   ) {
+  //     cashBalance -= amount;
+  //   }
 
-    // -------- NO CASH IMPACT --------
-    else if (
-      tranType === "OPI" || // Security in
-      tranType === "OPO" || // Security out
-      tranType === "RD0" // Dividend Reinvest
-    ) {
-      // No change to cash balance
-      cashBalance = cashBalance;
-    }
+  //   // -------- NO CASH IMPACT --------
+  //   else if (
+  //     tranType === "OPI" || // Security in
+  //     tranType === "OPO" || // Security out
+  //     tranType === "RD0" // Dividend Reinvest
+  //   ) {
+  //     // No change to cash balance
+  //     cashBalance = cashBalance;
+  //   }
 
-    // -------- UNKNOWN TYPE --------
-    else {
-      console.warn("Unknown Tran Type:", tranType);
-    }
+  //   // -------- UNKNOWN TYPE --------
+  //   else {
+  //     console.warn("Unknown Tran Type:", tranType);
+  //   }
 
-    Balance = cashBalance;
-    return cashBalance;
-  };
+  //   Balance = cashBalance;
+  //   return cashBalance;
+  // };
 
   /* ---------------- PROCESS EVENTS ---------------- */
   for (const e of events) {
     /* ========== BUY / SELL ========== */
     const t = e.data;
     if (e.type === "TXN") {
-      Balance = calculateCashBalance(
-        Balance,
-        t.tranType,
-        Number(t.netAmount || 0)
-      );
+      // Balance = calculateCashBalance(
+      //   Balance,
+      //   t.tranType,
+      //   Number(t.netAmount || 0)
+      // );
       const qty = Math.abs(Number(t.qty) || 0);
       // const qty = Math.min(Math.abs(Number(t.qty) || 0), holdings);
 
@@ -220,7 +220,7 @@ export const runFifoEngine = (
           profitLoss: null,
           isActive: true,
           isin: t.ISIN || t.isin,
-          cashBalance: Balance,
+          // cashBalance: Balance,
         });
         // console.log("Output Queue:", output);
       }
@@ -259,7 +259,7 @@ export const runFifoEngine = (
           profitLoss: sellQty * price - fifoCost,
           isActive: false, // 🔥 mark inactive
           isin: t.ISIN || t.isin,
-          cashBalance: Balance,
+          // cashBalance: Balance,
         });
       }
     }
@@ -295,7 +295,7 @@ export const runFifoEngine = (
         profitLoss: null,
         isActive: true,
         isin: e.data.isin,
-        cashBalance: 0,
+        // cashBalance: 0,
       });
     }
 
@@ -380,7 +380,7 @@ export const runFifoEngine = (
           profitLoss: null,
           isActive: true,
           isin: e.data.isin,
-          cashBalance: 0,
+          // cashBalance: 0,
         });
       }
 

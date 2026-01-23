@@ -9,7 +9,7 @@ export const exportAllData = async (req, res) => {
 
     const jobName = `EXPORT_ALL_${dateStr}`;
     const fileName = `all-clients-export-${dateStr}.csv`;
-    
+
     const existing = await zcql.executeZCQLQuery(`
       SELECT status
       FROM Jobs
@@ -26,7 +26,6 @@ export const exportAllData = async (req, res) => {
       });
     }
 
-    console.log("Scheduling export job:", jobName, fileName);
     await jobScheduling.JOB.submitJob({
       job_name: "ExportAll",
       jobpool_name: "Export",

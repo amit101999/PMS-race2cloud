@@ -170,7 +170,7 @@ function TransactionPage({ stock, accountCode, asOnDate, onClose }) {
                   <th>WAP</th>
                   <th>Holding Value</th>
                   <th>P/L</th>
-                  <th>Cash Balance</th>
+                  {/* <th>Cash Balance</th> */}
                 </tr>
               </thead>
               <tbody>
@@ -219,7 +219,7 @@ function TransactionPage({ stock, accountCode, asOnDate, onClose }) {
                       >
                         {formatCurrency(tx.profitLoss)}
                       </td>
-                      <td>{formatCurrency(tx.cashBalance)}</td>
+                      {/* <td>{formatCurrency(tx.cashBalance)}</td> */}
                     </tr>
                   ))
                 )}

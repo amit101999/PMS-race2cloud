@@ -1,10 +1,14 @@
 import React from "react";
 import { useLocation } from "react-router-dom";
-import { PageLayout, Sidebar, Topbar } from "../components/common/CommonComponents";
+import {
+  PageLayout,
+  Sidebar,
+  Topbar,
+} from "../components/common/CommonComponents";
 
 function MainLayout({ title, rightContent, children }) {
   const location = useLocation();
-  
+
   // Determine active key based on current route
   const getActiveKey = () => {
     if (location.pathname === "/analytics") {
@@ -17,12 +21,12 @@ function MainLayout({ title, rightContent, children }) {
       return "bhav-copy";
     }
     if (location.pathname === "/transaction-upload") {
-    return "transaction-upload";
-}
+      return "transaction-upload";
+    }
     if (location.pathname === "/reports") {
       return "reports";
     }
-    
+
     return "dashboard";
   };
 
@@ -38,7 +42,7 @@ function MainLayout({ title, rightContent, children }) {
   const contentStyle = {
     paddingTop: 16,
     paddingBottom: 24,
-    paddingLeft: 16,  // space between sidebar and cards
+    paddingLeft: 16, // space between sidebar and cards
     paddingRight: 12, // small inner right padding (less than before)
     width: "100%",
     maxWidth: "100%",
@@ -49,9 +53,7 @@ function MainLayout({ title, rightContent, children }) {
   return (
     <PageLayout sidebar={<Sidebar items={items} activeKey={getActiveKey()} />}>
       <Topbar title={title} rightContent={rightContent} />
-      <div style={contentStyle}>
-        {children}
-      </div>
+      <div style={contentStyle}>{children}</div>
     </PageLayout>
   );
 }
