@@ -1,20 +1,22 @@
-/* ===========================
+import { runFifoEngine } from "../util/analytics/transactionHistory/fifo.js";
+
+const ZCQL_ROW_LIMIT = 270;
+
+/* ======================================================
    GET ALL SECURITIES
-   =========================== */
+   ====================================================== */
 export const getAllSecuritiesISINs = async (req, res) => {
   try {
-    const app = req.catalystApp;
-    if (!app) {
+    if (!req.catalystApp) {
       return res.status(500).json({
         success: false,
         message: "Catalyst app not initialized",
       });
     }
 
-    const zcql = app.zcql();
-    const LIMIT = 300;
+    const zcql = req.catalystApp.zcql();
+    const LIMIT = 270;
     let offset = 0;
-
     const securities = [];
 
     while (true) {
@@ -28,187 +30,215 @@ export const getAllSecuritiesISINs = async (req, res) => {
       if (!rows || rows.length === 0) break;
 
       rows.forEach((r) => {
-        const sec = r.Security_List;
+        const s = r.Security_List;
         securities.push({
-          isin: sec.ISIN,
-          securityCode: sec.Security_Code,
-          securityName: sec.Security_Name,
+          isin: s.ISIN,
+          securityCode: s.Security_Code,
+          securityName: s.Security_Name,
         });
       });
 
       offset += LIMIT;
     }
 
-    return res.status(200).json({
-      success: true,
-      count: securities.length,
-      data: securities,
-    });
+    return res.json({ success: true, data: securities });
   } catch (error) {
     console.error(error);
     return res.status(500).json({
       success: false,
-      message: "Failed to fetch security list",
+      message: error.message,
     });
   }
 };
 
-/* ===========================
-   PREVIEW BONUS
-   =========================== */
-// export const previewStockBonus = async (req, res) => {
-//   try {
-//     const { isin, ratio1, ratio2 } = req.body || {};
-
-//     const r1 = Number(ratio1);
-//     const r2 = Number(ratio2);
-
-//     // ✅ ratio1 must NOT be zero
-//     if (!isin || !Number.isFinite(r1) || !Number.isFinite(r2) || r1 <= 0) {
-//       return res.status(400).json({
-//         success: false,
-//         message: "Ratio 1 must be greater than zero",
-//       });
-//     }
-
-//     const multiplier = r2 / r1;
-//     const zcql = req.catalystApp.zcql();
-
-//     // ✅ ONLY accounts with existing bonus
-//     const rows = await zcql.executeZCQLQuery(`
-//       SELECT
-//         ROWID,
-//         WS_Account_code,
-//         OWNERNAME,
-//         SCHEMENAME,
-//         EXCHG,
-//         BonusShare
-//       FROM Bonus
-//       WHERE ISIN = '${isin}'
-//         AND BonusShare > 0
-//     `);
-
-//     const previewData = rows
-//       .map((r) => {
-//         const row = r.Bonus || r;
-
-//         const oldBonus = Number(row.BonusShare);
-//         const newBonus = Math.floor(oldBonus * multiplier);
-
-//         // ❌ skip no-change rows
-//         if (newBonus === oldBonus) return null;
-
-//         return {
-//           rowId: row.ROWID, // unique → no duplicates
-//           accountCode: row.WS_Account_code,
-//           accountName: row.OWNERNAME,
-//           schemeName: row.SCHEMENAME,
-//           exchange: row.EXCHG,
-//           oldBonusShare: oldBonus,
-//           newBonusShare: newBonus,
-//           delta: newBonus - oldBonus,
-//         };
-//       })
-//       .filter(Boolean);
-
-//     // ✅ empty accounts message
-//     if (previewData.length === 0) {
-//       return res.status(200).json({
-//         success: true,
-//         data: [],
-//         message: "No accounts available for this bonus ratio",
-//       });
-//     }
-
-//     return res.status(200).json({
-//       success: true,
-//       count: previewData.length,
-//       data: previewData,
-//     });
-//   } catch (error) {
-//     console.error("Preview bonus error:", error);
-//     return res.status(500).json({
-//       success: false,
-//       message: error.message,
-//     });
-//   }
-// };
+/* ======================================================
+   PREVIEW BONUS (FIFO BASED – DATE AWARE)
+   ====================================================== */
 export const previewStockBonus = async (req, res) => {
   try {
-    const { isin, ratio1, ratio2 } = req.body || {};
+    if (!req.catalystApp) {
+      return res.status(500).json({
+        success: false,
+        message: "Catalyst app not initialized",
+      });
+    }
+
+    const { isin, ratio1, ratio2, exDate } = req.body;
 
     const r1 = Number(ratio1);
     const r2 = Number(ratio2);
 
-    if (!isin || !Number.isFinite(r1) || !Number.isFinite(r2) || r1 <= 0) {
+    if (!isin || !exDate || !Number.isFinite(r1) || !Number.isFinite(r2) || r1 <= 0) {
       return res.status(400).json({
         success: false,
-        message: "Invalid ISIN or ratios",
+        message: "Invalid ISIN, ratio or date",
       });
     }
 
-    const multiplier = r2 / r1;
+    /* Normalize Ex-Date (start of day) */
+    const exDateObj = new Date(exDate);
+    exDateObj.setHours(0, 0, 0, 0);
+    const exDateISO = exDateObj.toISOString().split("T")[0];
+
+    
     const zcql = req.catalystApp.zcql();
 
-    /* ===========================
-       CALCULATE NET HOLDINGS
-       =========================== */
-    const rows = await zcql.executeZCQLQuery(`
-      SELECT
-        WS_Account_code,
-        OWNERNAME,
-        SCHEMENAME,
-        EXCHG,
-        SUM(
-          CASE
-            WHEN LOWER(Tran_Type) = 'buy'  THEN QTY
-            WHEN LOWER(Tran_Type) = 'sell' THEN -QTY
-            ELSE 0
-          END
-        ) AS NET_QTY
-      FROM Transaction
-      WHERE ISIN = '${isin.replace(/'/g, "''")}'
-      GROUP BY WS_Account_code, OWNERNAME, SCHEMENAME, EXCHG
-      HAVING
-        SUM(
-          CASE
-            WHEN LOWER(Tran_Type) = 'buy'  THEN QTY
-            WHEN LOWER(Tran_Type) = 'sell' THEN -QTY
-            ELSE 0
-          END
-        ) > 0
-    `);
+    /* ======================================================
+       STEP 1: FETCH ELIGIBLE ACCOUNTS
+       ====================================================== */
+    const holdingRows = [];
+    let holdOffset = 0;
 
-    const previewData = rows.map((r) => {
-      const row = r.Transaction || r;
+    while (true) {
+      const batch = await zcql.executeZCQLQuery(`
+        SELECT WS_Account_code, QTY
+        FROM Holdings
+        WHERE ISIN='${isin}' AND QTY > 0
+        ORDER BY ROWID ASC
+        LIMIT ${ZCQL_ROW_LIMIT} OFFSET ${holdOffset}
+      `);
 
-      const oldQty = Number(row.NET_QTY);
-      const newQty = Math.floor(oldQty * multiplier);
+      if (!batch || batch.length === 0) break;
+      holdingRows.push(...batch);
+      if (batch.length < ZCQL_ROW_LIMIT) break;
+      holdOffset += ZCQL_ROW_LIMIT;
+    }
 
-      return {
-        accountCode: row.WS_Account_code,
-        accountName: row.OWNERNAME,
-        schemeName: row.SCHEMENAME,
-        exchange: row.EXCHG,
-        oldQty,
-        newQty,
-        delta: newQty - oldQty,
-      };
+    if (!holdingRows.length) {
+      return res.json({ success: true, data: [] });
+    }
+
+    /* ======================================================
+       STEP 2: FETCH TRANSACTIONS (<= EX-DATE)
+       ====================================================== */
+    const txRows = [];
+    let txOffset = 0;
+
+    while (true) {
+      const batch = await zcql.executeZCQLQuery(`
+        SELECT *
+        FROM Transaction
+        WHERE ISIN='${isin}'
+        AND TRANDATE <= '${exDateISO}'
+        ORDER BY TRANDATE ASC, ROWID ASC
+        LIMIT ${ZCQL_ROW_LIMIT} OFFSET ${txOffset}
+      `);
+
+      if (!batch || batch.length === 0) break;
+      txRows.push(...batch);
+      if (batch.length < ZCQL_ROW_LIMIT) break;
+      txOffset += ZCQL_ROW_LIMIT;
+    }
+
+    /* ======================================================
+       STEP 3: FETCH BONUSES (< EX-DATE)
+       ====================================================== */
+    const bonusRows = [];
+    let bonusOffset = 0;
+
+    while (true) {
+      const batch = await zcql.executeZCQLQuery(`
+        SELECT *
+        FROM Bonus
+        WHERE ISIN='${isin}'
+        AND ExDate < '${exDateISO}'
+        ORDER BY ExDate ASC, ROWID ASC
+        LIMIT ${ZCQL_ROW_LIMIT} OFFSET ${bonusOffset}
+      `);
+
+      if (!batch || batch.length === 0) break;
+      bonusRows.push(...batch);
+      if (batch.length < ZCQL_ROW_LIMIT) break;
+      bonusOffset += ZCQL_ROW_LIMIT;
+    }
+
+    /* ======================================================
+       STEP 4: FETCH SPLITS (< EX-DATE)
+       ====================================================== */
+    const splitRows = [];
+    let splitOffset = 0;
+
+    while (true) {
+      const batch = await zcql.executeZCQLQuery(`
+        SELECT *
+        FROM Split
+        WHERE ISIN='${isin}'
+        AND Issue_Date < '${exDateISO}'
+        ORDER BY Issue_Date ASC, ROWID ASC
+        LIMIT ${ZCQL_ROW_LIMIT} OFFSET ${splitOffset}
+      `);
+
+      if (!batch || batch.length === 0) break;
+      splitRows.push(...batch);
+      if (batch.length < ZCQL_ROW_LIMIT) break;
+      splitOffset += ZCQL_ROW_LIMIT;
+    }
+
+    /* ======================================================
+       STEP 5: GROUP DATA BY ACCOUNT
+       ====================================================== */
+    const txByAccount = {};
+    txRows.forEach((r) => {
+      const t = r.Transaction;
+      if (!txByAccount[t.WS_Account_code]) txByAccount[t.WS_Account_code] = [];
+      txByAccount[t.WS_Account_code].push(t);
     });
 
-    if (previewData.length === 0) {
-      return res.status(200).json({
-        success: true,
-        data: [],
-        message: "No affected accounts found for this ISIN",
+    const bonusByAccount = {};
+    bonusRows.forEach((r) => {
+      const b = r.Bonus;
+      if (!bonusByAccount[b.WS_Account_code]) bonusByAccount[b.WS_Account_code] = [];
+      bonusByAccount[b.WS_Account_code].push(b);
+    });
+
+    const splits = splitRows.map((r) => r.Split);
+
+    /* ======================================================
+       STEP 6: FIFO PREVIEW
+       ====================================================== */
+    const preview = [];
+
+    for (const h of holdingRows) {
+      const accountCode = h.Holdings.WS_Account_code;
+      const transactions = txByAccount[accountCode] || [];
+      if (!transactions.length) continue;
+
+      const bonuses = bonusByAccount[accountCode] || [];
+
+      const fifoBefore = runFifoEngine(transactions, bonuses, splits, true);
+      if (!fifoBefore || fifoBefore.holdings <= 0) continue;
+
+      const bonusShares = Math.floor(
+        fifoBefore.holdings / r2
+      );
+      
+      if (bonusShares <= 0) continue;
+
+      const previewBonus = {
+        ISIN: isin,
+        WS_Account_code: accountCode,
+        BonusShare: bonusShares,
+        ExDate: exDateISO,
+      };
+
+      const fifoAfter = runFifoEngine(
+        transactions,
+        [...bonuses, previewBonus],
+        splits,
+        true
+      );
+
+      preview.push({
+        isin,
+        accountCode,
+        currentHolding: fifoBefore.holdings,
+        bonusShares,
+        newHolding: fifoAfter.holdings,
+        delta: fifoAfter.holdings - fifoBefore.holdings,
       });
     }
 
-    return res.status(200).json({
-      success: true,
-      count: previewData.length,
-      data: previewData,
-    });
+    return res.json({ success: true, data: preview });
   } catch (error) {
     console.error("Preview bonus error:", error);
     return res.status(500).json({
@@ -218,72 +248,212 @@ export const previewStockBonus = async (req, res) => {
   }
 };
 
-/* ===========================
-   APPLY BONUS
-   =========================== */
-export const applyStockBonus = async (req, res) => {
-  try {
-    const { isin, ratio1, ratio2, exDate } = req.body || {};
-
-    const r1 = Number(ratio1);
-    const r2 = Number(ratio2);
-
-    if (
-      !isin ||
-      !Number.isFinite(r1) ||
-      !Number.isFinite(r2) ||
-      r1 <= 0 ||
-      !exDate
-    ) {
-      return res.status(400).json({
+/* ======================================================
+   APPLY BONUS (SAME LOGIC AS PREVIEW)
+   ====================================================== */
+/* ======================================================
+   APPLY BONUS (FIFO-BASED – DATE AWARE & CONSISTENT)
+   ====================================================== */
+   export const applyStockBonus = async (req, res) => {
+    try {
+      if (!req.catalystApp) {
+        return res.status(500).json({
+          success: false,
+          message: "Catalyst app not initialized",
+        });
+      }
+  
+      const { isin, ratio1, ratio2, exDate } = req.body;
+  
+      const r1 = Number(ratio1);
+      const r2 = Number(ratio2);
+  
+      if (!isin || !exDate || !Number.isFinite(r1) || !Number.isFinite(r2) || r1 <= 0) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid input values",
+        });
+      }
+  
+      /* Normalize Ex-Date */
+      const exDateObj = new Date(exDate);
+      exDateObj.setHours(0, 0, 0, 0);
+      const exDateISO = exDateObj.toISOString().split("T")[0];
+  
+      
+      const zcql = req.catalystApp.zcql();
+  
+      /* ======================================================
+         STEP 1: FETCH HOLDINGS (ACCOUNTS)
+         ====================================================== */
+      const holdingRows = [];
+      let holdOffset = 0;
+  
+      while (true) {
+        const batch = await zcql.executeZCQLQuery(`
+          SELECT WS_Account_code
+          FROM Holdings
+          WHERE ISIN='${isin}' AND QTY > 0
+          ORDER BY ROWID ASC
+          LIMIT ${ZCQL_ROW_LIMIT} OFFSET ${holdOffset}
+        `);
+  
+        if (!batch || batch.length === 0) break;
+        holdingRows.push(...batch);
+        if (batch.length < ZCQL_ROW_LIMIT) break;
+        holdOffset += ZCQL_ROW_LIMIT;
+      }
+  
+      if (!holdingRows.length) {
+        return res.json({
+          success: true,
+          message: "No eligible accounts",
+          affectedAccounts: 0,
+        });
+      }
+  
+      /* ======================================================
+         STEP 2: FETCH TRANSACTIONS ≤ EX-DATE
+         ====================================================== */
+      const txRows = [];
+      let txOffset = 0;
+  
+      while (true) {
+        const batch = await zcql.executeZCQLQuery(`
+          SELECT *
+          FROM Transaction
+          WHERE ISIN='${isin}'
+            AND TRANDATE <= '${exDateISO}'
+          ORDER BY TRANDATE ASC, ROWID ASC
+          LIMIT ${ZCQL_ROW_LIMIT} OFFSET ${txOffset}
+        `);
+  
+        if (!batch || batch.length === 0) break;
+        txRows.push(...batch);
+        if (batch.length < ZCQL_ROW_LIMIT) break;
+        txOffset += ZCQL_ROW_LIMIT;
+      }
+  
+      /* ======================================================
+         STEP 3: FETCH BONUSES < EX-DATE
+         ====================================================== */
+      const bonusRows = [];
+      let bonusOffset = 0;
+  
+      while (true) {
+        const batch = await zcql.executeZCQLQuery(`
+          SELECT *
+          FROM Bonus
+          WHERE ISIN='${isin}'
+            AND ExDate < '${exDateISO}'
+          ORDER BY ExDate ASC, ROWID ASC
+          LIMIT ${ZCQL_ROW_LIMIT} OFFSET ${bonusOffset}
+        `);
+  
+        if (!batch || batch.length === 0) break;
+        bonusRows.push(...batch);
+        if (batch.length < ZCQL_ROW_LIMIT) break;
+        bonusOffset += ZCQL_ROW_LIMIT;
+      }
+  
+      /* ======================================================
+         STEP 4: FETCH SPLITS < EX-DATE
+         ====================================================== */
+      const splitRows = [];
+      let splitOffset = 0;
+  
+      while (true) {
+        const batch = await zcql.executeZCQLQuery(`
+          SELECT *
+          FROM Split
+          WHERE ISIN='${isin}'
+            AND Issue_Date < '${exDateISO}'
+          ORDER BY Issue_Date ASC, ROWID ASC
+          LIMIT ${ZCQL_ROW_LIMIT} OFFSET ${splitOffset}
+        `);
+  
+        if (!batch || batch.length === 0) break;
+        splitRows.push(...batch);
+        if (batch.length < ZCQL_ROW_LIMIT) break;
+        splitOffset += ZCQL_ROW_LIMIT;
+      }
+  
+      /* ======================================================
+         STEP 5: GROUP DATA BY ACCOUNT
+         ====================================================== */
+      const txByAccount = {};
+      txRows.forEach((r) => {
+        const t = r.Transaction;
+        if (!txByAccount[t.WS_Account_code]) txByAccount[t.WS_Account_code] = [];
+        txByAccount[t.WS_Account_code].push(t);
+      });
+  
+      const bonusByAccount = {};
+      bonusRows.forEach((r) => {
+        const b = r.Bonus;
+        if (!bonusByAccount[b.WS_Account_code]) bonusByAccount[b.WS_Account_code] = [];
+        bonusByAccount[b.WS_Account_code].push(b);
+      });
+  
+      const splits = splitRows.map((r) => r.Split);
+  
+      /* ======================================================
+         STEP 6: FIFO + INSERT BONUS
+         ====================================================== */
+      let inserted = 0;
+  
+      for (const h of holdingRows) {
+        const accountCode = h.Holdings.WS_Account_code;
+  
+        const transactions = txByAccount[accountCode] || [];
+        if (!transactions.length) continue;
+  
+        const bonuses = bonusByAccount[accountCode] || [];
+  
+        const fifoBefore = runFifoEngine(transactions, bonuses, splits, true);
+        if (!fifoBefore || fifoBefore.holdings <= 0) continue;
+  
+        const bonusShares = Math.floor(
+          fifoBefore.holdings / r2
+        );
+        
+  
+        if (bonusShares <= 0) continue;
+  
+        await zcql.executeZCQLQuery(`
+          INSERT INTO Bonus
+          (
+            ISIN,
+            WS_Account_code,
+            BonusShare,
+            ExDate
+          )
+          VALUES
+          (
+            '${isin}',
+            '${accountCode}',
+            ${bonusShares},
+            '${exDateISO}'
+          )
+        `);
+  
+        inserted++;
+      }
+  
+      return res.json({
+        success: true,
+        affectedAccounts: inserted,
+        message:
+          inserted === 0
+            ? "No accounts required bonus application"
+            : "Bonus applied successfully",
+      });
+    } catch (error) {
+      console.error("Apply bonus error:", error);
+      return res.status(500).json({
         success: false,
-        message: "Invalid input values",
+        message: error.message,
       });
     }
-
-    const multiplier = r2 / r1;
-    const zcql = req.catalystApp.zcql();
-
-    const rows = await zcql.executeZCQLQuery(`
-      SELECT ROWID, BonusShare
-      FROM Bonus
-      WHERE ISIN = '${isin}'
-        AND BonusShare > 0
-    `);
-
-    let updatedCount = 0;
-
-    for (const r of rows) {
-      const row = r.Bonus || r;
-
-      const oldBonus = Number(row.BonusShare);
-      const newBonus = Math.floor(oldBonus * multiplier);
-
-      if (newBonus === oldBonus) continue;
-
-      await zcql.executeZCQLQuery(`
-        UPDATE Bonus
-        SET BonusShare = ${newBonus},
-            ExDate = '${exDate}'
-        WHERE ROWID = ${row.ROWID}
-      `);
-
-      updatedCount++;
-    }
-
-    return res.status(200).json({
-      success: true,
-      updatedAccounts: updatedCount,
-      message:
-        updatedCount === 0
-          ? "No accounts required bonus update"
-          : "Bonus applied successfully",
-    });
-  } catch (error) {
-    console.error("Apply bonus error:", error);
-    return res.status(500).json({
-      success: false,
-      message: error.message,
-    });
-  }
-};
+  };
+  
