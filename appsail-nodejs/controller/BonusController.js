@@ -209,7 +209,7 @@ export const previewStockBonus = async (req, res) => {
       if (!fifoBefore || fifoBefore.holdings <= 0) continue;
 
       const bonusShares = Math.floor(
-        fifoBefore.holdings / r2
+        (fifoBefore.holdings * r1) / r2
       );
       
       if (bonusShares <= 0) continue;
@@ -413,8 +413,8 @@ export const previewStockBonus = async (req, res) => {
         const fifoBefore = runFifoEngine(transactions, bonuses, splits, true);
         if (!fifoBefore || fifoBefore.holdings <= 0) continue;
   
-        const bonusShares = Math.floor(
-          fifoBefore.holdings / r2
+       const bonusShares = Math.floor(
+          (fifoBefore.holdings * r1) / r2
         );
         
   

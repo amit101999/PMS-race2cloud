@@ -3,8 +3,6 @@ import MainLayout from "../../layouts/MainLayout";
 import { Card } from "../../components/common/CommonComponents";
 import "./BonusPage.css";
 import { BASE_URL } from "../../constant";
-import { getAllSecuritiesISINs } from "../../../../appsail-nodejs/controller/BonusController"; 
-
 function BonusPage() {
   /* ===========================
      FORM STATE
@@ -23,11 +21,14 @@ function BonusPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [applying, setApplying] = useState(false);
-const [applySuccess, setApplySuccess] = useState(false);
+  const [applySuccess, setApplySuccess] = useState(false);
   const [success, setSuccess] = useState(false);
 
   const [previewData, setPreviewData] = useState([]);
   const [step, setStep] = useState("form");
+
+  const [exportDownloadUrl, setExportDownloadUrl] = useState("");
+  const [exportLoading, setExportLoading] = useState(false);
 
   /* ===========================
      PAGINATION
@@ -40,7 +41,7 @@ const [applySuccess, setApplySuccess] = useState(false);
   const totalPages = Math.ceil(previewData.length / PAGE_SIZE);
   const paginatedPreview = previewData.slice(
     (page - 1) * PAGE_SIZE,
-    page * PAGE_SIZE
+    page * PAGE_SIZE,
   );
 
   const dropdownRef = useRef(null);
@@ -48,13 +49,21 @@ const [applySuccess, setApplySuccess] = useState(false);
   /* ===========================
      FETCH SECURITIES
      =========================== */
-  useEffect(() => {
-    (async () => {
-      const res = await fetch(`${BASE_URL}/bonus/getAllSecuritiesList`);
-      const data = await res.json();
-      if (data.success) setSecurities(data.data);
-    })();
-  }, []);
+     useEffect(() => {
+      let cancelled = false;
+      (async () => {
+        try {
+          const res = await fetch(`${BASE_URL}/bonus/getAllSecuritiesList`);
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          const data = await res.json();
+          if (!cancelled && data.success) setSecurities(data.data);
+        } catch (err) {
+          if (!cancelled) setError(err.message || "Failed to load securities");
+          setSecurities([]);
+        }
+      })();
+      return () => { cancelled = true; };
+    }, []);
 
   /* ===========================
      DROPDOWN CLOSE
@@ -73,7 +82,7 @@ const [applySuccess, setApplySuccess] = useState(false);
     (s) =>
       s.isin.toLowerCase().includes(searchQuery.toLowerCase()) ||
       s.securityCode.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      s.securityName.toLowerCase().includes(searchQuery.toLowerCase())
+      s.securityName.toLowerCase().includes(searchQuery.toLowerCase()),
   );
 
   const handleSelectISIN = (sec) => {
@@ -113,13 +122,27 @@ const [applySuccess, setApplySuccess] = useState(false);
 
     setLoading(false);
   };
+  const downloadBonusExport = () => {
+    if (!isin || !ratio1 || !ratio2 || !date) return;
+
+    const url =
+      `${BASE_URL}/export/bonus-preview` +
+      `?isin=${encodeURIComponent(isin)}` +
+      `&ratio1=${encodeURIComponent(ratio1)}` +
+      `&ratio2=${encodeURIComponent(ratio2)}` +
+      `&exDate=${encodeURIComponent(date)}`;
+
+    window.open(url, "_blank");
+  };
 
   return (
     <MainLayout title="Stock Bonus">
       <Card style={{ marginTop: 24 }}>
         <h2 style={{ fontSize: 18, fontWeight: 600 }}>Add Stock Bonus</h2>
 
-        {success && <div className="alert success">Bonus applied successfully</div>}
+        {success && (
+          <div className="alert success">Bonus applied successfully</div>
+        )}
         {error && <div className="alert error">{error}</div>}
 
         <div className="bonus-card">
@@ -152,20 +175,26 @@ const [applySuccess, setApplySuccess] = useState(false);
               )}
             </div>
 
-            {showDropdown && (
+            {showDropdown && filteredSecurities.length > 0 && (
               <div className="search-dropdown">
-                {filteredSecurities.map((sec) => (
-                  <div
-                    key={sec.isin}
-                    className="dropdown-option"
-                    onClick={() => handleSelectISIN(sec)}
-                  >
-                    <strong>{sec.isin}</strong>
-                    <div style={{ fontSize: 12 }}>
-                      {sec.securityCode} – {sec.securityName}
+                <div className="dropdown-header">Search ISIN</div>
+                <div className="dropdown-options">
+                  {filteredSecurities.map((sec) => (
+                    <div
+                      key={sec.isin}
+                      className="dropdown-option"
+                      onClick={() => handleSelectISIN(sec)}
+                    >
+                      <strong>{sec.isin}</strong>
+                      <div style={{ fontSize: 12, color: "#6b7280" }}>
+                        {sec.securityCode} – {sec.securityName}
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  ))}
+                </div>
+                <div className="dropdown-footer">
+                  {filteredSecurities.length} of {securities.length} ISINs
+                </div>
               </div>
             )}
           </div>
@@ -182,17 +211,29 @@ const [applySuccess, setApplySuccess] = useState(false);
 
           <div className="bonus-field">
             <label>Ratio 1</label>
-            <input type="number" value={ratio1} onChange={(e) => setRatio1(e.target.value)} />
+            <input
+              type="number"
+              value={ratio1}
+              onChange={(e) => setRatio1(e.target.value)}
+            />
           </div>
 
           <div className="bonus-field">
             <label>Ratio 2</label>
-            <input type="number" value={ratio2} onChange={(e) => setRatio2(e.target.value)} />
+            <input
+              type="number"
+              value={ratio2}
+              onChange={(e) => setRatio2(e.target.value)}
+            />
           </div>
 
           <div className="bonus-field">
             <label>Effective Date</label>
-            <input type="date" value={date} onChange={(e) => setDate(e.target.value)} />
+            <input
+              type="date"
+              value={date}
+              onChange={(e) => setDate(e.target.value)}
+            />
           </div>
 
           <button
@@ -218,38 +259,40 @@ const [applySuccess, setApplySuccess] = useState(false);
             <>
               <div className="bonus-preview-table-wrapper">
                 <table className="bonus-preview-table">
-                <thead>
-  <tr>
-    <th>Account Code</th>
-    <th>ISIN</th>
-    <th>Current Holding</th>
-    <th>Bonus Shares</th>
-    <th>New Holding</th>
-    <th>Δ Change</th>
-  </tr>
-</thead>
+                  <thead>
+                    <tr>
+                      <th>Account Code</th>
+                      <th>ISIN</th>
+                      <th>Current Holding</th>
+                      <th>Bonus Shares</th>
+                      <th>New Holding</th>
+                      <th>Δ Change</th>
+                    </tr>
+                  </thead>
 
                   <tbody>
-  {paginatedPreview.map((row) => (
-    <tr key={row.accountCode}>
-      <td>{row.accountCode}</td>
-      <td>{row.isin}</td>
-      <td>{row.currentHolding}</td>
-      <td>{row.bonusShares}</td>
-      <td>{row.newHolding}</td>
-      <td style={{ color: "#166534", fontWeight: 600 }}>
-        +{row.delta}
-      </td>
-    </tr>
-  ))}
-</tbody>
-
+                    {paginatedPreview.map((row) => (
+                      <tr key={row.accountCode}>
+                        <td>{row.accountCode}</td>
+                        <td>{row.isin}</td>
+                        <td>{row.currentHolding}</td>
+                        <td>{row.bonusShares}</td>
+                        <td>{row.newHolding}</td>
+                        <td style={{ color: "#166534", fontWeight: 600 }}>
+                          +{row.delta}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
                 </table>
               </div>
 
               {totalPages > 1 && (
                 <div className="pagination">
-                  <button disabled={page === 1} onClick={() => setPage(page - 1)}>
+                  <button
+                    disabled={page === 1}
+                    onClick={() => setPage(page - 1)}
+                  >
                     Prev
                   </button>
                   <span>
@@ -264,65 +307,128 @@ const [applySuccess, setApplySuccess] = useState(false);
                 </div>
               )}
 
-<button
-  className="bonus-submit"
-  disabled={applying}
-  onClick={async () => {
-    setApplying(true);
-    setError(null);
+              <div className="bonus-preview-actions">
+                {/* EXPORT - generates report */}
+                <button
+                  className="bonus-submit"
+                  disabled={exportLoading}
+                  onClick={async () => {
+                    try {
+                      setExportLoading(true);
+                      setExportDownloadUrl("");
 
-    try {
-      const res = await fetch(`${BASE_URL}/bonus/apply`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          isin,
-          ratio1: Number(ratio1),
-          ratio2: Number(ratio2),
-          exDate: date,
-        }),
-      });
+                      const params = new URLSearchParams({
+                        isin,
+                        ratio1,
+                        ratio2,
+                        exDate: date,
+                      });
 
-      const data = await res.json();
+                      const res = await fetch(
+                        `${BASE_URL}/bonus/export-preview?${params.toString()}`,
+                        { credentials: "include" }
+                      );
 
-      if (!data.success) {
-        setError(data.message || "Failed to apply bonus");
-        setApplying(false);
-        return;
-      }
+                      if (!res.ok) throw new Error("Export request failed");
 
-      // ✅ SUCCESS
-      setApplySuccess(true);
+                      const data = await res.json();
 
-      // ⏱️ Small delay for UX polish
-      setTimeout(() => {
-        // Clear form
-        setIsin("");
-        setSearchQuery("");
-        setSecurityCode("");
-        setSecurityName("");
-        setRatio1("");
-        setRatio2("");
-        setDate("");
+                      if (!data.success) {
+                        throw new Error(data.message || "Export failed");
+                      }
 
-        // Clear preview
-        setPreviewData([]);
-        setStep("form");
+                      const signedUrl =
+                        data.downloadUrl?.signature?.signature ??
+                        data.downloadUrl?.signature;
 
-        // Reset states
-        setApplying(false);
-        setApplySuccess(false);
-        setSuccess(true);
-      }, 800);
-    } catch (err) {
-      setError("Something went wrong");
-      setApplying(false);
-    }
-  }}
->
-  {applying ? "Applying Bonus..." : "Confirm & Apply Bonus"}
-</button>
+                      if (!signedUrl) {
+                        throw new Error("Download URL missing");
+                      }
 
+                      setExportDownloadUrl(signedUrl);
+                    } catch (err) {
+                      console.error(err);
+                      alert("Failed to export bonus preview CSV");
+                    } finally {
+                      setExportLoading(false);
+                    }
+                  }}
+                >
+                  {exportLoading ? "Generating..." : "Export"}
+                </button>
+
+                {/* DOWNLOAD - opens generated report */}
+                <button
+                  className="bonus-submit"
+                  disabled={!exportDownloadUrl}
+                  onClick={() => {
+                    if (exportDownloadUrl) {
+                      window.open(exportDownloadUrl, "_blank");
+                    }
+                  }}
+                >
+                  Download
+                </button>
+
+                {/* APPLY BONUS */}
+                <button
+                  className="bonus-submit"
+                  disabled={applying}
+                  onClick={async () => {
+                    setApplying(true);
+                    setError(null);
+
+                    try {
+                      const res = await fetch(`${BASE_URL}/bonus/apply`, {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({
+                          isin,
+                          ratio1: Number(ratio1),
+                          ratio2: Number(ratio2),
+                          exDate: date,
+                        }),
+                      });
+
+                      const data = await res.json();
+
+                      if (!data.success) {
+                        setError(data.message || "Failed to apply bonus");
+                        setApplying(false);
+                        return;
+                      }
+
+                      // ✅ SUCCESS
+                      setApplySuccess(true);
+
+                      setTimeout(() => {
+                        // Clear form
+                        setIsin("");
+                        setSearchQuery("");
+                        setSecurityCode("");
+                        setSecurityName("");
+                        setRatio1("");
+                        setRatio2("");
+                        setDate("");
+
+                        // Clear preview and export link
+                        setPreviewData([]);
+                        setStep("form");
+                        setExportDownloadUrl("");
+
+                        setApplying(false);
+                        setApplySuccess(false);
+                        setSuccess(true);
+                      }, 800);
+                    } catch (err) {
+                      setError("Something went wrong");
+                      setApplying(false);
+                    }
+                  }}
+                >
+                  {applying ? "Applying Bonus..." : "Confirm & Apply Bonus"}
+                </button>
+              </div>
             </>
           )}
         </div>

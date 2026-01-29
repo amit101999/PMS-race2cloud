@@ -446,35 +446,45 @@
   font-size: 12px;
 }
 
-/* Body rows */
+/* Body rows - default light background */
 .bonus-preview-table tbody tr {
-  background: #f0fdf4; /* light green like Transaction History */
-  transition: background 0.15s ease;
+  background: #ffffff;
+  transition: background 0.15s ease, color 0.15s ease;
 }
 
 /* Row spacing look */
 .bonus-preview-table tbody tr + tr {
-  border-top: 1px solid #dcfce7;
+  border-top: 1px solid #e5e7eb;
 }
 
 /* Cells */
 .bonus-preview-table td {
-    text-align: left;
-    vertical-align: middle;
+  text-align: left;
+  vertical-align: middle;
   padding: 14px 16px;
   color: #374151;
   font-weight: 500;
 }
 
-/* Hover effect */
+/* Hover: dark green on the row you are on */
 .bonus-preview-table tbody tr:hover {
-  background: #dcfce7;
+  background: #166534;
+}
+
+.bonus-preview-table tbody tr:hover td {
+  color: #ffffff;
+}
+
+.bonus-preview-table tbody tr:hover td:nth-child(7) {
+  color: #bbf7d0;
 }
 
 /* Action area */
 .bonus-preview-actions {
   display: flex;
   justify-content: flex-end;
+  align-items: center;
+  gap: 16px;
   margin-top: 16px;
 }
 .bonus-preview-table th:nth-child(5),
@@ -496,7 +506,11 @@
   color: #374151;
 }
 .bonus-preview-table tbody tr:nth-child(even) {
-  background: #ecfdf5;
+  background: #f9fafb;
+}
+
+.bonus-preview-table tbody tr:nth-child(even):hover {
+  background: #166534;
 }
 .bonus-preview-table td:nth-child(4) {
   font-weight: 500;
