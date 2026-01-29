@@ -27,6 +27,9 @@ function BonusPage() {
   const [previewData, setPreviewData] = useState([]);
   const [step, setStep] = useState("form");
 
+  const [exportDownloadUrl, setExportDownloadUrl] = useState("");
+  const [exportLoading, setExportLoading] = useState(false);
+
   /* ===========================
      PAGINATION
      =========================== */
@@ -172,20 +175,26 @@ function BonusPage() {
               )}
             </div>
 
-            {showDropdown && (
+            {showDropdown && filteredSecurities.length > 0 && (
               <div className="search-dropdown">
-                {filteredSecurities.map((sec) => (
-                  <div
-                    key={sec.isin}
-                    className="dropdown-option"
-                    onClick={() => handleSelectISIN(sec)}
-                  >
-                    <strong>{sec.isin}</strong>
-                    <div style={{ fontSize: 12 }}>
-                      {sec.securityCode} – {sec.securityName}
+                <div className="dropdown-header">Search ISIN</div>
+                <div className="dropdown-options">
+                  {filteredSecurities.map((sec) => (
+                    <div
+                      key={sec.isin}
+                      className="dropdown-option"
+                      onClick={() => handleSelectISIN(sec)}
+                    >
+                      <strong>{sec.isin}</strong>
+                      <div style={{ fontSize: 12, color: "#6b7280" }}>
+                        {sec.securityCode} – {sec.securityName}
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  ))}
+                </div>
+                <div className="dropdown-footer">
+                  {filteredSecurities.length} of {securities.length} ISINs
+                </div>
               </div>
             )}
           </div>
@@ -299,49 +308,67 @@ function BonusPage() {
               )}
 
               <div className="bonus-preview-actions">
-                {/* DOWNLOAD CSV */}
+                {/* EXPORT - generates report */}
                 <button
-  className="bonus-submit"
-  onClick={async () => {
-    try {
-      const params = new URLSearchParams({
-        isin,
-        ratio1,
-        ratio2,
-        exDate: date,
-      });
+                  className="bonus-submit"
+                  disabled={exportLoading}
+                  onClick={async () => {
+                    try {
+                      setExportLoading(true);
+                      setExportDownloadUrl("");
 
-      const res = await fetch(
-        `${BASE_URL}/bonus/export-preview?${params.toString()}`,
-        { credentials: "include" }
-      );
+                      const params = new URLSearchParams({
+                        isin,
+                        ratio1,
+                        ratio2,
+                        exDate: date,
+                      });
 
-      if (!res.ok) throw new Error("Export request failed");
+                      const res = await fetch(
+                        `${BASE_URL}/bonus/export-preview?${params.toString()}`,
+                        { credentials: "include" }
+                      );
 
-      const data = await res.json();
+                      if (!res.ok) throw new Error("Export request failed");
 
-      if (!data.success) {
-        throw new Error(data.message || "Export failed");
-      }
+                      const data = await res.json();
 
-      // ✅ CORRECT URL ACCESS
-      const signedUrl = data.downloadUrl?.signature?.signature;
+                      if (!data.success) {
+                        throw new Error(data.message || "Export failed");
+                      }
 
-      if (!signedUrl) {
-        throw new Error("Download URL missing");
-      }
+                      const signedUrl =
+                        data.downloadUrl?.signature?.signature ??
+                        data.downloadUrl?.signature;
 
-      // ✅ OPEN SIGNED STRATUS URL
-      window.open(signedUrl, "_blank");
+                      if (!signedUrl) {
+                        throw new Error("Download URL missing");
+                      }
 
-    } catch (err) {
-      console.error(err);
-      alert("Failed to download bonus preview CSV");
-    }
-  }}
->
-  Download Preview CSV
-</button>
+                      setExportDownloadUrl(signedUrl);
+                    } catch (err) {
+                      console.error(err);
+                      alert("Failed to export bonus preview CSV");
+                    } finally {
+                      setExportLoading(false);
+                    }
+                  }}
+                >
+                  {exportLoading ? "Generating..." : "Export"}
+                </button>
+
+                {/* DOWNLOAD - opens generated report */}
+                <button
+                  className="bonus-submit"
+                  disabled={!exportDownloadUrl}
+                  onClick={() => {
+                    if (exportDownloadUrl) {
+                      window.open(exportDownloadUrl, "_blank");
+                    }
+                  }}
+                >
+                  Download
+                </button>
 
                 {/* APPLY BONUS */}
                 <button
@@ -384,9 +411,10 @@ function BonusPage() {
                         setRatio2("");
                         setDate("");
 
-                        // Clear preview
+                        // Clear preview and export link
                         setPreviewData([]);
                         setStep("form");
+                        setExportDownloadUrl("");
 
                         setApplying(false);
                         setApplySuccess(false);
