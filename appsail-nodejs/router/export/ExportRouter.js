@@ -7,6 +7,10 @@ import {
   getExportAllHistory,
 } from "../../controller/export/exportHolding/ExportAllHolding.js";
 import { exportTransactionPerAccount } from "../../controller/export/exportTransaction/exportSingleClient.js";
+import {
+  exportCorporateAction,
+  getCorporateActionHistory,
+} from "../../controller/export/exportCorporateAction/exportCorporateAction.js";
 
 const router = express.Router();
 
@@ -19,5 +23,8 @@ router.get("/export-all/history", getExportAllHistory);
 
 // transaction export
 router.get("/transaction/export-single", exportTransactionPerAccount);
+// corporate action export (fromDate, toDate)
+router.get("/corporate-action/export", exportCorporateAction);
+router.get("/corporate-action/history", getCorporateActionHistory);
 
 export default router;
