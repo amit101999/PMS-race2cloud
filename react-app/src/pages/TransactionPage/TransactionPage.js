@@ -66,7 +66,9 @@ function TransactionPage({ stock, accountCode, asOnDate, onClose }) {
   const getRowClass = (type) => {
     if (!type) return "";
     const typeUpper = String(type).toUpperCase();
-    if (typeUpper.includes("BY") || typeUpper === "SQB" || typeUpper === "OPI")
+    // if (typeUpper.includes("BY") || typeUpper === "SQB" || typeUpper === "OPI")  // previous: OPI styled as buy
+    //   return "buy";
+    if (typeUpper.includes("BY") || typeUpper === "SQB")  // OPI excluded from buy
       return "buy";
     if (
       typeUpper.includes("SL") ||

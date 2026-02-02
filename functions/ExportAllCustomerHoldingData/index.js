@@ -46,7 +46,7 @@ module.exports = async (jobRequest, context) => {
 
     /* ---------------- CSV HEADER ---------------- */
     csvStream.write(
-      "ACCOUNT_CODE,SECURITY_NAME,SECURITY_CODE,ISIN,HOLDING,WAP,HOLDING_VALUE,LAST_PRICE, MARKET_VALUE\n"
+      "ACCOUNT_CODE,SECURITY_NAME,SECURITY_CODE,ISIN,HOLDING,WAP,HOLDING_VALUE,LAST_PRICE, MARKET_VALUE\n",
     );
 
     /* ---------------- FETCH & WRITE DATA ---------------- */
@@ -56,7 +56,7 @@ module.exports = async (jobRequest, context) => {
       const accountCode = client.clientIds.WS_Account_code;
 
       console.log(
-        `Processing client ${count + 1}/${clientIds.length} : ${accountCode}`
+        `Processing client ${count + 1}/${clientIds.length} : ${accountCode}`,
       );
 
       const rows = await calculateHoldingsSummary({
@@ -84,6 +84,10 @@ module.exports = async (jobRequest, context) => {
         ]
           .map((v) => `"${String(v).replace(/"/g, '""')}"`)
           .join(",");
+
+        await zcql.executeZCQLQuery(`
+            INSERT INTO Holdings ( WS_Account_code , ISIN , QTY , Holding_Date) 
+              VALUES ('${accountCode}' , '${row.isin}' , '${row.currentHolding}' , '${asOnDate}') `);
 
         csvStream.write(line + "\n");
       }

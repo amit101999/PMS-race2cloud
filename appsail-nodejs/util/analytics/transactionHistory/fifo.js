@@ -2,7 +2,7 @@ export const runFifoEngine = (
   transactions = [],
   bonuses = [],
   splits = [],
-  card = false
+  card = false,
 ) => {
   const activeIsin =
     transactions[0]?.ISIN ||
@@ -26,44 +26,10 @@ export const runFifoEngine = (
     const fullYear = y < 100 ? 2000 + y : y;
     return `${fullYear}-${String(m).padStart(2, "0")}-${String(d).padStart(
       2,
-      "0"
+      "0",
     )}`;
   };
 
-  /* ---------------- MERGE EVENTS ---------------- */
-  // const events = [
-  //   ...transactions.map((t) => ({
-  //     type: "TXN",
-  //     date: normalizeDate(t.TRANDATE || t.trandate),
-  //     data: {
-  //       tranType: t.Tran_Type || t.tranType,
-  //       qty: t.QTY || t.qty,
-  //       netrate: t.NETRATE || t.netrate,
-  //       netAmount: t.NETAMOUNT || t.netAmount,
-  //       trandate: t.TRANDATE || t.trandate,
-  //       isin: t.ISIN || t.isin,
-  //     },
-  //   })),
-  //   ...bonuses.map((b) => ({
-  //     type: "BONUS",
-  //     date: normalizeDate(b.ExDate || b.exDate),
-  //     data: {
-  //       bonusShare: b.BonusShare || b.bonusShare,
-  //       exDate: b.ExDate || b.exDate,
-  //       isin: b.ISIN || b.isin,
-  //     },
-  //   })),
-  //   ...splits.map((s) => ({
-  //     type: "SPLIT",
-  //     date: normalizeDate(s.issueDate),
-  //     data: {
-  //       ratio1: s.ratio1,
-  //       ratio2: s.ratio2,
-  //       issueDate: s.issueDate,
-  //       isin: s.isin,
-  //     },
-  //   })),
-  // ].sort((a, b) => new Date(a.date) - new Date(b.date));
 
   const events = [
     ...transactions
@@ -108,7 +74,8 @@ export const runFifoEngine = (
   ].sort((a, b) => new Date(a.date) - new Date(b.date));
 
   /* ---------------- HELPERS ---------------- */
-  const isBuy = (t) => /^BY-|SQB|OPI/.test(String(t).toUpperCase());
+  // const isBuy = (t) => /^BY-|SQB|OPI/.test(String(t).toUpperCase());
+  const isBuy = (t) => /^BY-|SQB/.test(String(t).toUpperCase());
   const isSell = (t) => /^SL\+|SQS|OPO|NF-/.test(String(t).toUpperCase());
 
   const getCostOfHoldings = () =>
@@ -179,13 +146,9 @@ export const runFifoEngine = (
     /* ========== BUY / SELL ========== */
     const t = e.data;
     if (e.type === "TXN") {
-      // Balance = calculateCashBalance(
-      //   Balance,
-      //   t.tranType,
-      //   Number(t.netAmount || 0)
-      // );
+      
       const qty = Math.abs(Number(t.qty) || 0);
-      // const qty = Math.min(Math.abs(Number(t.qty) || 0), holdings);
+    
 
       if (!qty) continue;
 
@@ -257,7 +220,7 @@ export const runFifoEngine = (
           costOfHoldings: getCostOfHoldings(),
           averageCostOfHoldings: getWAP(),
           profitLoss: sellQty * price - fifoCost,
-          isActive: false, // 🔥 mark inactive
+          isActive: false, //
           isin: t.ISIN || t.isin,
           // cashBalance: Balance,
         });
@@ -320,7 +283,7 @@ export const runFifoEngine = (
         oldLot.isActive = false;
 
         const oldRow = output.find(
-          (r) => r.lotId === oldLot.lotId && r.isActive
+          (r) => r.lotId === oldLot.lotId && r.isActive,
         );
         if (oldRow) oldRow.isActive = false;
       }

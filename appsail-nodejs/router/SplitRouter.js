@@ -2,7 +2,7 @@ import express from "express";
 import {
   addStockSplit,
   getAllSecuritiesISINs,
-} from "../controller/SplitController.js";
+} from "../controller/uploader/SplitController.js";
 
 const router = express.Router();
 

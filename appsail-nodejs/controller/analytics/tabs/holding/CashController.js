@@ -1,4 +1,3 @@
-
 // CashController.js
 
 export const getCashBalanceSummary = async (req, res) => {
