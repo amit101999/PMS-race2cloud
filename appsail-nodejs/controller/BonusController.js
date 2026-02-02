@@ -109,9 +109,10 @@ export const previewStockBonus = async (req, res) => {
     }
 
     /* ======================================================
-       STEP 2: FETCH TRANSACTIONS (<= EX-DATE)
+       STEP 2: FETCH TRANSACTIONS (<= EX-DATE) – dedupe by ROWID
        ====================================================== */
     const txRows = [];
+    const seenTxnRowIds = new Set();
     let txOffset = 0;
 
     while (true) {
@@ -125,7 +126,13 @@ export const previewStockBonus = async (req, res) => {
       `);
 
       if (!batch || batch.length === 0) break;
-      txRows.push(...batch);
+      for (const row of batch) {
+        const t = row.Transaction || row;
+        const rowId = t.ROWID;
+        if (rowId != null && seenTxnRowIds.has(rowId)) continue;
+        if (rowId != null) seenTxnRowIds.add(rowId);
+        txRows.push(row);
+      }
       if (batch.length < ZCQL_ROW_LIMIT) break;
       txOffset += ZCQL_ROW_LIMIT;
     }
@@ -313,9 +320,10 @@ export const previewStockBonus = async (req, res) => {
       }
   
       /* ======================================================
-         STEP 2: FETCH TRANSACTIONS ≤ EX-DATE
+         STEP 2: FETCH TRANSACTIONS ≤ EX-DATE – dedupe by ROWID
          ====================================================== */
       const txRows = [];
+      const seenTxnRowIds = new Set();
       let txOffset = 0;
   
       while (true) {
@@ -329,7 +337,13 @@ export const previewStockBonus = async (req, res) => {
         `);
   
         if (!batch || batch.length === 0) break;
-        txRows.push(...batch);
+        for (const row of batch) {
+          const t = row.Transaction || row;
+          const rowId = t.ROWID;
+          if (rowId != null && seenTxnRowIds.has(rowId)) continue;
+          if (rowId != null) seenTxnRowIds.add(rowId);
+          txRows.push(row);
+        }
         if (batch.length < ZCQL_ROW_LIMIT) break;
         txOffset += ZCQL_ROW_LIMIT;
       }
