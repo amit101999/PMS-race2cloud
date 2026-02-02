@@ -45,13 +45,6 @@ export const fetchStockTransactions = async ({
   return rows.map((row) => {
     const r = row.Transaction || row[tableName] || row;
     return {
-      // trandate: r.TRANDATE,
-      // tranType: r.Tran_Type,
-      // securityCode: r.Security_code,
-      // qty: Number(r.QTY) || 0,
-      // netrate: Number(r.NETRATE) || 0,
-      // netAmount: Number(r.Net_Amount) || 0,
-      // isin: r.ISIN || "",
       trandate: r.TRANDATE,
       tranType: r.Tran_Type,
       securityCode: r.Security_code,

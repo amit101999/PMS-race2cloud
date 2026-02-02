@@ -33,6 +33,7 @@ export const getHoldingsSummarySimple = async (req, res) => {
   }
 };
 
+/* ================= CALCULATE HOLDINGS SUMMARY ================= */
 export const calculateHoldingsSummary = async ({
   catalystApp,
   accountCode,

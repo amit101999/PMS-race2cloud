@@ -94,7 +94,8 @@ export const getTotalBuyQty = async (req, res) => {
     // ----------------------------
     // 3️⃣ SUM ALL BUY QTY
     // ----------------------------
-    const isBuy = (t) => /^BY-|SQB|OPI/.test(String(t).toUpperCase());
+    // const isBuy = (t) => /^BY-|SQB|OPI/.test(String(t).toUpperCase());
+        const isBuy = (t) => /^BY-|SQB/.test(String(t).toUpperCase());  // OPI excluded from buy
 
     let totalBuyQty = 0;
 
