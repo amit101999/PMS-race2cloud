@@ -83,64 +83,6 @@ export const runFifoEngine = (
 
   const getWAP = () => (holdings > 0 ? getCostOfHoldings() / holdings : 0);
 
-  // const calculateCashBalance = (currentBalance, tranType, amount) => {
-  //   let cashBalance = currentBalance;
-
-  //   if (
-  //     tranType === "CS+" || // Fund Deposit
-  //     tranType === "SL+" || // Sell
-  //     tranType === "DIO" || // Other Income
-  //     tranType === "DI0" || // Dividend
-  //     tranType === "CSI" || // Cash Interest
-  //     tranType === "DIS" || // Gain Distribution
-  //     tranType === "IN1" || // Interest Received
-  //     tranType === "OI1" || // Other Income
-  //     tranType === "SQS" || // Square up Sell
-  //     tranType === "DI1" || // Dividend Received
-  //     tranType === "IN+" // Interest
-  //   ) {
-  //     cashBalance += amount;
-  //   }
-
-  //   // -------- CASH SUBTRACT --------
-  //   else if (
-  //     tranType === "BY-" || // Buy
-  //     tranType === "MGF" || // Management Fees
-  //     tranType === "TDO" || // TDS Trf to Capital A/c
-  //     tranType === "TDI" || // Trf to TDS A/c
-  //     tranType === "E22" || // Account Opening Charges
-  //     tranType === "E01" || // Other Expenses
-  //     tranType === "CUS" || // Custody Charges
-  //     tranType === "E23" || // Stamp Duty
-  //     tranType === "CS-" || // Fund Withdrawal
-  //     tranType === "MGE" || // Fund Accountant Fees
-  //     tranType === "E10" || // Audit Fee
-  //     tranType === "PRF" || // Performance Fees
-  //     tranType === "NF-" || // MF Applications
-  //     tranType === "SQB" // Square up Buy
-  //   ) {
-  //     cashBalance -= amount;
-  //   }
-
-  //   // -------- NO CASH IMPACT --------
-  //   else if (
-  //     tranType === "OPI" || // Security in
-  //     tranType === "OPO" || // Security out
-  //     tranType === "RD0" // Dividend Reinvest
-  //   ) {
-  //     // No change to cash balance
-  //     cashBalance = cashBalance;
-  //   }
-
-  //   // -------- UNKNOWN TYPE --------
-  //   else {
-  //     console.warn("Unknown Tran Type:", tranType);
-  //   }
-
-  //   Balance = cashBalance;
-  //   return cashBalance;
-  // };
-
   /* ---------------- PROCESS EVENTS ---------------- */
   for (const e of events) {
     /* ========== BUY / SELL ========== */
@@ -297,7 +239,8 @@ export const runFifoEngine = (
 
       // 5️⃣ Create split lots one by one (ledger-correct)
       for (const oldLot of activeLots) {
-        const newQty = oldLot.qty * multiplier;
+        // get only the floor values that is the lower numerical values
+        const newQty = Math.floor(oldLot.qty * multiplier);
         const newPrice = oldLot.price / multiplier;
         const newLotId = ++lotCounter;
 

@@ -210,6 +210,55 @@
   font-size: 13px;
 }
 
+.comparison-editable-table .comparison-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.comparison-editable-table .comparison-cell-readonly {
+  display: block;
+  padding: 8px 10px;
+  font-size: 13px;
+  color: #111827;
+  min-width: 80px;
+}
+
+.comparison-editable-table .comparison-cell-input {
+  width: 100%;
+  min-width: 80px;
+  padding: 8px 10px;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  font-size: 13px;
+  background: #fff;
+  box-sizing: border-box;
+}
+
+.comparison-editable-table .comparison-cell-input:focus {
+  outline: none;
+  border-color: #c2185b;
+  box-shadow: 0 0 0 2px rgba(194, 24, 91, 0.15);
+}
+
+.comparison-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 16px;
+  align-items: center;
+}
+
+.comparison-download-link {
+  color: #c2185b;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.comparison-download-link:hover {
+  text-decoration: underline;
+}
+
 @media (max-width: 768px) {
   .upload-sections {
     grid-template-columns: 1fr;
