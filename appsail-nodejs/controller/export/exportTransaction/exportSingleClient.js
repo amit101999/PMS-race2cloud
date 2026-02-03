@@ -79,60 +79,66 @@ export const exportTransactionPerAccount = async (req, res) => {
     }
 
     /* ================= FETCH FULL TRANSACTIONS ================= */
-    const rows = await zcql.executeZCQLQuery(`
-      SELECT
-        TRANDATE,
-        Tran_Type,
-        Security_Name,
-        Security_code,
-        ISIN,
-        QTY,
-        NETRATE,
-        Net_Amount
-      FROM Transaction
-      ${whereSql}
-      ORDER BY TRANDATE ASC, ROWID ASC
-    `);
+    const EXPORT_BATCH_SIZE = 300;
+    let exportOffset = 0;
+    let runningBalance = openingBalance;
+    let totalExported = 0;
+    while (true) {
+      const rows = await zcql.executeZCQLQuery(`
+        SELECT
+          TRANDATE,
+          Tran_Type,
+          Security_Name,
+          Security_code,
+          ISIN,
+          QTY,
+          NETRATE,
+          Net_Amount
+        FROM Transaction
+        ${whereSql}
+        ORDER BY TRANDATE ASC, ROWID ASC
+        LIMIT ${EXPORT_BATCH_SIZE} OFFSET ${exportOffset}
+      `);
 
-    if (!rows.length) {
+      if (!rows.length) break;
+
+      for (const r of rows) {
+        const t = r.Transaction || r;
+        runningBalance = applyCashEffect(
+          runningBalance,
+          t.Tran_Type,
+          Number(t.Net_Amount) || 0,
+        );
+        const line = [
+          t.TRANDATE,
+          t.Tran_Type,
+          t.Security_Name,
+          t.Security_code,
+          t.ISIN,
+          Number(t.QTY) || 0,
+          Number(t.NETRATE) || 0,
+          Number(t.Net_Amount) || 0,
+          runningBalance,
+        ]
+          .map((v) => `"${String(v ?? "").replace(/"/g, '""')}"`)
+          .join(",");
+
+        csvStream.write(line + "\n");
+        totalExported++;
+      }
+
+      if (rows.length < EXPORT_BATCH_SIZE) break;
+      exportOffset += EXPORT_BATCH_SIZE;
+
+    }
+    if (totalExported === 0) {
       csvStream.end();
       await uploadPromise;
-
       return res.status(404).json({
         message: `No transactions found for accountCode ${accountCode}`,
       });
     }
 
-    /* ================= WRITE CSV ROWS ================= */
-    let runningBalance = openingBalance;
-
-    for (const r of rows) {
-      const t = r.Transaction || r;
-
-      runningBalance = applyCashEffect(
-        runningBalance,
-        t.Tran_Type,
-        Number(t.Net_Amount) || 0,
-      );
-
-      const line = [
-        t.TRANDATE,
-        t.Tran_Type,
-        t.Security_Name,
-        t.Security_code,
-        t.ISIN,
-        Number(t.QTY) || 0,
-        Number(t.NETRATE) || 0,
-        Number(t.Net_Amount) || 0,
-        runningBalance,
-      ]
-        .map((v) => `"${String(v ?? "").replace(/"/g, '""')}"`)
-        .join(",");
-
-      csvStream.write(line + "\n");
-    }
-
-    /* ================= FINALIZE ================= */
     csvStream.end();
     await uploadPromise;
 
