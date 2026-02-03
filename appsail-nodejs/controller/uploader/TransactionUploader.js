@@ -521,6 +521,7 @@ export const uploadTransactionFileToStratus = async (req, res) => {
 
     /* ---------------- FILE NAME ---------------- */
     const storedFileName = `Txn-${Date.now()}-${file.name}`;
+    console.log("storedFileName:", storedFileName);
 
     /* ---------------- STREAM TO STRATUS ---------------- */
     const passThrough = new PassThrough();

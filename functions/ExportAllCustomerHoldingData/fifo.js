@@ -302,7 +302,7 @@ exports.runFifoEngine = (
 
       // 5️⃣ Create split lots one by one (ledger-correct)
       for (const oldLot of activeLots) {
-        const newQty = oldLot.qty * multiplier;
+        const newQty = Math.floor(oldLot.qty * multiplier);
         const newPrice = oldLot.price / multiplier;
         const newLotId = ++lotCounter;
 
