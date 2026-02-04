@@ -13,7 +13,8 @@
     "targets": [
       "ExportAllCustomerHoldingData",
       "CashCalculation",
-      "HoldingdataUpdate"
+      "HoldingdataUpdate",
+      "UpdateSecurity_ClientMaster"
     ],
     "ignore": [],
     "source": "functions"

@@ -537,6 +537,20 @@ export const uploadTransactionFileToStratus = async (req, res) => {
     // Wait for upload to complete
     await uploadPromise;
 
+    const jobScheduling = catalystApp.jobScheduling();
+const jobName = `TXN_IMPORT_${Date.now()}`;
+
+await jobScheduling.JOB.submitJob({
+  job_name: "UptSecurity_Clients",
+  jobpool_name: "UpdateMasters",  // create "Import" job pool in Catalyst console if needed
+  target_name: "UpdateSecurity_ClientMaster",
+  target_type: "Function",
+  params: {
+    fileName: storedFileName,
+    jobName,
+  },
+})
+    
     /* ---------------- TRIGGER BULK IMPORT ---------------- */
     const bulkWrite = datastore.table("Transaction").bulkJob("write");
 
