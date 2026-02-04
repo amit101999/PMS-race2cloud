@@ -75,8 +75,7 @@ export const runFifoEngine = (
   ].sort((a, b) => new Date(a.date) - new Date(b.date));
 
   /* ---------------- HELPERS ---------------- */
-  // const isBuy = (t) => /^BY-|SQB|OPI/.test(String(t).toUpperCase());
-    const isBuy = (t) => /^BY-|SQB/.test(String(t).toUpperCase());  // OPI excluded from buy
+  const isBuy = (t) => /^BY-|SQB|OPI/.test(String(t).toUpperCase());
   const isSell = (t) => /^SL\+|SQS|OPO|NF-/.test(String(t).toUpperCase());
 
   const getCostOfHoldings = () =>
