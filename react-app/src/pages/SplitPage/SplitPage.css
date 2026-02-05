@@ -208,6 +208,38 @@
     font-weight: 500;
     color: #374151;
   }
+  .split-preview {
+    background: #eef2ff;
+    color: #4338ca;
+    border: 1px solid #c7d2fe;
+    padding: 10px 16px;
+    border-radius: 6px;
+    cursor: pointer;
+    margin-right: 12px;
+  }
+  
+  .split-preview:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+  }
+  
+  .preview-table {
+    width: 100%;
+    border-collapse: collapse;
+  }
+  
+  .preview-table th,
+  .preview-table td {
+    padding: 10px;
+    border-bottom: 1px solid #e5e7eb;
+    text-align: left;
+  }
+  
+  .preview-table th {
+    background: #f9fafb;
+    font-weight: 600;
+  }
+  
 
 /* Add these styles - same as AnalyticsPage.css */
 .account-code-search {
