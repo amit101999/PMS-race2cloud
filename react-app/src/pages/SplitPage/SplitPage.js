@@ -20,6 +20,9 @@ function SplitPage() {
   const [previewData, setPreviewData] = useState([]);
   const [showPreview, setShowPreview] = useState(false);
 
+  const [exportLoading, setExportLoading] = useState(false);
+  const [exportDownloadUrl, setExportDownloadUrl] = useState("");
+
   const [securities, setSecurities] = useState([]);
   const [searchQuery, setSearchQuery] = useState("");
   const [showDropdown, setShowDropdown] = useState(false);
@@ -362,6 +365,54 @@ function SplitPage() {
                   ))}
                 </tbody>
               </table>
+            </div>
+          )}
+
+          {previewData.length > 0 && (
+            <div className="bonus-preview-actions" style={{ marginTop: 16, display: "flex", gap: 12 }}>
+              <button
+                className="split-preview"
+                disabled={exportLoading}
+                onClick={async () => {
+                  try {
+                    setExportLoading(true);
+                    setExportDownloadUrl("");
+                    const params = new URLSearchParams({
+                      isin,
+                      ratio1,
+                      ratio2,
+                      issueDate: date,
+                    });
+                    const res = await fetch(
+                      `${BASE_URL}/split/export-preview?${params.toString()}`,
+                      { credentials: "include" }
+                    );
+                    if (!res.ok) throw new Error("Export request failed");
+                    const data = await res.json();
+                    if (!data.success) throw new Error(data.message || "Export failed");
+                    const signedUrl =
+                      data.downloadUrl?.signature?.signature ?? data.downloadUrl?.signature;
+                    if (!signedUrl) throw new Error("Download URL missing");
+                    setExportDownloadUrl(signedUrl);
+                  } catch (err) {
+                    console.error(err);
+                    alert("Failed to export split preview CSV");
+                  } finally {
+                    setExportLoading(false);
+                  }
+                }}
+              >
+                {exportLoading ? "Generating..." : "Export"}
+              </button>
+              <button
+                className="split-submit"
+                disabled={!exportDownloadUrl}
+                onClick={() => {
+                  if (exportDownloadUrl) window.open(exportDownloadUrl, "_blank");
+                }}
+              >
+                Download
+              </button>
             </div>
           )}
         </Card>
