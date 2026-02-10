@@ -14,7 +14,8 @@
       "ExportAllCustomerHoldingData",
       "CashCalculation",
       "HoldingdataUpdate",
-      "UpdateSecurity_ClientMaster"
+      "UpdateSecurity_ClientMaster",
+      "ExportDifferentialReport"
     ],
     "ignore": [],
     "source": "functions"

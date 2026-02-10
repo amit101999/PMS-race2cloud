@@ -137,8 +137,7 @@ function BonusPage() {
 
   return (
     <MainLayout title="Stock Bonus">
-      <Card style={{ marginTop: 24 }}>
-        <h2 style={{ fontSize: 18, fontWeight: 600 }}>Add Stock Bonus</h2>
+      <Card style={{ marginTop: 4 }}>
 
         {success && (
           <div className="alert success">Bonus applied successfully</div>
