@@ -1,4 +1,4 @@
-import React from "react";
+import React ,{useState,useEffect} from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 
 /* ===========================
@@ -506,6 +506,18 @@ export function Pagination({
 
 export function Sidebar({ items = [], activeKey }) {
   const navigate = useNavigate();
+  const location = useLocation();
+  const [openKey, setOpenKey] = useState(null);
+
+  // Keep Corporate Actions open when on any of its child routes (Split, Bonus, Dividend)
+  const corporateActionPaths = ["/split", "/bonus", "/dividend"];
+  const isOnCorporateActionChild = corporateActionPaths.includes(location.pathname);
+
+  useEffect(() => {
+    if (isOnCorporateActionChild) {
+      setOpenKey("corporate-actions");
+    }
+  }, [location.pathname, isOnCorporateActionChild]);
 
   const sidebarStyle = {
     width: 240,
@@ -555,55 +567,72 @@ export function Sidebar({ items = [], activeKey }) {
   });
 
   const handleNavigation = (item) => {
-    if (item.onClick) {
-      item.onClick();
+    // Parent menu (e.g. Corporate Actions)
+    if (item.children) {
+      // Do not collapse when already on a child route; just toggle
+      if (isOnCorporateActionChild && item.key === "corporate-actions") {
+        setOpenKey(openKey === item.key ? null : item.key);
+        return;
+      }
+      setOpenKey(openKey === item.key ? null : item.key);
       return;
     }
 
+    // Child navigation (e.g. Split, Bonus, Dividend)
     if (item.key === "dashboard") {
-      window.location.hash = "#/";
-    } else if (item.key === "analytics") {
-      window.location.hash = "#/analytics";
-    } else if (item.key === "split") {
-      window.location.hash = "#/split";
-    } else if (item.key === "bhav-copy") {
-      window.location.hash = "#/bhav-copy";
-    } else if (item.key === "transaction-upload") {   
-      window.location.hash = "#/transaction-upload";
-    } else if (item.key === "reports") {
-      window.location.hash = "#/reports";
-    } else if (item.key === "bonus") {
-      window.location.hash = "#/bonus";
+      navigate("/");
+    } else {
+      navigate(`/${item.key}`);
     }
   };
+
 
   return (
     <aside style={sidebarStyle}>
       <div style={headerStyle}>Menu</div>
       <div style={navContainerStyle}>
         <nav style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-          {items.map((item) => (
-            <button
-              key={item.key}
-              style={itemStyle(activeKey === item.key)}
-              onMouseEnter={(e) => {
-                if (activeKey !== item.key) {
-                  e.target.style.backgroundColor = "rgba(255, 255, 255, 0.08)";
-                  e.target.style.color = "rgba(255, 255, 255, 0.9)";
-                }
-              }}
-              onMouseLeave={(e) => {
-                if (activeKey !== item.key) {
-                  e.target.style.backgroundColor = "transparent";
-                  e.target.style.color = "rgba(255, 255, 255, 0.7)";
-                }
-              }}
-              onClick={() => handleNavigation(item)}
-            >
-              {item.label}
-            </button>
-          ))}
-        </nav>
+  {items.map((item) => {
+    const hasChildren = !!item.children;
+    const isOpen = openKey === item.key;
+
+    return (
+      <div key={item.key}>
+        {/* Parent / normal item */}
+        <button
+          style={itemStyle(
+            activeKey === item.key ||
+              (item.key === "corporate-actions" && isOnCorporateActionChild)
+          )}
+          onClick={() => handleNavigation(item)}
+        >
+          {item.label}
+          {hasChildren && (
+            <span style={{ float: "right", fontSize: 12 }}>
+              {isOpen ? "▾" : "▸"}
+            </span>
+          )}
+        </button>
+
+        {/* CHILDREN (THIS WAS MISSING) */}
+        {hasChildren && isOpen && (
+          <div style={{ paddingLeft: 18 }}>
+            {item.children.map((child) => (
+              <button
+                key={child.key}
+                style={itemStyle(activeKey === child.key)}
+                onClick={() => handleNavigation(child)}
+              >
+                {child.label}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  })}
+</nav>
+
       </div>
     </aside>
   );
