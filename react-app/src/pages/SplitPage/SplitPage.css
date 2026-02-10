@@ -208,36 +208,124 @@
     font-weight: 500;
     color: #374151;
   }
-  .split-preview {
-    background: #eef2ff;
-    color: #4338ca;
-    border: 1px solid #c7d2fe;
-    padding: 10px 16px;
-    border-radius: 6px;
-    cursor: pointer;
-    margin-right: 12px;
-  }
-  
   .split-preview:disabled {
     opacity: 0.6;
     cursor: not-allowed;
   }
-  
-  .preview-table {
+
+  /* ===========================
+     SPLIT PREVIEW (same as Bonus)
+     =========================== */
+  .bonus-preview-wrapper {
+    margin-top: 28px;
+    padding-top: 10px;
+  }
+
+  .bonus-preview-wrapper.full-width {
+    width: 100%;
+  }
+
+  .bonus-preview-wrapper h3 {
+    font-size: 16px;
+    font-weight: 600;
+    color: #111827;
+    margin-bottom: 14px;
+  }
+
+  .bonus-preview-table-wrapper {
+    border-radius: 14px;
+    overflow: hidden;
+    border: 1px solid #e5e7eb;
+    background: #ffffff;
+  }
+
+  .bonus-preview-table {
     width: 100%;
     border-collapse: collapse;
+    font-size: 14px;
   }
-  
-  .preview-table th,
-  .preview-table td {
-    padding: 10px;
-    border-bottom: 1px solid #e5e7eb;
+
+  .bonus-preview-table thead th {
     text-align: left;
-  }
-  
-  .preview-table th {
+    vertical-align: middle;
+    padding: 14px 16px;
     background: #f9fafb;
+    color: #374151;
     font-weight: 600;
+    border-bottom: 1px solid #e5e7eb;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    font-size: 12px;
+  }
+
+  .bonus-preview-table tbody tr {
+    background: #ffffff;
+    transition: background 0.15s ease, color 0.15s ease;
+  }
+
+  .bonus-preview-table tbody tr + tr {
+    border-top: 1px solid #e5e7eb;
+  }
+
+  .bonus-preview-table td {
+    text-align: left;
+    vertical-align: middle;
+    padding: 14px 16px;
+    color: #374151;
+    font-weight: 500;
+  }
+
+  .bonus-preview-table tbody tr:hover {
+    background: #166534;
+  }
+
+  .bonus-preview-table tbody tr:hover td {
+    color: #ffffff;
+  }
+
+  .bonus-preview-table tbody tr:nth-child(even) {
+    background: #f9fafb;
+  }
+
+  .bonus-preview-table tbody tr:nth-child(even):hover {
+    background: #166534;
+  }
+
+  .bonus-preview-actions {
+    display: flex;
+    justify-content: flex-end;
+    align-items: center;
+    gap: 16px;
+    margin-top: 16px;
+  }
+
+  .bonus-submit {
+    background: linear-gradient(135deg, #c2185b, #8b1538);
+    color: white;
+    padding: 12px 10px;
+    border-radius: 8px;
+    border: none;
+    font-size: 14px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: transform 0.1s ease, box-shadow 0.1s ease;
+  }
+
+  .bonus-submit:hover:not(:disabled) {
+    transform: translateY(-1px);
+    box-shadow: 0 6px 14px rgba(194, 24, 91, 0.35);
+  }
+
+  .bonus-submit:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+    box-shadow: none;
+  }
+
+  .alert.info {
+    background-color: #eff6ff;
+    color: #1d4ed8;
+    border: 1px solid #93c5fd;
   }
   
 

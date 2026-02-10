@@ -31,7 +31,17 @@ function SplitPage() {
   const [error, setError] = useState(null);
   const [success, setSuccess] = useState(false);
 
+  const PAGE_SIZE = 10;
+  const [page, setPage] = useState(1);
+
   const dropdownRef = useRef(null);
+
+  useEffect(() => setPage(1), [previewData]);
+  const totalPages = Math.max(1, Math.ceil(previewData.length / PAGE_SIZE));
+  const paginatedPreview = previewData.slice(
+    (page - 1) * PAGE_SIZE,
+    page * PAGE_SIZE,
+  );
 
   /* ===========================
      FETCH ISIN + CODE + NAME
@@ -158,7 +168,7 @@ function SplitPage() {
 
       setSuccess(true);
 
-      // Reset form
+      // Reset form and preview (same as Bonus)
       setIsin("");
       setSearchQuery("");
       setSecurityCode("");
@@ -166,6 +176,9 @@ function SplitPage() {
       setRatio1("");
       setRatio2("");
       setDate("");
+      setPreviewData([]);
+      setShowPreview(false);
+      setExportDownloadUrl("");
 
       setTimeout(() => setSuccess(false), 3000);
     } catch (err) {
@@ -177,11 +190,7 @@ function SplitPage() {
 
   return (
     <MainLayout title="Stock Split">
-      <Card style={{ marginTop: 24 }}>
-        <h2 style={{ fontSize: 18, fontWeight: 600, marginBottom: 20 }}>
-          Add Stock Split
-        </h2>
-
+      <Card style={{ marginTop: 4 }}>
         {success && (
           <div className="alert success">Split saved successfully!</div>
         )}
@@ -290,132 +299,130 @@ function SplitPage() {
             />
           </div>
 
-          {/* ACTION */}
-
-          <div className="split-actions">
-            <button
-              className="split-preview"
-              disabled={
-                !isin ||
-                !ratio1 ||
-                !ratio2 ||
-                !date ||
-                previewLoading
-              }
-              onClick={handlePreview}
-            >
-              {previewLoading ? "Previewing..." : "Preview Split"}
-            </button>
-
-            <button
-              className="split-submit"
-              disabled={
-                !isin ||
-                !ratio1 ||
-                !ratio2 ||
-                !date ||
-                Number(ratio1) <= 0 ||
-                Number(ratio2) <= 0 ||
-                loading
-              }
-              onClick={handleSubmit}
-            >
-              {loading ? "Saving..." : "Apply Split"}
-            </button>
-          </div>
-
+          {/* ACTION - same as Bonus: single "Fetch Affected Accounts" button */}
+          <button
+            className="bonus-submit"
+            disabled={
+              !isin ||
+              !ratio1 ||
+              !ratio2 ||
+              !date ||
+              Number(ratio1) <= 0 ||
+              Number(ratio2) <= 0 ||
+              previewLoading
+            }
+            onClick={handlePreview}
+          >
+            {previewLoading ? "Fetching…" : "Fetch Affected Accounts"}
+          </button>
         </div>
       </Card>
       {showPreview && (
-        <Card style={{ marginTop: 24 }}>
-          <h3 style={{ fontSize: 16, fontWeight: 600, marginBottom: 16 }}>
-            Split Preview
-          </h3>
+        <div className="bonus-preview-wrapper full-width">
+          <h3>Split Impact Preview</h3>
 
           {previewData.length === 0 ? (
-            <div style={{ color: "#6b7280" }}>
-              No eligible holdings found before split date.
-            </div>
+            <div className="alert info">No eligible holdings found before split date.</div>
           ) : (
-            <div className="preview-table-wrapper">
-              <table className="preview-table">
-                <thead>
-                  <tr>
-                    <th>Account Code</th>
-                    <th>Current Holding</th>
-                    <th>New Holding</th>
-                    <th>Delta</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {previewData.map((row, idx) => (
-                    <tr key={idx}>
-                      <td>{row.accountCode}</td>
-                      <td>{row.currentHolding}</td>
-                      <td>{row.newHolding}</td>
-                      <td
-                        style={{
-                          color: row.delta > 0 ? "green" : "#374151",
-                          fontWeight: 600,
-                        }}
-                      >
-                        {row.delta > 0 ? `+${row.delta}` : row.delta}
-                      </td>
+            <>
+              <div className="bonus-preview-table-wrapper">
+                <table className="bonus-preview-table">
+                  <thead>
+                    <tr>
+                      <th>Account Code</th>
+                      <th>Current Holding</th>
+                      <th>New Holding</th>
+                      <th>Δ Change</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
+                  </thead>
+                  <tbody>
+                    {paginatedPreview.map((row, idx) => (
+                      <tr key={(page - 1) * PAGE_SIZE + idx}>
+                        <td>{row.accountCode}</td>
+                        <td>{row.currentHolding}</td>
+                        <td>{row.newHolding}</td>
+                        <td style={{ color: "#166534", fontWeight: 600 }}>
+                          {row.delta > 0 ? `+${row.delta}` : row.delta}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
 
-          {previewData.length > 0 && (
-            <div className="bonus-preview-actions" style={{ marginTop: 16, display: "flex", gap: 12 }}>
-              <button
-                className="split-preview"
-                disabled={exportLoading}
-                onClick={async () => {
-                  try {
-                    setExportLoading(true);
-                    setExportDownloadUrl("");
-                    const params = new URLSearchParams({
-                      isin,
-                      ratio1,
-                      ratio2,
-                      issueDate: date,
-                    });
-                    const res = await fetch(
-                      `${BASE_URL}/split/export-preview?${params.toString()}`,
-                      { credentials: "include" }
-                    );
-                    if (!res.ok) throw new Error("Export request failed");
-                    const data = await res.json();
-                    if (!data.success) throw new Error(data.message || "Export failed");
-                    const signedUrl =
-                      data.downloadUrl?.signature?.signature ?? data.downloadUrl?.signature;
-                    if (!signedUrl) throw new Error("Download URL missing");
-                    setExportDownloadUrl(signedUrl);
-                  } catch (err) {
-                    console.error(err);
-                    alert("Failed to export split preview CSV");
-                  } finally {
-                    setExportLoading(false);
-                  }
-                }}
-              >
-                {exportLoading ? "Generating..." : "Export"}
-              </button>
-              <button
-                className="split-submit"
-                disabled={!exportDownloadUrl}
-                onClick={() => {
-                  if (exportDownloadUrl) window.open(exportDownloadUrl, "_blank");
-                }}
-              >
-                Download
-              </button>
-            </div>
+              {totalPages > 1 && (
+                <div className="pagination">
+                  <button
+                    disabled={page === 1}
+                    onClick={() => setPage(page - 1)}
+                  >
+                    Prev
+                  </button>
+                  <span>Page {page} of {totalPages}</span>
+                  <button
+                    disabled={page === totalPages}
+                    onClick={() => setPage(page + 1)}
+                  >
+                    Next
+                  </button>
+                </div>
+              )}
+
+              <div className="bonus-preview-actions">
+                <button
+                  className="bonus-submit"
+                  disabled={exportLoading}
+                  onClick={async () => {
+                    try {
+                      setExportLoading(true);
+                      setExportDownloadUrl("");
+                      const params = new URLSearchParams({
+                        isin,
+                        ratio1,
+                        ratio2,
+                        issueDate: date,
+                      });
+                      const res = await fetch(
+                        `${BASE_URL}/split/export-preview?${params.toString()}`,
+                        { credentials: "include" }
+                      );
+                      if (!res.ok) throw new Error("Export request failed");
+                      const data = await res.json();
+                      if (!data.success) throw new Error(data.message || "Export failed");
+                      const signedUrl =
+                        data.downloadUrl?.signature?.signature ?? data.downloadUrl?.signature;
+                      if (!signedUrl) throw new Error("Download URL missing");
+                      setExportDownloadUrl(signedUrl);
+                    } catch (err) {
+                      console.error(err);
+                      alert("Failed to export split preview CSV");
+                    } finally {
+                      setExportLoading(false);
+                    }
+                  }}
+                >
+                  {exportLoading ? "Generating…" : "Export"}
+                </button>
+                <button
+                  className="bonus-submit"
+                  disabled={!exportDownloadUrl}
+                  onClick={() => {
+                    if (exportDownloadUrl) window.open(exportDownloadUrl, "_blank");
+                  }}
+                >
+                  Download
+                </button>
+                <button
+                  className="bonus-submit"
+                  disabled={loading}
+                  onClick={handleSubmit}
+                >
+                  {loading ? "Applying…" : "Confirm & Apply Split"}
+                </button>
+              </div>
+            </>
           )}
-        </Card>
+        </div>
       )}
 
     </MainLayout>

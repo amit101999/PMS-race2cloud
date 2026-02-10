@@ -97,7 +97,13 @@ export const getPaginatedTransactions = async (req, res) => {
     SELECT Tran_Type, Net_Amount
     FROM Transaction
     ${whereSql}
-    ORDER BY TRANDATE ASC, ROWID ASC
+    ORDER BY
+  TRANDATE ASC,
+  CASE
+    WHEN Tran_Type IN ('CS+','SL+','DIO','DI0','CSI','DIS','IN1','OI1','SQS','DI1','IN+') THEN 0
+    ELSE 1
+  END,
+  ROWID ASC
     LIMIT ${limit} OFFSET ${cursorOffset}
   `);
 
@@ -149,7 +155,13 @@ export const getPaginatedTransactions = async (req, res) => {
         Net_Amount
       FROM Transaction
       ${whereSql}
-      ORDER BY TRANDATE ASC, ROWID ASC
+      ORDER BY
+  TRANDATE ASC,
+  CASE
+    WHEN Tran_Type IN ('CS+','SL+','DIO','DI0','CSI','DIS','IN1','OI1','SQS','DI1','IN+') THEN 0
+    ELSE 1
+  END,
+  ROWID ASC
       LIMIT ${limit} OFFSET ${offset}
     `);
 

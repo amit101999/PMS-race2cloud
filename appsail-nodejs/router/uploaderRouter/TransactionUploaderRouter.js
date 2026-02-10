@@ -2,18 +2,25 @@ import express from "express";
 
 import fileUpload from "express-fileupload";
 import {
-  simulateHoldings,
-  triggerTransactionBulkImport,
-  uploadTransactionFileToStratus,
-  compareWithCustodian,
+  getFifoPageHandler,
+  getDiffPageHandler,
+  uploadTempTransactionFile,
+  uploadTempCustodianFile,
+  startDifferentialExportJob,
+  getDifferentialExportStatus,
+  listDifferentialExportJobs,
 } from "../../controller/uploader/TransactionUploader.js";
 
 const router = express.Router();
 router.use(fileUpload());
 
-router.post("/upload-transaction", uploadTransactionFileToStratus);
-router.post("/trigger-transaction-import", triggerTransactionBulkImport);
-router.post("/parse-data", simulateHoldings);
-router.post("/compare-custodian", compareWithCustodian);
+router.post("/upload-temp-transaction", uploadTempTransactionFile);
+router.post("/upload-temp-custodian", uploadTempCustodianFile);
+router.get("/fifo-page", getFifoPageHandler);
+router.get("/diff-page", getDiffPageHandler);
+
+router.post("/export-differential-report", startDifferentialExportJob);
+router.get("/export-differential-report/status", getDifferentialExportStatus);
+router.get("/export-differential-report/list", listDifferentialExportJobs);
 
 export default router;
