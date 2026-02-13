@@ -2,9 +2,15 @@
 
 const { runFifoEngine } = require("./fifo.js");
 
-const BATCH = 250;
+const MAX_ZCQL_ROWS = 300;
+const BATCH = Math.min(250, MAX_ZCQL_ROWS);
+const esc = (s) => String(s).replace(/'/g, "''");
 
-function toFifoTxnRow(r) {
+/* ------------------------------------------------ */
+/* ----------------- DB HELPERS ------------------- */
+/* ------------------------------------------------ */
+
+const toFifoTxnRow = (r) => {
   const t = r.Transaction || r.Temp_Transaction || r;
   return {
     WS_Account_code: t.WS_Account_code,
@@ -16,84 +22,77 @@ function toFifoTxnRow(r) {
     TRANDATE: t.TRANDATE ?? "",
     NETRATE: Number(t.NETRATE) || 0,
   };
-}
+};
 
-async function fetchTransactionRows(zcql, isin, accountCode) {
+const fetchTxnRows = async (zcql, tableName, isin, accountCode) => {
   const out = [];
   let offset = 0;
-  const esc = (s) => String(s).replace(/'/g, "''");
+
   while (true) {
     const rows = await zcql.executeZCQLQuery(`
       SELECT ROWID, Security_Name, Security_code, Tran_Type, QTY, TRANDATE, NETRATE, ISIN, WS_Account_code
-      FROM Transaction
-      WHERE ISIN = '${esc(isin)}' AND WS_Account_code = '${esc(accountCode)}'
+      FROM ${tableName}
+      WHERE ISIN='${esc(isin)}' AND WS_Account_code='${esc(accountCode)}'
       ORDER BY ROWID ASC
       LIMIT ${BATCH} OFFSET ${offset}
     `);
+
     if (!rows?.length) break;
     rows.forEach((r) => out.push(toFifoTxnRow(r)));
     if (rows.length < BATCH) break;
     offset += BATCH;
   }
-  return out;
-}
 
-async function fetchTempTransactionRows(zcql, isin, accountCode) {
+  return out;
+};
+
+const fetchBonusRows = async (zcql, isin, accountCode) => {
   const out = [];
   let offset = 0;
-  const esc = (s) => String(s).replace(/'/g, "''");
-  while (true) {
-    const rows = await zcql.executeZCQLQuery(`
-      SELECT ROWID, Security_Name, Security_code, Tran_Type, QTY, TRANDATE, NETRATE, ISIN, WS_Account_code
-      FROM Temp_Transaction
-      WHERE ISIN = '${esc(isin)}' AND WS_Account_code = '${esc(accountCode)}'
-      ORDER BY ROWID ASC
-      LIMIT ${BATCH} OFFSET ${offset}
-    `);
-    if (!rows?.length) break;
-    rows.forEach((r) => out.push(toFifoTxnRow(r)));
-    if (rows.length < BATCH) break;
-    offset += BATCH;
-  }
-  return out;
-}
 
-async function fetchBonusRows(zcql, isin, accountCode) {
-  const out = [];
-  let offset = 0;
-  const esc = (s) => String(s).replace(/'/g, "''");
   while (true) {
     const rows = await zcql.executeZCQLQuery(`
       SELECT ROWID, BonusShare, ExDate, ISIN
       FROM Bonus
-      WHERE ISIN = '${esc(isin)}' AND WS_Account_code = '${esc(accountCode)}'
+      WHERE ISIN='${esc(isin)}' AND WS_Account_code='${esc(accountCode)}'
       ORDER BY ROWID ASC
       LIMIT ${BATCH} OFFSET ${offset}
     `);
+
     if (!rows?.length) break;
+
     rows.forEach((r) => {
       const b = r.Bonus || r;
-      out.push({ ROWID: b.ROWID, BonusShare: b.BonusShare, ExDate: b.ExDate, ISIN: b.ISIN });
+      out.push({
+        ROWID: b.ROWID,
+        BonusShare: b.BonusShare,
+        ExDate: b.ExDate,
+        ISIN: b.ISIN,
+      });
     });
+
     if (rows.length < BATCH) break;
     offset += BATCH;
   }
-  return out;
-}
 
-async function fetchSplitRows(zcql, isin) {
+  return out;
+};
+
+const fetchSplitRows = async (zcql, isin) => {
   const out = [];
   let offset = 0;
-  const esc = (s) => String(s).replace(/'/g, "''");
+
   while (true) {
     const rows = await zcql.executeZCQLQuery(`
       SELECT ROWID, Issue_Date, Ratio1, Ratio2, ISIN
       FROM Split
-      WHERE ISIN = '${esc(isin)}'
+      WHERE ISIN='${esc(isin)}'
       ORDER BY ROWID ASC
       LIMIT ${BATCH} OFFSET ${offset}
     `);
+
     if (!rows?.length) break;
+
     rows.forEach((r) => {
       const s = r.Split || r;
       out.push({
@@ -103,165 +102,242 @@ async function fetchSplitRows(zcql, isin) {
         isin: s.ISIN,
       });
     });
+
     if (rows.length < BATCH) break;
     offset += BATCH;
   }
+
   return out;
-}
+};
 
-function runPerRowSimulationFull(dbTransactions, fileTransactions, bonuses, splits) {
-  let currentTransactions = [...dbTransactions];
-  let prevFifo = runFifoEngine(currentTransactions, bonuses, splits, true);
-  let lastRow = null;
-  for (let i = 0; i < fileTransactions.length; i++) {
-    const row = fileTransactions[i];
-    currentTransactions.push(row);
-    const afterFifo = runFifoEngine(currentTransactions, bonuses, splits, true);
-    const afterHolding = afterFifo?.holdings || 0;
-    lastRow = {
-      WS_Account_code: row.WS_Account_code,
-      ISIN: row.ISIN,
-      Security_Name: row.Security_Name ?? "",
-      newQuantity: afterHolding,
-    };
-    prevFifo = afterFifo;
+/* ------------------------------------------------ */
+/* -------- GET UNIQUE GROUPS FROM Temp_Transaction */
+/* ------------------------------------------------ */
+/**
+ * Scans ONLY Temp_Transaction to build the list of unique (accountCode, isin)
+ * groups, counting how many rows each group has.
+ *
+ * ── WHY THE OLD CODE GAVE 104 ROWS INSTEAD OF 699 ──
+ * The previous version of getAllGroups also scanned Transaction and
+ * Temp_Custodian tables. For any group that existed in those tables but had
+ * ZERO rows in Temp_Transaction, it pushed exactly ONE summary row per group
+ * instead of one-row-per-temp-transaction. With ~595 such collapsed groups the
+ * total came out at ~104 instead of ~699.
+ *
+ * Fix: only scan Temp_Transaction — identical to what the UI does.
+ */
+const getAllGroups = async (zcql) => {
+  const groupCounts = new Map();
+  let offset = 0;
+
+  while (true) {
+    const rows = await zcql.executeZCQLQuery(`
+      SELECT WS_Account_code, ISIN
+      FROM Temp_Transaction
+      ORDER BY WS_Account_code, ISIN, ROWID
+      LIMIT ${MAX_ZCQL_ROWS} OFFSET ${offset}
+    `);
+
+    if (!rows?.length) break;
+
+    for (const r of rows) {
+      const t = r.Temp_Transaction || r;
+      const accountCode = (t.WS_Account_code ?? "").toString().trim();
+      const isin = (t.ISIN ?? "").toString().trim();
+      if (!accountCode || !isin) continue;
+
+      const key = `${accountCode}__${isin}`;
+      const existing = groupCounts.get(key);
+      if (existing) {
+        existing.count += 1;
+      } else {
+        groupCounts.set(key, { accountCode, isin, count: 1 });
+      }
+    }
+
+    if (rows.length < MAX_ZCQL_ROWS) break;
+    offset += MAX_ZCQL_ROWS;
   }
-  return lastRow;
-}
 
-async function getFinalHoldingsForGroup(zcql, accountCode, isin) {
-  const dbTransactions = await fetchTransactionRows(zcql, isin, accountCode);
-  const tempTransactions = await fetchTempTransactionRows(zcql, isin, accountCode);
+  return Array.from(groupCounts.values())
+    .filter((g) => g.count > 0)
+    .sort((a, b) =>
+      (a.accountCode + a.isin).localeCompare(b.accountCode + b.isin)
+    );
+};
+
+/* ------------------------------------------------ */
+/* -------- FINAL HOLDINGS (CORRECT FIFO) -------- */
+/* ------------------------------------------------ */
+/**
+ * Combines DB transactions + already-fetched temp transactions and runs FIFO.
+ *
+ * tempTransactions are PASSED IN from the caller — never re-fetched here.
+ * This halves DB calls per group and prevents Catalyst function timeouts.
+ */
+const getFinalHoldingsForGroup = async (
+  zcql,
+  accountCode,
+  isin,
+  tempTransactions  // passed in — do NOT re-fetch inside
+) => {
+  const dbTransactions = await fetchTxnRows(zcql, "Transaction", isin, accountCode);
   const bonuses = await fetchBonusRows(zcql, isin, accountCode);
   const splits = await fetchSplitRows(zcql, isin);
-  const last = runPerRowSimulationFull(dbTransactions, tempTransactions, bonuses, splits);
+
+  const allTransactions = [...dbTransactions, ...tempTransactions];
+  const fifoResult = runFifoEngine(allTransactions, bonuses, splits, true);
+
+  const security =
+    tempTransactions[tempTransactions.length - 1]?.Security_Name ||
+    dbTransactions[dbTransactions.length - 1]?.Security_Name ||
+    "";
+
   return {
-    UCC: accountCode,
-    ISIN: isin,
-    Qty_FA: last ? Number(last.newQuantity) || 0 : 0,
-    Security: last?.Security_Name ?? "",
-    fromTemp: tempTransactions.length > 0,
+    Qty_FA: fifoResult?.holdings || 0,
+    Security: security,
   };
-}
+};
 
-async function getOrderedDiffKeys(zcql) {
-  const keys = new Map();
-  const add = (ucc, isin) => {
-    const u = (ucc ?? "").toString().trim();
-    const i = (isin ?? "").toString().trim();
-    if (u && i) keys.set(`${u}__${i}`, { UCC: u, ISIN: i });
-  };
-  let offset = 0;
-  while (true) {
-    const rows = await zcql.executeZCQLQuery(`
-      SELECT WS_Account_code, ISIN FROM Temp_Transaction ORDER BY WS_Account_code, ISIN LIMIT ${BATCH} OFFSET ${offset}
-    `);
-    if (!rows?.length) break;
-    rows.forEach((r) => {
-      const t = r.Temp_Transaction || r;
-      add(t.WS_Account_code, t.ISIN);
-    });
-    if (rows.length < BATCH) break;
-    offset += BATCH;
-  }
-  offset = 0;
-  while (true) {
-    const rows = await zcql.executeZCQLQuery(`
-      SELECT UCC, ISIN FROM Temp_Custodian ORDER BY UCC, ISIN LIMIT ${BATCH} OFFSET ${offset}
-    `);
-    if (!rows?.length) break;
-    rows.forEach((r) => {
-      const t = r.Temp_Custodian || r;
-      add(t.UCC, t.ISIN);
-    });
-    if (rows.length < BATCH) break;
-    offset += BATCH;
-  }
-  return Array.from(keys.values()).sort((a, b) => (a.UCC + a.ISIN).localeCompare(b.UCC + b.ISIN));
-}
+/* ------------------------------------------------ */
+/* -------- GET CUSTODIAN ROW -------------------- */
+/* ------------------------------------------------ */
 
-async function getCustodianRow(zcql, ucc, isin) {
-  const esc = (s) => String(s).replace(/'/g, "''");
+const getCustodianRow = async (zcql, ucc, isin) => {
   const rows = await zcql.executeZCQLQuery(`
     SELECT UCC, ISIN, NetBalance, ClientName, SecurityName, LTPDate, LTPPrice
-    FROM Temp_Custodian WHERE UCC = '${esc(ucc)}' AND ISIN = '${esc(isin)}' LIMIT 1
+    FROM Temp_Custodian
+    WHERE UCC='${esc(ucc)}' AND ISIN='${esc(isin)}'
+    LIMIT 1
   `);
+
   const r = rows?.[0]?.Temp_Custodian ?? rows?.[0];
   if (!r) return null;
+
+  const hasKey =
+    (r.UCC != null && String(r.UCC).trim() !== "") ||
+    (r.ISIN != null && String(r.ISIN).trim() !== "");
+  if (!hasKey) return null;
+
   return {
-    UCC: r.UCC ?? ucc,
-    ISIN: r.ISIN ?? isin,
     NetBalance: parseFloat(r.NetBalance) || 0,
-    ClientName: (r.ClientName ?? "").toString().trim(),
-    SecurityName: (r.SecurityName ?? "").toString().trim(),
-    LTPDate: (r.LTPDate ?? "").toString().trim(),
-    LTPPrice: parseFloat(r.LTPPrice) != null ? parseFloat(r.LTPPrice) : null,
+    ClientName: (r.ClientName ?? "").trim(),
+    SecurityName: (r.SecurityName ?? "").trim(),
+    LTPDate: (r.LTPDate ?? "").trim(),
+    LTPPrice: parseFloat(r.LTPPrice) != null ? parseFloat(r.LTPPrice) : "",
   };
+};
+
+/* ------------------------------------------------ */
+/* -------- MAIN EXPORT LOGIC -------------------- */
+/* ------------------------------------------------ */
+/**
+ * Produces ONE output row per Temp_Transaction row — exactly matching the
+ * "Comparison (FA vs Custodian)" table in the UI.
+ *
+ * Per group:
+ *   1. fetchTxnRows(Temp_Transaction) → N rows → N CSV output rows
+ *   2. getFinalHoldingsForGroup — reuses those N rows + fetches DB rows via FIFO
+ *   3. getCustodianRow → single custodian balance for the comparison columns
+ *   4. Emit one entry per temp row (all share the same computed Qty_FA / Qty_Cust / Diff)
+ */
+async function getAllDiffRows(zcql) {
+  const groups = await getAllGroups(zcql);
+  const data = [];
+
+  console.log(`[DiffLogic] ${groups.length} unique (UCC, ISIN) groups found`);
+
+  for (const g of groups) {
+    // ── 1. Fetch all Temp_Transaction rows for this group ONCE ───────────────
+    const tempTransactions = await fetchTxnRows(
+      zcql,
+      "Temp_Transaction",
+      g.isin,
+      g.accountCode
+    );
+
+    if (!tempTransactions.length) continue;
+
+    // ── 2. Compute final FIFO holding (reuses tempTransactions — no re-fetch) ─
+    const fa = await getFinalHoldingsForGroup(
+      zcql,
+      g.accountCode,
+      g.isin,
+      tempTransactions
+    );
+
+    // ── 3. Get custodian balance ──────────────────────────────────────────────
+    const cust = await getCustodianRow(zcql, g.accountCode, g.isin);
+
+    const qtyFA = fa.Qty_FA;
+    const qtyCust = cust ? cust.NetBalance : 0;
+    const diff = qtyFA - qtyCust;
+
+    const Mismatch_Reason = !cust
+      ? "Not in custodian file"
+      : diff !== 0
+      ? "Qty Mismatch"
+      : "";
+
+    // ── 4. One CSV row per uploaded transaction row ───────────────────────────
+    for (const row of tempTransactions) {
+      data.push({
+        UCC: g.accountCode,
+        ISIN: g.isin,
+        Qty_FA: qtyFA,
+        Qty_Cust: qtyCust,
+        Diff: diff,
+        Matching: diff === 0 ? "Yes" : "No",
+        Mismatch_Reason,
+        Security:
+          (row.Security_Name ?? "").trim() ||
+          fa.Security ||
+          cust?.SecurityName ||
+          "",
+        ClientName: cust?.ClientName || "",
+        LTPDate: cust?.LTPDate || "",
+        LTPPrice: cust?.LTPPrice ?? "",
+      });
+    }
+  }
+
+  console.log(`[DiffLogic] Total export rows: ${data.length}`);
+  return data;
 }
 
-function escapeCsv(val) {
-  const s = val == null ? "" : String(val);
-  if (/[",\r\n]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
-  return s;
-}
+/* ------------------------------------------------ */
+/* ---------------- CSV HELPERS ------------------ */
+/* ------------------------------------------------ */
 
 const CSV_HEADER =
   "UCC,ISIN,Qty_FA,Qty_Cust,Diff,Matching,Mismatch_Reason,Security,ClientName,LTPDate,LTPPrice";
 
-async function getAllDiffRows(zcql) {
-  const allKeys = await getOrderedDiffKeys(zcql);
-  const rows = [];
-  for (const k of allKeys) {
-    const fa = await getFinalHoldingsForGroup(zcql, k.UCC, k.ISIN);
-    const cust = await getCustodianRow(zcql, k.UCC, k.ISIN);
-    const qtyFA = fa.Qty_FA;
-    const qtyCust = cust ? cust.NetBalance : 0;
-    const diff = qtyFA - qtyCust;
-    let Mismatch_Reason = "";
-    if (!cust) Mismatch_Reason = "Only in FA";
-    else if (cust && !fa.fromTemp) Mismatch_Reason = "Only in Custodian";
-    else if (diff !== 0) Mismatch_Reason = "Qty Mismatch";
-    rows.push({
-      UCC: k.UCC,
-      ISIN: k.ISIN,
-      Qty_FA: qtyFA,
-      Qty_Cust: qtyCust,
-      Diff: diff,
-      Matching: diff === 0 ? "Yes" : "No",
-      Mismatch_Reason,
-      Security: fa.Security || (cust && cust.SecurityName) || "",
-      ClientName: cust ? cust.ClientName : "",
-      LTPDate: cust ? cust.LTPDate : "",
-      LTPPrice: cust && cust.LTPPrice != null ? cust.LTPPrice : "",
-    });
-  }
-  return rows;
+function escapeCsv(val) {
+  const s = val == null ? "" : String(val);
+  return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 }
 
 function rowsToCsvLines(rows) {
-  const lines = [CSV_HEADER];
-  for (const r of rows) {
-    lines.push(
+  return [
+    CSV_HEADER,
+    ...rows.map((r) =>
       [
-        escapeCsv(r.UCC),
-        escapeCsv(r.ISIN),
-        escapeCsv(r.Qty_FA),
-        escapeCsv(r.Qty_Cust),
-        escapeCsv(r.Diff),
-        escapeCsv(r.Matching),
-        escapeCsv(r.Mismatch_Reason),
-        escapeCsv(r.Security),
-        escapeCsv(r.ClientName),
-        escapeCsv(r.LTPDate),
-        escapeCsv(r.LTPPrice),
-      ].join(",")
-    );
-  }
-  return lines.join("\n");
+        r.UCC,
+        r.ISIN,
+        r.Qty_FA,
+        r.Qty_Cust,
+        r.Diff,
+        r.Matching,
+        r.Mismatch_Reason,
+        r.Security,
+        r.ClientName,
+        r.LTPDate,
+        r.LTPPrice,
+      ]
+        .map(escapeCsv)
+        .join(",")
+    ),
+  ].join("\n");
 }
 
-module.exports = {
-  getAllDiffRows,
-  rowsToCsvLines,
-  CSV_HEADER,
-};
+module.exports = { getAllDiffRows, rowsToCsvLines, CSV_HEADER };

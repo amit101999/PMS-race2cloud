@@ -1,26 +1,12 @@
-import express from "express";
+// import express from "express";
+// import fileUpload from "express-fileupload";
 
-import fileUpload from "express-fileupload";
-import {
-  getFifoPageHandler,
-  getDiffPageHandler,
-  uploadTempTransactionFile,
-  uploadTempCustodianFile,
-  startDifferentialExportJob,
-  getDifferentialExportStatus,
-  listDifferentialExportJobs,
-} from "../../controller/uploader/TransactionUploader.js";
+// import { uploadTempTransactionFile } from "../../controller/uploader/TransactionUploader.js";
 
-const router = express.Router();
-router.use(fileUpload());
+// const router = express.Router();
 
-router.post("/upload-temp-transaction", uploadTempTransactionFile);
-router.post("/upload-temp-custodian", uploadTempCustodianFile);
-router.get("/fifo-page", getFifoPageHandler);
-router.get("/diff-page", getDiffPageHandler);
+// router.use(fileUpload());
 
-router.post("/export-differential-report", startDifferentialExportJob);
-router.get("/export-differential-report/status", getDifferentialExportStatus);
-router.get("/export-differential-report/list", listDifferentialExportJobs);
+// router.post("/upload-transaction", uploadTempTransactionFile);
 
-export default router;
+// export default router;
