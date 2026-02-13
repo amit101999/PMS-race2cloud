@@ -1,12 +1,12 @@
-// import express from "express";
-// import fileUpload from "express-fileupload";
+import express from "express";
+import fileUpload from "express-fileupload";
 
-// import { uploadTempTransactionFile } from "../../controller/uploader/TransactionUploader.js";
+import { uploadTempTransactionFile } from "../../controller/uploader/TransactionUploader.js";
 
-// const router = express.Router();
+const router = express.Router();
 
-// router.use(fileUpload());
+router.use(fileUpload());
 
-// router.post("/upload-transaction", uploadTempTransactionFile);
+router.post("/upload-transaction", uploadTempTransactionFile);
 
-// export default router;
+export default router;
