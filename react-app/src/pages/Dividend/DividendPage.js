@@ -9,12 +9,9 @@ function DividendPage() {
   const [searchQuery, setSearchQuery] = useState("");
   const [companyName, setCompanyName] = useState("");
   const [isin, setIsin] = useState("");
-  const [series, setSeries] = useState("EQ");
-  const [purposeText, setPurposeText] = useState("");
   const [dividendType, setDividendType] = useState("Interim");
   const [rate, setRate] = useState("");
   const [unit, setUnit] = useState("Per Share");
-  const [faceValue, setFaceValue] = useState("");
   const [exDate, setExDate] = useState("");
   const [recordDate, setRecordDate] = useState("");
   const [paymentDate, setPaymentDate] = useState("");
@@ -172,7 +169,6 @@ function DividendPage() {
       setError("Dividend Rate is required and must be greater than 0.");
       return;
     }
-    const purpose = purposeText.trim();
     const payload = {
       isin,
       securityCode: symbol,
@@ -199,12 +195,9 @@ function DividendPage() {
         securityCode: symbol,
         securityName: companyName,
         isin,
-        series,
-        purpose: purpose || "-",
         dividendType,
         rate: rate || "-",
         unit,
-        faceValue: faceValue || "-",
         exDate,
         recordDate: recordDate || "-",
         paymentDate: paymentDate || "-",
@@ -221,7 +214,6 @@ function DividendPage() {
         setSearchQuery("");
         setCompanyName("");
         setIsin("");
-        setPurposeText("");
         setRate("");
         setExDate("");
         setRecordDate("");
@@ -321,28 +313,6 @@ function DividendPage() {
           </div>
 
           <div className="dividend-field">
-            <label>Series</label>
-            <select
-              value={series}
-              onChange={(e) => setSeries(e.target.value)}
-              className="dividend-select"
-            >
-              <option value="EQ">EQ</option>
-              <option value="IV">IV</option>
-            </select>
-          </div>
-
-          <div className="dividend-field dividend-field-full">
-            <label>Purpose</label>
-            <input
-              type="text"
-              placeholder="e.g. Interim Dividend - Rs 15 Per Share"
-              value={purposeText}
-              onChange={(e) => setPurposeText(e.target.value)}
-            />
-          </div>
-
-          <div className="dividend-field">
             <label>Dividend Type</label>
             <select
               value={dividendType}
@@ -378,18 +348,6 @@ function DividendPage() {
               <option value="Per Unit">Per Unit</option>
               <option value="Per Unit/Interest">Per Unit/Interest</option>
             </select>
-          </div>
-
-          <div className="dividend-field">
-            <label>Face Value</label>
-            <input
-              type="number"
-              min="0"
-              step="any"
-              placeholder="e.g. 1, 2, 10"
-              value={faceValue}
-              onChange={(e) => setFaceValue(e.target.value)}
-            />
           </div>
 
           <div className="dividend-field">
@@ -531,12 +489,9 @@ function DividendPage() {
                 <tr>
                   <th>Security Code</th>
                   <th>Security Name</th>
-                  <th>Series</th>
-                  <th>Purpose</th>
                   <th>Type</th>
                   <th>Dividend Rate</th>
                   <th>Unit</th>
-                  <th>Face Val</th>
                   <th>Ex-Date</th>
                   <th>Record Date</th>
                   <th>Payment Date</th>
@@ -547,12 +502,9 @@ function DividendPage() {
                   <tr key={idx}>
                     <td>{row.securityCode}</td>
                     <td>{row.securityName}</td>
-                    <td>{row.series}</td>
-                    <td>{row.purpose}</td>
                     <td>{row.dividendType}</td>
                     <td>{row.rate}</td>
                     <td>{row.unit}</td>
-                    <td>{row.faceValue}</td>
                     <td>{row.exDate}</td>
                     <td>{row.recordDate}</td>
                     <td>{row.paymentDate ?? "—"}</td>
