@@ -27,6 +27,10 @@
   margin-bottom: 6px;
 }
 
+.dividend-field .required-asterisk {
+  color: #c2185b;
+}
+
 .dividend-field input,
 .dividend-select {
   height: 44px;
@@ -212,7 +216,10 @@
   grid-column: 1 / -1;
   display: flex;
   justify-content: flex-end;
+  align-items: center;
+  gap: 12px;
   margin-top: 8px;
+  flex-wrap: wrap;
 }
 
 .dividend-submit {
@@ -300,4 +307,124 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* ===========================
+   DIVIDEND ACTIONS (Preview + Add)
+   =========================== */
+
+.dividend-preview-btn {
+  background: linear-gradient(135deg, #6b7280, #4b5563);
+  color: white;
+  padding: 12px 20px;
+  border-radius: 10px;
+  border: none;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: transform 0.1s ease, box-shadow 0.1s ease;
+}
+
+.dividend-preview-btn:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(75, 85, 99, 0.35);
+}
+
+.dividend-preview-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* ===========================
+   DIVIDEND PREVIEW SECTION
+   =========================== */
+
+.dividend-preview-card {
+  margin-top: 24px;
+}
+
+.dividend-preview-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.dividend-back-btn {
+  background: #f3f4f6;
+  color: #374151;
+  padding: 10px 16px;
+  border-radius: 8px;
+  border: 1px solid #e5e7eb;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.2s, border-color 0.2s;
+}
+
+.dividend-back-btn:hover {
+  background: #e5e7eb;
+  border-color: #d1d5db;
+}
+
+.dividend-preview-table-wrapper {
+  overflow-x: auto;
+  margin-bottom: 16px;
+}
+
+.dividend-preview-table {
+  min-width: 640px;
+}
+
+.alert.info {
+  background-color: #eff6ff;
+  color: #1d4ed8;
+  border: 1px solid #93c5fd;
+}
+
+.dividend-pagination {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 12px;
+  flex-wrap: wrap;
+}
+
+.dividend-pagination button {
+  padding: 8px 14px;
+  border-radius: 8px;
+  border: 1px solid #e5e7eb;
+  background: #fff;
+  font-size: 14px;
+  cursor: pointer;
+  transition: background 0.2s, border-color 0.2s;
+}
+
+.dividend-pagination button:hover:not(:disabled) {
+  background: #f9fafb;
+  border-color: #c2185b;
+}
+
+.dividend-pagination button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.dividend-pagination span {
+  font-size: 14px;
+  color: #6b7280;
+}
+
+/* ===========================
+   DIVIDEND PREVIEW ACTIONS (Export / Download)
+   =========================== */
+
+.dividend-preview-actions {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  margin-top: 20px;
+  flex-wrap: wrap;
 }
