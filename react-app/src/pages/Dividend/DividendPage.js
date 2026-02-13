@@ -12,20 +12,38 @@ function DividendPage() {
   const [series, setSeries] = useState("EQ");
   const [purposeText, setPurposeText] = useState("");
   const [dividendType, setDividendType] = useState("Interim");
-  const [amount, setAmount] = useState("");
+  const [rate, setRate] = useState("");
   const [unit, setUnit] = useState("Per Share");
   const [faceValue, setFaceValue] = useState("");
   const [exDate, setExDate] = useState("");
   const [recordDate, setRecordDate] = useState("");
+  const [paymentDate, setPaymentDate] = useState("");
 
   const [securities, setSecurities] = useState([]);
   const [showDropdown, setShowDropdown] = useState(false);
+  const [previewLoading, setPreviewLoading] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [success, setSuccess] = useState(false);
   const [dividendList, setDividendList] = useState([]);
 
+  const [previewData, setPreviewData] = useState([]);
+  const [showPreview, setShowPreview] = useState(false);
+  const [previewEmptyMessage, setPreviewEmptyMessage] = useState("");
+  const PAGE_SIZE = 10;
+  const [page, setPage] = useState(1);
+
+  const [exportDownloadUrl, setExportDownloadUrl] = useState("");
+  const [exportLoading, setExportLoading] = useState(false);
+
   const dropdownRef = useRef(null);
+
+  useEffect(() => setPage(1), [previewData]);
+  const totalPages = Math.ceil(previewData.length / PAGE_SIZE);
+  const paginatedPreview = previewData.slice(
+    (page - 1) * PAGE_SIZE,
+    page * PAGE_SIZE,
+  );
 
   useEffect(() => {
     fetchAllSecurities();
@@ -66,36 +84,155 @@ function DividendPage() {
     setShowDropdown(false);
   };
 
-  const handleSubmit = (e) => {
-    e.preventDefault();
+  const fetchPreview = async () => {
     setError(null);
-    if (!symbol || !companyName || !exDate || !recordDate) {
-      setError("Symbol, Company Name, Ex-Date and Record Date are required.");
+    setShowPreview(false);
+    setPreviewEmptyMessage("");
+    if (!isin || !exDate || !rate || Number(rate) <= 0 || !paymentDate) {
+      setError("ISIN, Ex-Date, Dividend Rate and Payment Date are required for preview.");
       return;
     }
-    if (!purposeText.trim()) {
-      setError("Purpose is required.");
+    setPreviewLoading(true);
+    try {
+      const res = await fetch(`${BASE_URL}/dividend/preview`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          isin,
+          exDate,
+          rate: Number(rate),
+          paymentDate,
+        }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        const rows = data.data || [];
+        setPreviewData(rows);
+        if (rows.length > 0) {
+          setShowPreview(true);
+          setPreviewEmptyMessage("");
+        } else {
+          setShowPreview(false);
+          setPreviewEmptyMessage("No accounts with dividend entitlement.");
+        }
+      } else {
+        setError(data.message || "Preview failed");
+      }
+    } catch (err) {
+      console.error(err);
+      setError("Failed to load preview");
+    } finally {
+      setPreviewLoading(false);
+    }
+  };
+
+  /** Export preview CSV – calls GET /dividend/export-preview and sets signed download URL */
+  const handleExportPreview = async () => {
+    setExportLoading(true);
+    setExportDownloadUrl("");
+    setError(null);
+    try {
+      const params = new URLSearchParams({
+        isin,
+        exDate,
+        rate,
+        paymentDate: paymentDate || "",
+      });
+      const res = await fetch(`${BASE_URL}/dividend/export-preview?${params.toString()}`, {
+        credentials: "include",
+      });
+      if (!res.ok) throw new Error("Export request failed");
+      const data = await res.json();
+      if (!data.success) throw new Error(data.message || "Export failed");
+      const signedUrl =
+        data.downloadUrl?.signature?.signature ?? data.downloadUrl?.signature;
+      if (!signedUrl) throw new Error("Download URL missing");
+      setExportDownloadUrl(signedUrl);
+    } catch (err) {
+      console.error(err);
+      setError(err.message || "Failed to export dividend preview CSV");
+    } finally {
+      setExportLoading(false);
+    }
+  };
+
+  /** Download generated export file – opens exportDownloadUrl when set by handleExportPreview */
+  const handleDownload = () => {
+    if (exportDownloadUrl) window.open(exportDownloadUrl, "_blank");
+  };
+
+  /** Apply dividend (called from preview section after fetch) */
+  const handleApply = async () => {
+    setError(null);
+    if (!symbol || !companyName || !exDate || !paymentDate) {
+      setError("Security Code, Security Name, Ex-Date and Payment Date are required.");
+      return;
+    }
+    if (!rate || Number(rate) <= 0) {
+      setError("Dividend Rate is required and must be greater than 0.");
       return;
     }
     const purpose = purposeText.trim();
-    const entry = {
-      symbol,
-      companyName,
+    const payload = {
       isin,
-      series,
-      purpose,
-      dividendType,
-      amount: amount || "-",
-      unit,
-      faceValue: faceValue || "-",
+      securityCode: symbol,
+      securityName: companyName,
+      rate: Number(rate),
       exDate,
-      recordDate,
+      recordDate: recordDate || "",
+      paymentDate: paymentDate || "",
+      dividendType,
     };
-    setDividendList((prev) => [entry, ...prev]);
-    setSuccess(true);
-    setTimeout(() => setSuccess(false), 3000);
-    setPurposeText("");
-    setAmount("");
+    setLoading(true);
+    try {
+      const res = await fetch(`${BASE_URL}/dividend/apply`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json();
+      if (!data.success) {
+        setError(data.message || "Failed to apply dividend");
+        return;
+      }
+      const entry = {
+        securityCode: symbol,
+        securityName: companyName,
+        isin,
+        series,
+        purpose: purpose || "-",
+        dividendType,
+        rate: rate || "-",
+        unit,
+        faceValue: faceValue || "-",
+        exDate,
+        recordDate: recordDate || "-",
+        paymentDate: paymentDate || "-",
+      };
+      setDividendList((prev) => [entry, ...prev]);
+      setSuccess(true);
+      setTimeout(() => {
+        setSuccess(false);
+        setExportDownloadUrl("");
+        setPreviewData([]);
+        setShowPreview(false);
+        setPreviewEmptyMessage("");
+        setSymbol("");
+        setSearchQuery("");
+        setCompanyName("");
+        setIsin("");
+        setPurposeText("");
+        setRate("");
+        setExDate("");
+        setRecordDate("");
+        setPaymentDate("");
+      }, 3000);
+    } catch (err) {
+      console.error(err);
+      setError("Failed to apply dividend");
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -106,19 +243,22 @@ function DividendPage() {
         </h2>
 
         {success && (
-          <div className="alert success">Dividend entry added successfully.</div>
+          <div className="alert success">Dividend applied successfully.</div>
         )}
         {error && <div className="alert error">{error}</div>}
+        {previewEmptyMessage && (
+          <div className="alert info">{previewEmptyMessage}</div>
+        )}
 
-        <form className="dividend-card" onSubmit={handleSubmit}>
+        <form className="dividend-card" onSubmit={(e) => e.preventDefault()}>
           <div className="account-code-search" ref={dropdownRef}>
-            <label className="search-label">Symbol</label>
+            <label className="search-label">Security Code</label>
             <div className="search-input-wrapper">
               <span className="search-icon">🔍</span>
               <input
                 type="text"
                 className="search-input"
-                placeholder="Search symbol or company..."
+                placeholder="Search security code or company..."
                 value={searchQuery}
                 onChange={(e) => {
                   setSearchQuery(e.target.value);
@@ -148,7 +288,7 @@ function DividendPage() {
             </div>
             {showDropdown && filteredSecurities.length > 0 && (
               <div className="search-dropdown">
-                <div className="dropdown-header">Search Symbol</div>
+                <div className="dropdown-header">Search Security Code</div>
                 <div className="dropdown-options">
                   {filteredSecurities.map((sec) => (
                     <div
@@ -176,7 +316,7 @@ function DividendPage() {
           </div>
 
           <div className="dividend-field">
-            <label>Company Name</label>
+            <label>Security Name</label>
             <input value={companyName} disabled />
           </div>
 
@@ -217,13 +357,13 @@ function DividendPage() {
           </div>
 
           <div className="dividend-field">
-            <label>Amount</label>
+            <label>Dividend Rate</label>
             <input
               type="number"
               step="any"
               placeholder="0"
-              value={amount}
-              onChange={(e) => setAmount(e.target.value)}
+              value={rate}
+              onChange={(e) => setRate(e.target.value)}
             />
           </div>
 
@@ -270,48 +410,152 @@ function DividendPage() {
             />
           </div>
 
+          <div className="dividend-field">
+            <label>Payment Date <span className="required-asterisk">*</span></label>
+            <input
+              type="date"
+              value={paymentDate}
+              onChange={(e) => setPaymentDate(e.target.value)}
+              required
+            />
+          </div>
+
           <div className="dividend-actions">
-            <button type="submit" className="dividend-submit" disabled={loading}>
-              {loading ? "Saving..." : "Add Dividend"}
+            <button
+              type="button"
+              className="dividend-preview-btn"
+              disabled={!isin || !exDate || !rate || Number(rate) <= 0 || !paymentDate || previewLoading}
+              onClick={fetchPreview}
+            >
+              {previewLoading ? "Fetching…" : "Fetch Affected Accounts"}
             </button>
           </div>
         </form>
       </Card>
 
+      {showPreview && previewData.length > 0 && (
+        <Card style={{ marginTop: 24 }} className="dividend-preview-card">
+          <h3 style={{ fontSize: 16, fontWeight: 600, marginBottom: 16 }}>
+            Dividend Preview
+          </h3>
+
+          <div className="dividend-preview-table-wrapper">
+                <table className="dividend-table dividend-preview-table">
+                  <thead>
+                    <tr>
+                      <th>Account Code</th>
+                      <th>Holding (Ex-Date)</th>
+                      <th>Dividend Rate</th>
+                      <th>Payment Date</th>
+                      <th>Dividend Amount</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {paginatedPreview.map((row) => (
+                      <tr key={row.accountCode}>
+                        <td>{row.accountCode}</td>
+                        <td>{row.holdingAsOnExDate}</td>
+                        <td>{row.rate}</td>
+                        <td>{row.paymentDate ?? "—"}</td>
+                        <td style={{ fontWeight: 600 }}>{row.dividendAmount}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              {totalPages > 1 && (
+                <div className="dividend-pagination">
+                  <button
+                    type="button"
+                    disabled={page === 1}
+                    onClick={() => setPage(page - 1)}
+                  >
+                    Prev
+                  </button>
+                  <span>
+                    Page {page} of {totalPages}
+                  </span>
+                  <button
+                    type="button"
+                    disabled={page === totalPages}
+                    onClick={() => setPage(page + 1)}
+                  >
+                    Next
+                  </button>
+                </div>
+              )}
+
+              {success && (
+                <div className="alert success" style={{ marginBottom: 16 }}>
+                  Dividend applied successfully.
+                </div>
+              )}
+              <div className="dividend-preview-actions">
+                <button
+                  type="button"
+                  className="dividend-submit"
+                  disabled={exportLoading}
+                  onClick={handleExportPreview}
+                >
+                  {exportLoading ? "Generating..." : "Export"}
+                </button>
+                <button
+                  type="button"
+                  className="dividend-submit"
+                  disabled={!exportDownloadUrl}
+                  onClick={handleDownload}
+                >
+                  Download
+                </button>
+                <button
+                  type="button"
+                  className="dividend-submit"
+                  disabled={loading}
+                  onClick={handleApply}
+                >
+                  {loading ? "Applying…" : "Confirm & Apply Dividend"}
+                </button>
+              </div>
+        </Card>
+      )}
+
       {dividendList.length > 0 && (
         <Card style={{ marginTop: 24 }}>
           <h3 style={{ fontSize: 16, fontWeight: 600, marginBottom: 16 }}>
-            Dividend Entries
+            Previous Dividends
           </h3>
           <div className="dividend-table-wrapper">
             <table className="dividend-table">
               <thead>
                 <tr>
-                  <th>Symbol</th>
-                  <th>Company Name</th>
+                  <th>Security Code</th>
+                  <th>Security Name</th>
                   <th>Series</th>
                   <th>Purpose</th>
                   <th>Type</th>
-                  <th>Amount</th>
+                  <th>Dividend Rate</th>
                   <th>Unit</th>
                   <th>Face Val</th>
                   <th>Ex-Date</th>
                   <th>Record Date</th>
+                  <th>Payment Date</th>
                 </tr>
               </thead>
               <tbody>
                 {dividendList.map((row, idx) => (
                   <tr key={idx}>
-                    <td>{row.symbol}</td>
-                    <td>{row.companyName}</td>
+                    <td>{row.securityCode}</td>
+                    <td>{row.securityName}</td>
                     <td>{row.series}</td>
                     <td>{row.purpose}</td>
                     <td>{row.dividendType}</td>
-                    <td>{row.amount}</td>
+                    <td>{row.rate}</td>
                     <td>{row.unit}</td>
                     <td>{row.faceValue}</td>
                     <td>{row.exDate}</td>
                     <td>{row.recordDate}</td>
+                    <td>{row.paymentDate ?? "—"}</td>
                   </tr>
                 ))}
               </tbody>
