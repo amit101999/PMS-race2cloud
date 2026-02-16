@@ -1,8 +1,5 @@
-import React, { useEffect, useState, useRef, useMemo } from "react";
-import {
-  Card,
-  Pagination,
-} from "../../../../components/common/CommonComponents";
+import React, { useEffect, useState, useRef, useMemo, useCallback } from "react";
+import { Card } from "../../../../components/common/CommonComponents";
 import { BASE_URL } from "../../../../constant";
 import "./TransactionTab.css";
 
@@ -10,10 +7,13 @@ const PAGE_SIZE_DEFAULT = 20;
 
 const TransactionTab = ({ accountCode, asOnDate }) => {
   const [data, setData] = useState([]);
-  const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(PAGE_SIZE_DEFAULT);
-  const [totalRows, setTotalRows] = useState(0);
+  const [nextCursor, setNextCursor] = useState(null);
+  const [prevCursor, setPrevCursor] = useState(null);
+  const [hasNext, setHasNext] = useState(false);
+  const [hasPrev, setHasPrev] = useState(false);
+  const [limit] = useState(PAGE_SIZE_DEFAULT);
   const [loading, setLoading] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState("");
 
   const [secSearch, setSecSearch] = useState("");
@@ -21,6 +21,7 @@ const TransactionTab = ({ accountCode, asOnDate }) => {
   const [secOptions, setSecOptions] = useState([]);
   const [showSecDropdown, setShowSecDropdown] = useState(false);
   const secDropdownRef = useRef(null);
+  const initialLoadIdRef = useRef(0);
 
   // Close dropdown on outside click
   useEffect(() => {
@@ -36,34 +37,106 @@ const TransactionTab = ({ accountCode, asOnDate }) => {
     return () => document.removeEventListener("mousedown", handler);
   }, []);
 
-  // Fetch transactions (filters: account, date, selected security)
+  const buildBaseParams = useCallback(() => {
+    const params = {
+      limit,
+      direction: "next",
+      accountCode,
+      ...(asOnDate ? { asOnDate } : {}),
+      ...(selectedSecurity ? { securityName: selectedSecurity } : {}),
+    };
+    return params;
+  }, [limit, accountCode, asOnDate, selectedSecurity]);
+
+  const fetchPage = useCallback(
+    async (cursor, direction = "next") => {
+      const params = new URLSearchParams({
+        ...buildBaseParams(),
+        direction,
+      });
+      if (cursor?.lastDate != null && cursor?.lastRowId != null) {
+        params.set("lastDate", cursor.lastDate);
+        params.set("lastRowId", String(cursor.lastRowId));
+        params.set("lastPriority", String(cursor.lastPriority ?? 0));
+      }
+      const res = await fetch(
+        `${BASE_URL}/analytics/getPaginatedTransactions?${params.toString()}`
+      );
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.json();
+    },
+    [buildBaseParams]
+  );
+
+  // Initial load and refetch when filters change (only when account code is selected)
   useEffect(() => {
-    const fetchPage = async () => {
-      setLoading(true);
+    if (!accountCode || !accountCode.trim()) {
+      setData([]);
+      setNextCursor(null);
+      setPrevCursor(null);
+      setHasNext(false);
+      setHasPrev(false);
+      setLoading(false);
       setError("");
+      return;
+    }
+    const loadId = ++initialLoadIdRef.current;
+    setLoading(true);
+    setError("");
+    const loadFirstPage = async () => {
       try {
-        const params = new URLSearchParams({
-          page,
-          limit: pageSize,
-          ...(accountCode ? { accountCode } : {}),
-          ...(asOnDate ? { asOnDate } : {}),
-          ...(selectedSecurity ? { securityName: selectedSecurity } : {}),
-        });
-        const res = await fetch(
-          `${BASE_URL}/analytics/getPaginatedTransactions?${params.toString()}`
-        );
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const json = await res.json();
+        const json = await fetchPage(null, "next");
+        if (loadId !== initialLoadIdRef.current) return;
         setData(json.data || []);
-        setTotalRows(json.pagination?.total || 0);
+        setNextCursor(json.nextCursor ?? null);
+        setPrevCursor(json.prevCursor ?? null);
+        setHasNext(Boolean(json.hasNext));
+        setHasPrev(Boolean(json.hasPrev));
       } catch (err) {
+        if (loadId !== initialLoadIdRef.current) return;
         setError(err.message || "Failed to load transactions");
       } finally {
-        setLoading(false);
+        if (loadId === initialLoadIdRef.current) setLoading(false);
       }
     };
-    fetchPage();
-  }, [page, pageSize, accountCode, asOnDate, selectedSecurity]);
+    loadFirstPage();
+  }, [accountCode, asOnDate, selectedSecurity, fetchPage]);
+
+  const goNext = async () => {
+    if (!nextCursor || !hasNext || loading || loadingMore) return;
+    setLoadingMore(true);
+    setError("");
+    try {
+      const json = await fetchPage(nextCursor, "next");
+      setData(json.data || []);
+      setNextCursor(json.nextCursor ?? null);
+      setPrevCursor(json.prevCursor ?? null);
+      setHasNext(Boolean(json.hasNext));
+      setHasPrev(Boolean(json.hasPrev));
+    } catch (err) {
+      setError(err.message || "Failed to load next page");
+    } finally {
+      setLoadingMore(false);
+    }
+  };
+
+  const goPrev = async () => {
+    if (!prevCursor || !hasPrev || loading || loadingMore) return;
+    setLoadingMore(true);
+    setError("");
+    try {
+      const json = await fetchPage(prevCursor, "prev");
+      setData(json.data || []);
+      setNextCursor(json.nextCursor ?? null);
+      setPrevCursor(json.prevCursor ?? null);
+      setHasNext(Boolean(json.hasNext));
+      setHasPrev(Boolean(json.hasPrev));
+    } catch (err) {
+      setError(err.message || "Failed to load previous page");
+    } finally {
+      setLoadingMore(false);
+    }
+  };
 
   // Fetch security options (on open/typing, debounce 400ms)
   useEffect(() => {
@@ -127,7 +200,6 @@ const TransactionTab = ({ accountCode, asOnDate }) => {
                   setSelectedSecurity("");
                   setSecOptions([]);
                   setShowSecDropdown(false);
-                  setPage(1);
                 }}
               >
                 ✕
@@ -150,7 +222,6 @@ const TransactionTab = ({ accountCode, asOnDate }) => {
                       setSelectedSecurity(name);
                       setSecSearch(name);
                       setShowSecDropdown(false);
-                      setPage(1);
                     }}
                   >
                     {name}
@@ -167,6 +238,12 @@ const TransactionTab = ({ accountCode, asOnDate }) => {
         </div>
       </div>
 
+      {!accountCode || !accountCode.trim() ? (
+        <div className="empty-cell" style={{ padding: 24, textAlign: "center", color: "#6b7280" }}>
+          Please select an account code to view transactions.
+        </div>
+      ) : (
+        <>
       {loading && <div>Loading...</div>}
       {error && <div className="error-text">{error}</div>}
 
@@ -182,13 +259,14 @@ const TransactionTab = ({ accountCode, asOnDate }) => {
                 <th className="num">Quantity</th>
                 <th className="num">Price</th>
                 <th className="num">Total Amount</th>
+                <th className="num">STT</th>
                 <th>Cash Balance</th>
               </tr>
             </thead>
             <tbody>
               {data.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="empty-cell">
+                  <td colSpan={9} className="empty-cell">
                     No transactions found
                   </td>
                 </tr>
@@ -202,6 +280,7 @@ const TransactionTab = ({ accountCode, asOnDate }) => {
                     <td className="num">{formatNumber(t.quantity)}</td>
                     <td className="num">{formatNumber(t.price)}</td>
                     <td className="num">{formatNumber(t.totalAmount)}</td>
+                    <td className="num">{formatNumber(t.stt)}</td>
                     <td className="num">{formatNumber(t.cashBalance)}</td>
                   </tr>
                 ))
@@ -211,16 +290,31 @@ const TransactionTab = ({ accountCode, asOnDate }) => {
         </div>
       )}
 
-      <Pagination
-        currentPage={page}
-        pageSize={pageSize}
-        totalRows={totalRows}
-        onPageChange={setPage}
-        onPageSizeChange={(size) => {
-          setPageSize(size);
-          setPage(1);
-        }}
-      />
+      {!loading && !error && data.length > 0 && (
+        <div className="transaction-pagination">
+          <button
+            type="button"
+            className="pagination-btn pagination-prev"
+            onClick={goPrev}
+            disabled={!hasPrev || loadingMore}
+          >
+            ← Previous
+          </button>
+          <span className="pagination-info">
+            {loadingMore ? "Loading…" : `Showing ${data.length} transaction${data.length === 1 ? "" : "s"}`}
+          </span>
+          <button
+            type="button"
+            className="pagination-btn pagination-next"
+            onClick={goNext}
+            disabled={!hasNext || loadingMore}
+          >
+            Next →
+          </button>
+        </div>
+      )}
+        </>
+      )}
     </Card>
   );
 };

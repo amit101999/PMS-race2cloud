@@ -3,16 +3,12 @@ import { useAccountCodes } from "../../../hooks/GetAllCodes.js";
 import { BASE_URL } from "../../../constant.js";
 
 function ReportsTab() {
-  const [exportType, setExportType] = useState("all");
   const [asOnDate, setAsOnDate] = useState("");
   const [accountCode, setAccountCode] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
   const [showDropdown, setShowDropdown] = useState(false);
   const [loading, setLoading] = useState(false);
   const [downloadUrl, setDownloadUrl] = useState("");
-
-  // ✅ Report export jobs
-  const [exportJobs, setExportJobs] = useState([]);
 
   const dropdownRef = useRef(null);
   const { clientOptions } = useAccountCodes();
@@ -51,131 +47,32 @@ function ReportsTab() {
   /* ===================== EXPORT HANDLER ===================== */
   const handleExport = async () => {
     try {
-      /* ---------- SINGLE CLIENT REPORT ---------- */
-      if (exportType === "single") {
-        if (!accountCode) {
-          alert("Please select an account code");
-          return;
-        }
-
-        setLoading(true);
-        setDownloadUrl("");
-
-        const params = new URLSearchParams();
-        params.append("accountCode", accountCode);
-        if (asOnDate) params.append("asOnDate", asOnDate);
-
-        const response = await fetch(
-          `${BASE_URL}/export/transaction/export-single?${params.toString()}`,
-          { method: "GET", credentials: "include" },
-        );
-
-        const data = await response.json();
-        if (!response.ok) throw new Error(data.message);
-
-        setDownloadUrl(data.downloadUrl.signature);
-        setLoading(false);
-        return;
-      }
-
-      /* ---------- EXPORT ALL CLIENTS (JOB BASED) ---------- */
-      if (!asOnDate) {
-        alert("Please select As On Date");
+      if (!accountCode) {
+        alert("Please select an account code");
         return;
       }
 
       setLoading(true);
+      setDownloadUrl("");
+
+      const params = new URLSearchParams();
+      params.append("accountCode", accountCode);
+      if (asOnDate) params.append("asOnDate", asOnDate);
 
       const response = await fetch(
-        `${BASE_URL}/reports/export-all?asOnDate=${asOnDate}`,
+        `${BASE_URL}/export/transaction/export-single?${params.toString()}`,
         { method: "GET", credentials: "include" },
       );
 
       const data = await response.json();
+      if (!response.ok) throw new Error(data.message);
 
-      setExportJobs((prev) => {
-        const exists = prev.find((j) => j.jobName === data.jobName);
-        if (exists) {
-          return prev.map((j) =>
-            j.jobName === data.jobName ? { ...j, status: data.status } : j,
-          );
-        }
-
-        return [
-          {
-            jobName: data.jobName,
-            asOnDate,
-            status: data.status,
-          },
-          ...prev,
-        ];
-      });
-
-      setLoading(false);
+      setDownloadUrl(data.downloadUrl.signature);
     } catch (error) {
       alert(error.message);
+    } finally {
       setLoading(false);
     }
-  };
-
-  /* ===================== LOAD REPORT HISTORY ===================== */
-  useEffect(() => {
-    if (exportType !== "all") return;
-
-    const fetchHistory = async () => {
-      try {
-        const res = await fetch(
-          `${BASE_URL}/reports/export-all/history?limit=10`,
-          { credentials: "include" },
-        );
-        const data = await res.json();
-        if (Array.isArray(data)) setExportJobs(data);
-      } catch (err) {
-        console.error("Failed to load report history", err);
-      }
-    };
-
-    fetchHistory();
-  }, [exportType]);
-
-  /* ===================== POLLING ===================== */
-  useEffect(() => {
-    if (!exportJobs.length) return;
-
-    const interval = setInterval(async () => {
-      const updated = await Promise.all(
-        exportJobs.map(async (job) => {
-          if (job.status === "COMPLETED" || job.status === "FAILED") {
-            return job;
-          }
-
-          const res = await fetch(
-            `${BASE_URL}/reports/check-status?asOnDate=${job.asOnDate}`,
-            { credentials: "include" },
-          );
-          const data = await res.json();
-
-          if (!data.status || data.status === "NOT_STARTED") {
-            return job;
-          }
-
-          return { ...job, status: data.status };
-        }),
-      );
-
-      setExportJobs(updated);
-    }, 15000);
-
-    return () => clearInterval(interval);
-  }, [exportJobs]);
-
-  /* ===================== DOWNLOAD ===================== */
-  const handleDownload = async (date) => {
-    const res = await fetch(`${BASE_URL}/reports/download?asOnDate=${date}`, {
-      credentials: "include",
-    });
-    const data = await res.json();
-    window.open(data.downloadUrl.signature, "_blank");
   };
 
   /* ===================== UI ===================== */
@@ -183,29 +80,8 @@ function ReportsTab() {
     <>
       <h3 className="section-heading">Reports Export</h3>
 
-      <div className="export-type">
-        <label>
-          <input
-            type="radio"
-            checked={exportType === "all"}
-            onChange={() => setExportType("all")}
-          />
-          Export All Clients
-        </label>
-
-        <label>
-          <input
-            type="radio"
-            checked={exportType === "single"}
-            onChange={() => setExportType("single")}
-          />
-          Export Single Client
-        </label>
-      </div>
-
       <div className="form-grid">
-        {exportType === "single" && (
-          <div className="account-code-search" ref={dropdownRef}>
+        <div className="account-code-search" ref={dropdownRef}>
             <label className="search-label">Account Code</label>
 
             <div className="search-input-wrapper">
@@ -254,7 +130,6 @@ function ReportsTab() {
               </div>
             )}
           </div>
-        )}
 
         <div className="form-field">
           <label>As On Date</label>
@@ -287,56 +162,6 @@ function ReportsTab() {
           </a>
         )}
       </div>
-
-      {exportType === "all" && exportJobs.length > 0 && (
-        <div className="export-jobs-container">
-          <h4>Previous Report History</h4>
-
-          <table className="export-table">
-            <thead>
-              <tr>
-                <th>Job Name</th>
-                <th>As On Date</th>
-                <th>Status</th>
-                <th>Action</th>
-              </tr>
-            </thead>
-            <tbody>
-              {exportJobs.map((job) => (
-                <tr key={job.jobName}>
-                  <td>{job.jobName}</td>
-                  <td>{job.asOnDate}</td>
-                  <td>
-                    <span
-                      className={`export-status ${
-                        job.status === "COMPLETED"
-                          ? "completed"
-                          : job.status === "FAILED"
-                            ? "failed"
-                            : "pending"
-                      }`}
-                    >
-                      {job.status}
-                    </span>
-                  </td>
-                  <td>
-                    {job.status === "COMPLETED" ? (
-                      <button
-                        className="export-btn"
-                        onClick={() => handleDownload(job.asOnDate)}
-                      >
-                        Download
-                      </button>
-                    ) : (
-                      <span style={{ color: "#9ca3af" }}>-</span>
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
     </>
   );
 }

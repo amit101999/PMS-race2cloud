@@ -30,7 +30,7 @@ export const exportTransactionPerAccount = async (req, res) => {
 
     /* ================= CSV HEADER ================= */
     csvStream.write(
-      "DATE,TYPE,SECURITY_NAME,SECURITY_CODE,ISIN,QUANTITY,PRICE,TOTAL_AMOUNT,CASH_BALANCE\n",
+      "DATE,TYPE,SECURITY_NAME,SECURITY_CODE,ISIN,QUANTITY,PRICE,TOTAL_AMOUNT,STT,CASH_BALANCE\n",
     );
 
     /* ================= WHERE CLAUSE ================= */
@@ -56,10 +56,10 @@ export const exportTransactionPerAccount = async (req, res) => {
 
     while (true) {
       const rows = await zcql.executeZCQLQuery(`
-        SELECT Tran_Type, Net_Amount
+        SELECT Tran_Type, Net_Amount, STT
         FROM Transaction
         ${whereSql}
-        ORDER BY TRANDATE ASC, ROWID ASC
+        ORDER BY TRANDATE ASC, executionPriority ASC, ROWID ASC
         LIMIT ${BATCH_SIZE} OFFSET ${offset}
       `);
 
@@ -67,11 +67,13 @@ export const exportTransactionPerAccount = async (req, res) => {
 
       for (const r of rows) {
         const t = r.Transaction || r;
+        const stt = Number(t.STT ?? t.Stt ?? 0) || 0;
         openingBalance = applyCashEffect(
           openingBalance,
           t.Tran_Type,
           Number(t.Net_Amount) || 0,
         );
+        openingBalance -= stt;
       }
 
       if (rows.length < BATCH_SIZE) break;
@@ -93,10 +95,11 @@ export const exportTransactionPerAccount = async (req, res) => {
           ISIN,
           QTY,
           NETRATE,
-          Net_Amount
+          Net_Amount,
+          STT
         FROM Transaction
         ${whereSql}
-        ORDER BY TRANDATE ASC, ROWID ASC
+        ORDER BY TRANDATE ASC, executionPriority ASC, ROWID ASC
         LIMIT ${EXPORT_BATCH_SIZE} OFFSET ${exportOffset}
       `);
 
@@ -104,11 +107,13 @@ export const exportTransactionPerAccount = async (req, res) => {
 
       for (const r of rows) {
         const t = r.Transaction || r;
+        const stt = Number(t.STT ?? t.Stt ?? 0) || 0;
         runningBalance = applyCashEffect(
           runningBalance,
           t.Tran_Type,
           Number(t.Net_Amount) || 0,
         );
+        runningBalance -= stt;
         const line = [
           t.TRANDATE,
           t.Tran_Type,
@@ -118,6 +123,7 @@ export const exportTransactionPerAccount = async (req, res) => {
           Number(t.QTY) || 0,
           Number(t.NETRATE) || 0,
           Number(t.Net_Amount) || 0,
+          stt,
           runningBalance,
         ]
           .map((v) => `"${String(v ?? "").replace(/"/g, '""')}"`)
