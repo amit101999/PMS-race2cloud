@@ -10,18 +10,22 @@ export const exportDividendPreviewFile = async (req, res) => {
         .json({ success: false, message: "Catalyst not initialized" });
     }
 
-    const { isin, exDate, rate, paymentDate } = req.query;
+    const { isin, exDate, recordDate, rate, paymentDate } = req.query;
     const rateNum = Number(rate);
 
-    if (!isin || !exDate || !paymentDate || !Number.isFinite(rateNum) || rateNum <= 0) {
+    /* recordDate is used for calculation (holdings as on record date); exDate kept for CSV display */
+    if (!isin || !recordDate || !paymentDate || !Number.isFinite(rateNum) || rateNum <= 0) {
       return res
         .status(400)
-        .json({ success: false, message: "Invalid input: isin, exDate, rate, paymentDate required" });
+        .json({ success: false, message: "Invalid input: isin, recordDate, rate, paymentDate required" });
     }
 
-    const exDateObj = new Date(exDate);
-    exDateObj.setHours(0, 0, 0, 0);
-    const exDateISO = exDateObj.toISOString().split("T")[0];
+    const recordDateObj = new Date(recordDate);
+    recordDateObj.setHours(0, 0, 0, 0);
+    const recordDateISO = recordDateObj.toISOString().split("T")[0];
+    const exDateForDisplay = (exDate && String(exDate).trim())
+      ? (() => { const d = new Date(exDate); d.setHours(0, 0, 0, 0); return d.toISOString().split("T")[0]; })()
+      : recordDateISO;
     const paymentDateObj = new Date(paymentDate);
     paymentDateObj.setHours(0, 0, 0, 0);
     const paymentDateISO = paymentDateObj.toISOString().split("T")[0];
@@ -31,7 +35,7 @@ export const exportDividendPreviewFile = async (req, res) => {
     const bucket = catalystApp.stratus().bucket("export-app-data");
 
     const UTF8_BOM = "\uFEFF";
-    let csv = UTF8_BOM + "ISIN,ACCOUNT_CODE,HOLDING_EX_DATE,RATE,EX_DATE,PAYMENT_DATE,DIVIDEND_AMOUNT\n";
+    let csv = UTF8_BOM + "ISIN,ACCOUNT_CODE,HOLDING_AS_ON_RECORD_DATE,RATE,EX_DATE,PAYMENT_DATE,DIVIDEND_AMOUNT\n";
 
     /* Fetch holdings */
     const holdingRows = [];
@@ -54,7 +58,7 @@ export const exportDividendPreviewFile = async (req, res) => {
       return res.json({ success: false, message: "No eligible accounts" });
     }
 
-    /* Fetch transactions (<= exDate), dedupe by ROWID */
+    /* Fetch transactions (<= recordDate – calculation uses record date) */
     const txRows = [];
     const seenTxnRowIds = new Set();
     let txOffset = 0;
@@ -62,7 +66,7 @@ export const exportDividendPreviewFile = async (req, res) => {
       const batch = await zcql.executeZCQLQuery(`
         SELECT *
         FROM Transaction
-        WHERE ISIN='${isin}' AND TRANDATE <= '${exDateISO}'
+        WHERE ISIN='${isin}' AND TRANDATE <= '${recordDateISO}'
         ORDER BY TRANDATE ASC, ROWID ASC
         LIMIT ${BATCH_SIZE} OFFSET ${txOffset}
       `);
@@ -78,13 +82,13 @@ export const exportDividendPreviewFile = async (req, res) => {
       txOffset += BATCH_SIZE;
     }
 
-    /* Fetch bonuses (< exDate) */
+    /* Fetch bonuses (< recordDate) */
     const bonusRows = [];
     let bonusOffset = 0;
     while (true) {
       const batch = await zcql.executeZCQLQuery(`
         SELECT * FROM Bonus
-        WHERE ISIN='${isin}' AND ExDate < '${exDateISO}'
+        WHERE ISIN='${isin}' AND ExDate < '${recordDateISO}'
         ORDER BY ExDate ASC, ROWID ASC
         LIMIT ${BATCH_SIZE} OFFSET ${bonusOffset}
       `);
@@ -94,13 +98,13 @@ export const exportDividendPreviewFile = async (req, res) => {
       bonusOffset += BATCH_SIZE;
     }
 
-    /* Fetch splits (< exDate) */
+    /* Fetch splits (< recordDate) */
     const splitRows = [];
     let splitOffset = 0;
     while (true) {
       const batch = await zcql.executeZCQLQuery(`
         SELECT * FROM Split
-        WHERE ISIN='${isin}' AND Issue_Date < '${exDateISO}'
+        WHERE ISIN='${isin}' AND Issue_Date < '${recordDateISO}'
         ORDER BY Issue_Date ASC, ROWID ASC
         LIMIT ${BATCH_SIZE} OFFSET ${splitOffset}
       `);
@@ -137,10 +141,10 @@ export const exportDividendPreviewFile = async (req, res) => {
       const fifoResult = runFifoEngine(transactions, bonuses, splits, true);
       if (!fifoResult || fifoResult.holdings <= 0) continue;
 
-      const holdingAsOnExDate = fifoResult.holdings;
-      const dividendAmount = holdingAsOnExDate * rateNum;
-      const exDateValue = exDateISO || "";
-      csv += `"${isin}","${accountCode}","${holdingAsOnExDate}","${rateNum}","${exDateValue}","${paymentDateISO}","${dividendAmount}"\n`;
+      const holdingAsOnRecordDate = fifoResult.holdings;
+      const dividendAmount = holdingAsOnRecordDate * rateNum;
+      const exDateValue = exDateForDisplay || "";
+      csv += `"${isin}","${accountCode}","${holdingAsOnRecordDate}","${rateNum}","${exDateValue}","${paymentDateISO}","${dividendAmount}"\n`;
     }
 
     const fileName = `DividendExport_${isin}_${Date.now()}.csv`;

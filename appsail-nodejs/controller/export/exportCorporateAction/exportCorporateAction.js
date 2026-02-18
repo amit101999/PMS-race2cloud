@@ -81,6 +81,24 @@ export const exportCorporateAction = async (req, res) => {
       if (rows.length < BATCH_SIZE) break;
       offset += BATCH_SIZE;
     }
+     /* ---------- DIVIDEND ROWS (ExDate between fromDate and toDate) ---------- */
+     const dividendRows = [];
+     offset = 0;
+ 
+     while (true) {
+       const rows = await zcql.executeZCQLQuery(`
+         SELECT SecurityCode, Security_Name, ISIN, Rate, ExDate, RecordDate, PaymentDate, Dividend_Type
+         FROM Dividend
+         WHERE RecordDate>= '${fromISO}' AND RecordDate <= '${toISO}'
+         ORDER BY RecordDate ASC, ROWID ASC
+         LIMIT ${BATCH_SIZE} OFFSET ${offset}
+       `);
+ 
+       if (!rows.length) break;
+       dividendRows.push(...rows);
+       if (rows.length < BATCH_SIZE) break;
+       offset += BATCH_SIZE;
+     }
 
     /* ---------- DEDUPE BONUS BY (ExDate, SecurityCode, SecurityName, ISIN) ---------- */
     const bonusByEvent = {};
@@ -121,24 +139,44 @@ export const exportCorporateAction = async (req, res) => {
         securityName: securityName || "-",
       });
     }
+    /* ---------- NORMALIZE DIVIDEND ROWS ---------- */    /* ---------- NORMALIZE DIVIDEND ROWS ---------- */
+    const dividendEvents = [];
+    for (const r of dividendRows) {
+      const d = r.Dividend || r;
+      dividendEvents.push({
+        date: d.RecordDate ?? "",
+        isin: d.ISIN ?? "-",
+        ratio1: "",
+        ratio2: "",
+        type: "dividend",
+        securityCode: d.SecurityCode ?? "-",
+        securityName: d.Security_Name ?? "-",
+        rate: d.Rate ?? "",
+        paymentDate: d.PaymentDate ?? "",
+        dividendType: d.Dividend_Type ?? "",
+      });
+    }
 
     /* ---------- SINGLE TABLE: MERGE AND SORT BY DATE ---------- */
-    const allRows = [...bonusEvents, ...splitEvents].sort(
+    const allRows = [...bonusEvents, ...splitEvents, ...dividendEvents].sort(
       (a, b) => (a.date || "").localeCompare(b.date || "")
     );
 
     /* ---------- BUILD CSV (single table, headers: Date, ISIN, RATIO1, RATIO2, TYPE, Security_Code, Security_Name) ---------- */
-    const csvHeader = "DATE,ISIN,RATIO1,RATIO2,TYPE,SECURITY_CODE,SECURITY_NAME\n";
+    const csvHeader = "DATE,ISIN,RATIO1,RATIO2,TYPE,SECURITY_CODE,SECURITY_NAME,Rate,PaymentDate,DividendType\n";
     let csv = csvHeader;
     for (const row of allRows) {
       csv += [
-        row.date,
-        row.isin,
-        row.ratio1,
-        row.ratio2,
-        row.type,
-        row.securityCode,
-        row.securityName,
+        row.date ? row.date : "",
+        row.isin ? row.isin : "",
+        row.ratio1 ? row.ratio1 : "",
+        row.ratio2 ? row.ratio2 : "",
+        row.type ? row.type : "",
+        row.securityCode ? row.securityCode : "",
+        row.securityName ? row.securityName : "",
+        row.rate ? row.rate : "",
+        row.paymentDate ? row.paymentDate : "",
+        row.dividendType ? row.dividendType : "",
       ]
         .map((v) => `"${String(v).replace(/"/g, '""')}"`)
         .join(",") + "\n";
