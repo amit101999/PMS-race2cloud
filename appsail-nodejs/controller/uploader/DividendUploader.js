@@ -57,7 +57,7 @@ export const getAllSecuritiesISINs = async (req, res) => {
         });
       }
 
-      const { isin, exDate, rate, paymentDate } = req.body;
+      const { isin, recordDate, rate, paymentDate } = req.body;
       const rateNum = Number(rate);
 
       if (!Number.isFinite(rateNum) || rateNum <= 0) {
@@ -66,16 +66,16 @@ export const getAllSecuritiesISINs = async (req, res) => {
           message: "Invalid dividend rate value",
         });
       }
-      if(!isin || !exDate || !paymentDate){
+      if(!isin || !recordDate || !paymentDate){
         return res.status(400).json({
           success: false,
-          message: "Invalid ISIN, ex date or payment date",
+          message: "Invalid ISIN, record date or payment date",
         });
       }
-      /* Normalize Ex-Date (start of day) */
-      const exDateObj = new Date(exDate);
-      exDateObj.setHours(0, 0, 0, 0);
-      const exDateISO = exDateObj.toISOString().split("T")[0];  
+      /* Normalize Record Date (used for calculation – holdings as on this date) */
+      const recordDateObj = new Date(recordDate);
+      recordDateObj.setHours(0, 0, 0, 0);
+      const recordDateISO = recordDateObj.toISOString().split("T")[0];
       /* Normalize Payment Date (start of day) */
       const paymentDateObj = new Date(paymentDate);
       paymentDateObj.setHours(0, 0, 0, 0);
@@ -108,7 +108,7 @@ export const getAllSecuritiesISINs = async (req, res) => {
       }
   
       /* ======================================================
-         STEP 2: FETCH TRANSACTIONS (<= EX-DATE) – dedupe by ROWID
+         STEP 2: FETCH TRANSACTIONS (<= RECORD DATE) – dedupe by ROWID
          ====================================================== */
       const txRows = [];
       const seenTxnRowIds = new Set();
@@ -119,7 +119,7 @@ export const getAllSecuritiesISINs = async (req, res) => {
           SELECT *
           FROM Transaction
           WHERE ISIN='${isin}'
-          AND TRANDATE <= '${exDateISO}'
+          AND TRANDATE <= '${recordDateISO}'
           ORDER BY TRANDATE ASC, ROWID ASC
           LIMIT ${ZCQL_ROW_LIMIT} OFFSET ${txOffset}
         `);
@@ -137,7 +137,7 @@ export const getAllSecuritiesISINs = async (req, res) => {
       }
   
       /* ======================================================
-         STEP 3: FETCH BONUSES (< EX-DATE)
+         STEP 3: FETCH BONUSES (< RECORD DATE)
          ====================================================== */
       const bonusRows = [];
       let bonusOffset = 0;
@@ -147,7 +147,7 @@ export const getAllSecuritiesISINs = async (req, res) => {
           SELECT *
           FROM Bonus
           WHERE ISIN='${isin}'
-          AND ExDate < '${exDateISO}'
+          AND ExDate < '${recordDateISO}'
           ORDER BY ExDate ASC, ROWID ASC
           LIMIT ${ZCQL_ROW_LIMIT} OFFSET ${bonusOffset}
         `);
@@ -159,7 +159,7 @@ export const getAllSecuritiesISINs = async (req, res) => {
       }
   
       /* ======================================================
-         STEP 4: FETCH SPLITS (< EX-DATE)
+         STEP 4: FETCH SPLITS (< RECORD DATE)
          ====================================================== */
       const splitRows = [];
       let splitOffset = 0;
@@ -169,7 +169,7 @@ export const getAllSecuritiesISINs = async (req, res) => {
           SELECT *
           FROM Split
           WHERE ISIN='${isin}'
-          AND Issue_Date < '${exDateISO}'
+          AND Issue_Date < '${recordDateISO}'
           ORDER BY Issue_Date ASC, ROWID ASC
           LIMIT ${ZCQL_ROW_LIMIT} OFFSET ${splitOffset}
         `);
@@ -218,13 +218,13 @@ export const getAllSecuritiesISINs = async (req, res) => {
         const fifoResult = runFifoEngine(transactions, bonuses, splits, true);
         if (!fifoResult || fifoResult.holdings <= 0) continue;
 
-        const holdingAsOnExDate = fifoResult.holdings;
-        const dividendAmount = holdingAsOnExDate * rateNum;
+        const holdingAsOnRecordDate = fifoResult.holdings;
+        const dividendAmount = holdingAsOnRecordDate * rateNum;
 
         preview.push({
           isin,
           accountCode,
-          holdingAsOnExDate,
+          holdingAsOnRecordDate,
           rate: rateNum,
           paymentDate: paymentDateISO,
           dividendAmount,
@@ -274,7 +274,7 @@ export const getAllSecuritiesISINs = async (req, res) => {
         !isin ||
         !securityCode ||
         !securityName ||
-        !exDate ||
+        !recordDate ||
         !paymentDate
       ) {
         return res.status(400).json({
@@ -283,36 +283,36 @@ export const getAllSecuritiesISINs = async (req, res) => {
         });
       }
 
-      /* Normalize Dates (recordDate is optional) */
+      /* Normalize Dates (exDate optional for UI – ExDate column; recordDate used for duplicate check) */
       const normalizeDate = (d) => {
         const dt = new Date(d);
         dt.setHours(0, 0, 0, 0);
         return dt.toISOString().split("T")[0];
       };
 
-      const exDateISO = normalizeDate(exDate);
-      const recordDateISO = recordDate && String(recordDate).trim()
-        ? normalizeDate(recordDate)
-        : exDateISO;
+      const recordDateISO = normalizeDate(recordDate);
+      const exDateISO = (exDate && String(exDate).trim())
+        ? normalizeDate(exDate)
+        : recordDateISO;
       const paymentDateISO = normalizeDate(paymentDate);
   
       const zcql = req.catalystApp.zcql();
   
       /* ======================================================
-         CHECK DUPLICATE (ISIN + EXDATE)
+         CHECK DUPLICATE (ISIN + RECORD DATE)
          ====================================================== */
       const existing = await zcql.executeZCQLQuery(`
         SELECT ROWID
         FROM Dividend
         WHERE ISIN='${isin}'
-        AND ExDate='${exDateISO}'
+        AND RecordDate='${recordDateISO}'
         LIMIT 1
       `);
   
       if (existing && existing.length > 0) {
         return res.status(400).json({
           success: false,
-          message: "Dividend already exists for this ISIN and Ex-Date",
+          message: "Dividend already exists for this ISIN and Record Date",
         });
       }
   

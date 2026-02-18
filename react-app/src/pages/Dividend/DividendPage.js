@@ -85,8 +85,9 @@ function DividendPage() {
     setError(null);
     setShowPreview(false);
     setPreviewEmptyMessage("");
-    if (!isin || !exDate || !rate || Number(rate) <= 0 || !paymentDate) {
-      setError("ISIN, Ex-Date, Dividend Rate and Payment Date are required for preview.");
+    /* Record Date is used for calculation (holdings as on record date); Ex-Date kept for UI/display */
+    if (!isin || !recordDate || !rate || Number(rate) <= 0 || !paymentDate) {
+      setError("ISIN, Record Date, Dividend Rate and Payment Date are required for preview.");
       return;
     }
     setPreviewLoading(true);
@@ -96,7 +97,7 @@ function DividendPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           isin,
-          exDate,
+          recordDate,
           rate: Number(rate),
           paymentDate,
         }),
@@ -129,12 +130,14 @@ function DividendPage() {
     setExportDownloadUrl("");
     setError(null);
     try {
+      /* recordDate used for calculation; exDate included for CSV display */
       const params = new URLSearchParams({
         isin,
-        exDate,
+        recordDate: recordDate || "",
         rate,
         paymentDate: paymentDate || "",
       });
+      if (exDate) params.set("exDate", exDate);
       const res = await fetch(`${BASE_URL}/dividend/export-preview?${params.toString()}`, {
         credentials: "include",
       });
@@ -161,8 +164,8 @@ function DividendPage() {
   /** Apply dividend (called from preview section after fetch) */
   const handleApply = async () => {
     setError(null);
-    if (!symbol || !companyName || !exDate || !paymentDate) {
-      setError("Security Code, Security Name, Ex-Date and Payment Date are required.");
+    if (!symbol || !companyName || !recordDate || !paymentDate) {
+      setError("Security Code, Security Name, Record Date and Payment Date are required.");
       return;
     }
     if (!rate || Number(rate) <= 0) {
@@ -360,11 +363,12 @@ function DividendPage() {
           </div>
 
           <div className="dividend-field">
-            <label>Record Date</label>
+            <label>Record Date <span className="required-asterisk">*</span></label>
             <input
               type="date"
               value={recordDate}
               onChange={(e) => setRecordDate(e.target.value)}
+              title="Used for eligibility calculation (holdings as on this date)"
             />
           </div>
 
@@ -382,7 +386,7 @@ function DividendPage() {
             <button
               type="button"
               className="dividend-preview-btn"
-              disabled={!isin || !exDate || !rate || Number(rate) <= 0 || !paymentDate || previewLoading}
+              disabled={!isin || !recordDate || !rate || Number(rate) <= 0 || !paymentDate || previewLoading}
               onClick={fetchPreview}
             >
               {previewLoading ? "Fetching…" : "Fetch Affected Accounts"}
@@ -402,7 +406,7 @@ function DividendPage() {
                   <thead>
                     <tr>
                       <th>Account Code</th>
-                      <th>Holding (Ex-Date)</th>
+                      <th>Holding (Record Date)</th>
                       <th>Dividend Rate</th>
                       <th>Payment Date</th>
                       <th>Dividend Amount</th>
@@ -412,7 +416,7 @@ function DividendPage() {
                     {paginatedPreview.map((row) => (
                       <tr key={row.accountCode}>
                         <td>{row.accountCode}</td>
-                        <td>{row.holdingAsOnExDate}</td>
+                        <td>{row.holdingAsOnRecordDate}</td>
                         <td>{row.rate}</td>
                         <td>{row.paymentDate ?? "—"}</td>
                         <td style={{ fontWeight: 600 }}>{row.dividendAmount}</td>

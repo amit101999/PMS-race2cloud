@@ -410,7 +410,14 @@ export const previewStockBonus = async (req, res) => {
       });
   
       const splits = splitRows.map((r) => r.Split);
-  
+      const secRows = await zcql.executeZCQLQuery(`
+        SELECT Security_Code, Security_Name
+        FROM Security_List
+        WHERE ISIN='${isin}'
+        LIMIT 1
+      `);
+      const securityCode = secRows[0].Security_Code;
+      const securityName = secRows[0].Security_Name;
       /* ======================================================
          STEP 6: FIFO + INSERT BONUS
          ====================================================== */
@@ -453,7 +460,28 @@ export const previewStockBonus = async (req, res) => {
   
         inserted++;
       }
-  
+ if (inserted > 0) {
+  await zcql.executeZCQLQuery(`
+    INSERT INTO Bonus_Record
+    (
+      Security_Code,
+      Security_Name,
+      ISIN,
+      Ratio1,
+      Ratio2,
+      ExDate
+    )
+    VALUES
+    (
+      '${securityCode}',
+      '${securityName}',
+      '${isin}',
+      ${r1},
+      ${r2},
+      '${exDateISO}'
+    )
+  `);
+ }
       return res.json({
         success: true,
         affectedAccounts: inserted,
