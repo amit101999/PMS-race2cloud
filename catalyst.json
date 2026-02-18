@@ -15,7 +15,9 @@
       "CashCalculation",
       "HoldingdataUpdate",
       "UpdateSecurity_ClientMaster",
-      "ExportDifferentialReport"
+      "ExportDifferentialReport",
+      "DailyClientHoldingTransaction",
+      "CalcullateAllTransactionHoldingOnce"
     ],
     "ignore": [],
     "source": "functions"
