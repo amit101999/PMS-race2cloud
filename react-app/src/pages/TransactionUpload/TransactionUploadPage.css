@@ -388,6 +388,115 @@
   margin-left: auto;
 }
 
+/* ================= DIFFERENTIAL HISTORY TABLE ================= */
+
+.diff-history-container {
+  margin-top: 24px;
+  padding-top: 24px;
+  border-top: 1px solid #e5e7eb;
+}
+
+.diff-history-container h4 {
+  margin-bottom: 16px;
+  font-size: 16px;
+  font-weight: 600;
+  color: #1f2937;
+}
+
+.diff-history-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.diff-history-table thead th {
+  background: #f9fafb;
+  color: #374151;
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 14px 16px;
+  text-align: left;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.diff-history-table thead th:last-child {
+  text-align: center;
+}
+
+.diff-history-table tbody tr {
+  transition: background 0.15s ease-in-out;
+  border-bottom: 1px solid #f3f4f6;
+}
+
+.diff-history-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.diff-history-table tbody tr:hover {
+  background: #f9fafb;
+}
+
+.diff-history-table tbody td {
+  padding: 14px 16px;
+  color: #111827;
+  font-size: 14px;
+}
+
+.diff-history-table tbody td:first-child {
+  font-weight: 600;
+  color: #374151;
+  font-family: monospace;
+}
+
+.diff-history-table tbody td:last-child {
+  text-align: center;
+}
+
+.diff-status-badge {
+  font-size: 12px;
+  font-weight: 600;
+  padding: 4px 12px;
+  border-radius: 8px;
+  display: inline-block;
+}
+
+.diff-status-badge.completed {
+  background: #d1fae5;
+  color: #047857;
+}
+
+.diff-status-badge.pending {
+  background: #fef3c7;
+  color: #b45309;
+}
+
+.diff-status-badge.failed {
+  background: #fee2e2;
+  color: #b91c1c;
+}
+
+.diff-download-btn {
+  padding: 7px 18px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #fff;
+  background: linear-gradient(135deg, #c2185b, #8b1538);
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.diff-download-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 3px 8px rgba(194, 24, 91, 0.3);
+}
+
 @media (max-width: 768px) {
   .upload-sections {
     grid-template-columns: 1fr;
