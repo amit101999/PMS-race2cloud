@@ -12,7 +12,7 @@ export const fetchStockTransactions = async ({
     const nextDay = new Date(asOnDate);
     nextDay.setDate(nextDay.getDate() + 1);
     const nextDayStr = nextDay.toISOString().split("T")[0];
-    dateCondition = ` AND TRANDATE < '${nextDayStr}'`;
+    dateCondition = ` AND SETDATE < '${nextDayStr}'`;
   }
 
   const where = `
@@ -27,10 +27,10 @@ export const fetchStockTransactions = async ({
 
   while (true) {
     const query = `
-      SELECT TRANDATE, Tran_Type, Security_code, QTY, NETRATE, Net_Amount, ISIN
+      SELECT SETDATE, Tran_Type, Security_code, QTY, NETRATE, Net_Amount, ISIN
       FROM Transaction
       ${where}
-      ORDER BY TRANDATE ASC, ROWID ASC
+      ORDER BY SETDATE ASC, ROWID ASC
       LIMIT ${limit} OFFSET ${offset}
     `;
 
@@ -45,7 +45,7 @@ export const fetchStockTransactions = async ({
   return rows.map((row) => {
     const r = row.Transaction || row[tableName] || row;
     return {
-      trandate: r.TRANDATE,
+      trandate: r.SETDATE,
       tranType: r.Tran_Type,
       securityCode: r.Security_code,
       qty: Number(r.QTY) || 0,

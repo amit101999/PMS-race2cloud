@@ -36,13 +36,13 @@ export const runFifoEngine = (
       .filter((t) => (t.ISIN || t.isin) === activeIsin)
       .map((t) => ({
         type: "TXN",
-        date: normalizeDate(t.TRANDATE || t.trandate),
+        date: normalizeDate(t.SETDATE || t.setdate || t.TRANDATE || t.trandate),
         data: {
           tranType: t.Tran_Type || t.tranType,
           qty: t.QTY || t.qty,
           netrate: t.NETRATE || t.netrate,
           netAmount: t.NETAMOUNT || t.netAmount || t.Net_Amount || 0,
-          trandate: t.TRANDATE || t.trandate,
+          trandate: t.SETDATE || t.setdate || t.TRANDATE || t.trandate,
           isin: t.ISIN || t.isin,
         },
       })),

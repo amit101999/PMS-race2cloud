@@ -96,11 +96,11 @@ module.exports = async (jobRequest, context) => {
         // 2️⃣ Fetch & process new transactions
         while (true) {
           const query = `
-            SELECT ROWID, TRANDATE, Tran_Type, Net_Amount
+            SELECT ROWID, SETDATE, Tran_Type, Net_Amount
             FROM Transaction
             WHERE WS_Account_code = '${acc.replace(/'/g, "''")}'
             ${lastTranId ? `AND ROWID > '${lastTranId}'` : ""}
-            ORDER BY TRANDATE ASC, ROWID ASC
+            ORDER BY SETDATE ASC, ROWID ASC
             LIMIT ${limit}
           `;
 
@@ -117,13 +117,13 @@ module.exports = async (jobRequest, context) => {
             );
 
             // same date → UPDATE
-            if (lastDate === t.TRANDATE) {
+            if (lastDate === t.SETDATE) {
               await zcql.executeZCQLQuery(`
                 UPDATE Cash_Ledger
                 SET Cash_Balance = ${balance},
                     Last_Tran_Id = '${t.ROWID}'
                 WHERE Account_Code = '${acc.replace(/'/g, "''")}'
-                  AND Tran_Date = '${t.TRANDATE}'
+                  AND Tran_Date = '${t.SETDATE}'
               `);
             }
             // new date → INSERT
@@ -133,12 +133,12 @@ module.exports = async (jobRequest, context) => {
                 (Account_Code, Tran_Date, Cash_Balance, Last_Tran_Id)
                 VALUES (
                   '${acc.replace(/'/g, "''")}',
-                  '${t.TRANDATE}',
+                  '${t.SETDATE}',
                   ${balance},
                   '${t.ROWID}'
                 )
               `);
-              lastDate = t.TRANDATE;
+              lastDate = t.SETDATE;
             }
 
             lastTranId = t.ROWID;

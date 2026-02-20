@@ -72,7 +72,7 @@ function calculateRunningQuantity(transactions, bonuses, splits) {
   for (const t of transactions || []) {
     events.push({
       type: "TXN",
-      date: normalizeDate(t.trandate || t.TRANDATE),
+      date: normalizeDate(t.setdate || t.SETDATE || t.trandate || t.TRANDATE),
       data: t,
     });
   }

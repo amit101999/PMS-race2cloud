@@ -40,7 +40,7 @@ function normalizeTxnRow(r) {
     Security_Name: r.Security_Name ?? "",
     Tran_Type: r.Tran_Type ?? "",
     QTY: Number(r.QTY) || 0,
-    TRANDATE: r.TRANDATE ?? "",
+    TRANDATE: r.SETDATE ?? r.TRANDATE ?? "",
     NETRATE: Number(r.NETRATE) || 0,
   };
 }
@@ -168,7 +168,7 @@ async function fetchTransactionsForAccounts(zcql, accountCodes) {
     while (true) {
       const rows = await zcql.executeZCQLQuery(`
         SELECT ROWID, WS_Account_code, ISIN, Security_Name, Security_code,
-               Tran_Type, QTY, TRANDATE, NETRATE
+               Tran_Type, QTY, SETDATE, NETRATE
         FROM Transaction
         WHERE WS_Account_code IN (${inClause})
         ORDER BY ROWID ASC
