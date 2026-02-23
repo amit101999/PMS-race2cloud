@@ -120,8 +120,8 @@ export const previewStockBonus = async (req, res) => {
         SELECT *
         FROM Transaction
         WHERE ISIN='${isin}'
-        AND TRANDATE <= '${exDateISO}'
-        ORDER BY TRANDATE ASC, ROWID ASC
+        AND SETDATE <= '${exDateISO}'
+        ORDER BY SETDATE ASC, ROWID ASC
         LIMIT ${ZCQL_ROW_LIMIT} OFFSET ${txOffset}
       `);
 
@@ -201,12 +201,15 @@ export const previewStockBonus = async (req, res) => {
     const splits = splitRows.map((r) => r.Split);
 
     /* ======================================================
-       STEP 6: FIFO PREVIEW
+       STEP 6: FIFO PREVIEW (one per account)
        ====================================================== */
     const preview = [];
+    const seenPreview = new Set();
 
     for (const h of holdingRows) {
       const accountCode = h.Holdings.WS_Account_code;
+      if (seenPreview.has(accountCode)) continue;
+      seenPreview.add(accountCode);
       const transactions = txByAccount[accountCode] || [];
       if (!transactions.length) continue;
 
@@ -331,8 +334,8 @@ export const previewStockBonus = async (req, res) => {
           SELECT *
           FROM Transaction
           WHERE ISIN='${isin}'
-            AND TRANDATE <= '${exDateISO}'
-          ORDER BY TRANDATE ASC, ROWID ASC
+            AND SETDATE <= '${exDateISO}'
+          ORDER BY SETDATE ASC, ROWID ASC
           LIMIT ${ZCQL_ROW_LIMIT} OFFSET ${txOffset}
         `);
   
@@ -419,12 +422,15 @@ export const previewStockBonus = async (req, res) => {
       const securityCode = secRows[0].Security_Code;
       const securityName = secRows[0].Security_Name;
       /* ======================================================
-         STEP 6: FIFO + INSERT BONUS
+         STEP 6: FIFO + INSERT BONUS (one per account)
          ====================================================== */
       let inserted = 0;
-  
+      const processedAccounts = new Set();
+
       for (const h of holdingRows) {
         const accountCode = h.Holdings.WS_Account_code;
+        if (processedAccounts.has(accountCode)) continue;
+        processedAccounts.add(accountCode);
   
         const transactions = txByAccount[accountCode] || [];
         if (!transactions.length) continue;
@@ -464,8 +470,8 @@ export const previewStockBonus = async (req, res) => {
   await zcql.executeZCQLQuery(`
     INSERT INTO Bonus_Record
     (
-      Security_Code,
-      Security_Name,
+      SecurityCode,
+      SecurityName,
       ISIN,
       Ratio1,
       Ratio2,

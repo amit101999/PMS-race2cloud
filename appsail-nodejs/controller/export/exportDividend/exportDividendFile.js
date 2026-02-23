@@ -66,8 +66,8 @@ export const exportDividendPreviewFile = async (req, res) => {
       const batch = await zcql.executeZCQLQuery(`
         SELECT *
         FROM Transaction
-        WHERE ISIN='${isin}' AND TRANDATE <= '${recordDateISO}'
-        ORDER BY TRANDATE ASC, ROWID ASC
+        WHERE ISIN='${isin}' AND SETDATE <= '${recordDateISO}'
+        ORDER BY SETDATE ASC, ROWID ASC
         LIMIT ${BATCH_SIZE} OFFSET ${txOffset}
       `);
       if (!batch || batch.length === 0) break;

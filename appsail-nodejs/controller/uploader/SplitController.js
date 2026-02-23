@@ -197,8 +197,8 @@ export const previewStockSplit = async (req, res) => {
         SELECT *
         FROM Transaction
         WHERE ISIN='${isin}'
-        AND TRANDATE <= '${issueDateISO}'
-        ORDER BY TRANDATE ASC, ROWID ASC
+            AND SETDATE <= '${issueDateISO}'
+          ORDER BY SETDATE ASC, ROWID ASC
         LIMIT ${ZCQL_ROW_LIMIT} OFFSET ${txOffset}
       `);
 

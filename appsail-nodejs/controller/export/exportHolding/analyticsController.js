@@ -17,7 +17,7 @@ import { runFifoEngine } from "../../../util/export/fifo.js";
 //     nextDay.setDate(nextDay.getDate() + 1);
 //     const nextDayStr = nextDay.toISOString().split("T")[0];
 
-//     txnDateCondition = `AND TRANDATE < '${nextDayStr}'`;
+//     txnDateCondition = `AND SETDATE < '${nextDayStr}'`;
 //     bonusDateCondition = `AND ExDate < '${nextDayStr}'`;
 //     splitDateCondition = `AND Issue_Date < '${nextDayStr}'`;
 //   }
@@ -215,7 +215,7 @@ export const calculateHoldingsSummary = async ({
     nextDay.setDate(nextDay.getDate() + 1);
     const nextDayStr = nextDay.toISOString().split("T")[0];
 
-    txnDateCondition = `AND TRANDATE < '${nextDayStr}'`;
+    txnDateCondition = `AND SETDATE < '${nextDayStr}'`;
     bonusDateCondition = `AND ExDate < '${nextDayStr}'`;
     splitDateCondition = `AND Issue_Date < '${nextDayStr}'`;
   }
@@ -230,7 +230,7 @@ export const calculateHoldingsSummary = async ({
 
   while (true) {
     const rows = await zcql.executeZCQLQuery(`
-      SELECT Security_Name, Security_code, Tran_Type, QTY, TRANDATE,
+      SELECT Security_Name, Security_code, Tran_Type, QTY, SETDATE,
              NETRATE, Net_Amount, ISIN, ROWID
       FROM Transaction
       WHERE WS_Account_code = '${accountCode}'

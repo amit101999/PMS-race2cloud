@@ -11,20 +11,19 @@ function HoldingsTab() {
   const [loading, setLoading] = useState(false);
   const [downloadUrl, setDownloadUrl] = useState("");
 
-  // ✅ Export All jobs (persisted from backend)
   const [exportJobs, setExportJobs] = useState([]);
 
   const dropdownRef = useRef(null);
   const { clientOptions } = useAccountCodes();
 
-  /* ---------------- FILTERED OPTIONS (UNCHANGED) ---------------- */
+  /* ---------------- FILTERED OPTIONS ---------------- */
   const filteredOptions = useMemo(() => {
     return clientOptions.filter((opt) =>
       opt.label.toLowerCase().includes(searchQuery.toLowerCase())
     );
   }, [clientOptions, searchQuery]);
 
-  /* ---------------- CLOSE DROPDOWN (UNCHANGED) ---------------- */
+  /* ---------------- CLOSE DROPDOWN ---------------- */
   useEffect(() => {
     const handleClickOutside = (e) => {
       if (dropdownRef.current && !dropdownRef.current.contains(e.target)) {
@@ -35,7 +34,7 @@ function HoldingsTab() {
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
-  /* ---------------- ACCOUNT SELECT (UNCHANGED) ---------------- */
+  /* ---------------- ACCOUNT SELECT ---------------- */
   const handleAccountSelect = (option) => {
     setSearchQuery(option.label);
     setAccountCode(option.value);
@@ -51,7 +50,7 @@ function HoldingsTab() {
   /* ===================== EXPORT HANDLER ===================== */
   const handleExport = async () => {
     try {
-      /* ---------- SINGLE CLIENT EXPORT (UNCHANGED) ---------- */
+      /* ---------- SINGLE CLIENT EXPORT ---------- */
       if (exportType === "single") {
         if (!accountCode) {
           alert("Please select an account code");
@@ -93,7 +92,7 @@ function HoldingsTab() {
 
       const data = await response.json();
 
-      // Merge job safely
+      // Update or add the job in the list
       setExportJobs((prev) => {
         const exists = prev.find((j) => j.jobName === data.jobName);
         if (exists) {
@@ -101,11 +100,10 @@ function HoldingsTab() {
             j.jobName === data.jobName ? { ...j, status: data.status } : j
           );
         }
-
         return [
           {
             jobName: data.jobName,
-            asOnDate,
+            asOnDate: data.asOnDate || asOnDate,
             status: data.status,
           },
           ...prev,
@@ -146,25 +144,33 @@ function HoldingsTab() {
   useEffect(() => {
     if (exportJobs.length === 0) return;
 
+    const hasRunningJobs = exportJobs.some(
+      (j) => j.status !== "COMPLETED" && j.status !== "FAILED"
+    );
+    if (!hasRunningJobs) return;
+
     const interval = setInterval(async () => {
       const updated = await Promise.all(
         exportJobs.map(async (job) => {
-          // ✅ NEVER overwrite completed / failed history
           if (job.status === "COMPLETED" || job.status === "FAILED") {
             return job;
           }
 
-          const res = await fetch(
-            `${BASE_URL}/export/check-status?asOnDate=${job.asOnDate}`,
-            { credentials: "include" }
-          );
-          const data = await res.json();
+          try {
+            const res = await fetch(
+              `${BASE_URL}/export/check-status?asOnDate=${job.asOnDate}`,
+              { credentials: "include" }
+            );
+            const data = await res.json();
 
-          if (!data.status || data.status === "NOT_STARTED") {
+            if (!data.status || data.status === "NOT_STARTED") {
+              return job;
+            }
+
+            return { ...job, status: data.status };
+          } catch {
             return job;
           }
-
-          return { ...job, status: data.status };
         })
       );
 
@@ -176,11 +182,20 @@ function HoldingsTab() {
 
   /* ===================== DOWNLOAD EXPORT ===================== */
   const handleExportAllDownload = async (date) => {
-    const res = await fetch(`${BASE_URL}/export/download?asOnDate=${date}`, {
-      credentials: "include",
-    });
-    const data = await res.json();
-    window.open(data.downloadUrl.signature, "_blank");
+    try {
+      const res = await fetch(
+        `${BASE_URL}/export/download?asOnDate=${date}`,
+        { credentials: "include" }
+      );
+      const data = await res.json();
+      if (data.downloadUrl && data.downloadUrl.signature) {
+        window.open(data.downloadUrl.signature, "_blank");
+      } else if (data.downloadUrl) {
+        window.open(data.downloadUrl, "_blank");
+      }
+    } catch (err) {
+      alert("Failed to download export file");
+    }
   };
 
   /* ===================== UI ===================== */
@@ -313,13 +328,12 @@ function HoldingsTab() {
                   <td>{job.asOnDate}</td>
                   <td>
                     <span
-                      className={`export-status ${
-                        job.status === "COMPLETED"
+                      className={`export-status ${job.status === "COMPLETED"
                           ? "completed"
                           : job.status === "FAILED"
-                          ? "failed"
-                          : "pending"
-                      }`}
+                            ? "failed"
+                            : "pending"
+                        }`}
                     >
                       {job.status}
                     </span>

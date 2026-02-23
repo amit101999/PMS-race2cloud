@@ -20,7 +20,7 @@ export const runHoldingQuantityEngine = (
     const events = [
       ...transactions.map((t) => ({
         type: "TXN",
-        date: normalizeDate(t.trandate || t.TRANDATE),
+        date: normalizeDate(t.setdate || t.SETDATE || t.trandate || t.TRANDATE),
         data: t,
       })),
       ...bonuses.map((b) => ({

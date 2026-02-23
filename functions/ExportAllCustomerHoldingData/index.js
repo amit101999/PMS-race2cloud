@@ -10,28 +10,32 @@ const catalyst = require("zcatalyst-sdk-node");
 module.exports = async (jobRequest, context) => {
   const catalystApp = catalyst.initialize(context);
   const zcql = catalystApp.zcql();
+  let jobName = "";
   try {
     console.log("Export job started");
 
     const jobDetails = jobRequest.getAllJobParams();
-    const { asOnDate, jobName, fileName } = jobDetails;
+    const { asOnDate, fileName } = jobDetails;
+    jobName = jobDetails.jobName;
 
     const stratus = catalystApp.stratus();
     const bucket = stratus.bucket("upload-data-bucket");
 
     const tableName = "clientIds";
 
-    // make the jobs status as 'Pending' in the Jobs table
-    await zcql.executeZCQLQuery(`
-      INSERT INTO Jobs (jobName, status)
-      VALUES ('${jobName}', 'PENDING')
-    `);
+    // Insert job status as PENDING
+    await zcql.executeZCQLQuery(
+      `INSERT INTO Jobs (jobName, status) VALUES ('${jobName}', 'PENDING')`
+    );
 
     /* ---------------- GET CLIENT IDS ---------------- */
     const clientIds = await getAllAccountCodesFromDatabase(zcql, tableName);
 
     if (!clientIds.length) {
       console.log("No clients found");
+      await zcql.executeZCQLQuery(
+        `UPDATE Jobs SET status = 'COMPLETED' WHERE jobName = '${jobName}'`
+      );
       context.closeWithSuccess();
       return;
     }
@@ -46,7 +50,7 @@ module.exports = async (jobRequest, context) => {
 
     /* ---------------- CSV HEADER ---------------- */
     csvStream.write(
-      "ACCOUNT_CODE,SECURITY_NAME,SECURITY_CODE,ISIN,HOLDING,WAP,HOLDING_VALUE,LAST_PRICE, MARKET_VALUE\n",
+      "ACCOUNT_CODE,SECURITY_NAME,SECURITY_CODE,ISIN,HOLDING,WAP,HOLDING_VALUE,LAST_PRICE,MARKET_VALUE\n",
     );
 
     /* ---------------- FETCH & WRITE DATA ---------------- */
@@ -70,6 +74,15 @@ module.exports = async (jobRequest, context) => {
         continue;
       }
 
+      // Delete old holdings for this account + date to prevent duplicates on re-export
+      try {
+        await zcql.executeZCQLQuery(
+          `DELETE FROM Holdings WHERE WS_Account_code = '${accountCode}' AND Holding_Date = '${asOnDate}'`
+        );
+      } catch (delErr) {
+        console.error(`Error deleting old holdings for ${accountCode}:`, delErr);
+      }
+
       for (const row of rows) {
         const line = [
           accountCode,
@@ -85,9 +98,9 @@ module.exports = async (jobRequest, context) => {
           .map((v) => `"${String(v).replace(/"/g, '""')}"`)
           .join(",");
 
-        await zcql.executeZCQLQuery(`
-            INSERT INTO Holdings ( WS_Account_code , ISIN , QTY , Holding_Date) 
-              VALUES ('${accountCode}' , '${row.isin}' , '${row.currentHolding}' , '${asOnDate}') `);
+        await zcql.executeZCQLQuery(
+          `INSERT INTO Holdings (WS_Account_code, ISIN, QTY, Holding_Date) VALUES ('${accountCode}', '${(row.isin || "").replace(/'/g, "''")}', '${row.currentHolding}', '${asOnDate}')`
+        );
 
         csvStream.write(line + "\n");
       }
@@ -101,22 +114,22 @@ module.exports = async (jobRequest, context) => {
 
     console.log("Export job completed successfully");
 
-    // make the jobs status as 'Completed' in the Jobs table
-    await zcql.executeZCQLQuery(`
-        UPDATE Jobs
-        SET status='COMPLETED'
-       WHERE jobName='${jobName}'
-    `);
+    // Mark job as completed
+    await zcql.executeZCQLQuery(
+      `UPDATE Jobs SET status = 'COMPLETED' WHERE jobName = '${jobName}'`
+    );
     context.closeWithSuccess();
   } catch (error) {
     console.error("Export job failed:", error);
 
-    // make the jobs status as 'Failed' in the Jobs table
-    await zcql.executeZCQLQuery(`
-        UPDATE Jobs
-        SET status='FAILED'
-       WHERE jobName='${jobName}'
-    `);
+    // Mark job as failed
+    try {
+      await zcql.executeZCQLQuery(
+        `UPDATE Jobs SET status = 'FAILED' WHERE jobName = '${jobName}'`
+      );
+    } catch (updateErr) {
+      console.error("Failed to update job status to FAILED:", updateErr);
+    }
     context.closeWithFailure();
   }
 };

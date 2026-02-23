@@ -19,7 +19,7 @@ const toFifoTxnRow = (r) => {
     Security_Name: t.Security_Name ?? "",
     Tran_Type: t.Tran_Type,
     QTY: Number(t.QTY) || 0,
-    TRANDATE: t.TRANDATE ?? "",
+    TRANDATE: t.SETDATE ?? t.TRANDATE ?? "",
     NETRATE: Number(t.NETRATE) || 0,
   };
 };
@@ -30,7 +30,7 @@ const fetchTxnRows = async (zcql, tableName, isin, accountCode) => {
 
   while (true) {
     const rows = await zcql.executeZCQLQuery(`
-      SELECT ROWID, Security_Name, Security_code, Tran_Type, QTY, TRANDATE, NETRATE, ISIN, WS_Account_code
+      SELECT ROWID, Security_Name, Security_code, Tran_Type, QTY, SETDATE, NETRATE, ISIN, WS_Account_code
       FROM ${tableName}
       WHERE ISIN='${esc(isin)}' AND WS_Account_code='${esc(accountCode)}'
       ORDER BY ROWID ASC
