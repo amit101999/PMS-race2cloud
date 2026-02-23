@@ -62,17 +62,17 @@ app.use("/api/bonus", BonusRouter);
 app.use("/api/dividend", DividendUploaderRouter);
 
 
-app.put("/update" ,async (req , res)=>{
+app.put("/update", async (req, res) => {
   console.log("Update started");
   let count = 0;
   const app = catalyst.initialize(req);
   const zcql = app.zcql();
-  for(let i = 0 ; i< 25 ; i++){
+  for (let i = 0; i < 25; i++) {
     await zcql.executeZCQLQuery(`
   UPDATE Transaction
-SET executionPriority = 1
+SET executionPriority = 2
 WHERE Tran_Type IN ('BY-', 'IN+', 'IN1', 'TDI', 'DI1', 'OI1', 'OPI', 'OPO', 'E01', 'E10', 'E22', 'E23')
-AND executionPriority IS NULL
+AND executionPriority=1
 LIMIT 300;
     `);
     console.log(count);
