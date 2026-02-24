@@ -16,8 +16,7 @@
       "HoldingdataUpdate",
       "UpdateSecurity_ClientMaster",
       "ExportDifferentialReport",
-      "DailyClientHoldingTransaction",
-      "CalcullateAllTransactionHoldingOnce"
+      "DeleteFile"
     ],
     "ignore": [],
     "source": "functions"
