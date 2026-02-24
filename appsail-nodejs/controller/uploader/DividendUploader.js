@@ -119,8 +119,8 @@ export const getAllSecuritiesISINs = async (req, res) => {
           SELECT *
           FROM Transaction
           WHERE ISIN='${isin}'
-          AND TRANDATE <= '${recordDateISO}'
-          ORDER BY TRANDATE ASC, ROWID ASC
+          AND SETDATE <= '${recordDateISO}'
+          ORDER BY SETDATE ASC, ROWID ASC
           LIMIT ${ZCQL_ROW_LIMIT} OFFSET ${txOffset}
         `);
   

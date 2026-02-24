@@ -81,7 +81,7 @@ export const getAllTransactions = async (req, res) => {
           RATE, BROKERAGE, SERVICETAX, NETRATE,
           Net_Amount, STT
         FROM Transaction
-        ORDER BY TRANDATE DESC, ROWID DESC
+        ORDER BY SETDATE DESC, ROWID DESC
         LIMIT ${limit} OFFSET ${offset}
       `;
   

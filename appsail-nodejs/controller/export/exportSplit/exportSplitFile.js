@@ -76,7 +76,7 @@ export const exportSplitPreviewFile = async (req, res) => {
       return out;
     };
 
-    const txRows = await fetchAll("Transaction", "TRANDATE", "<=");
+    const txRows = await fetchAll("Transaction", "SETDATE", "<=");
     const bonusRows = await fetchAll("Bonus", "ExDate", "<=");
     const splitRows = await fetchAll("Split", "Issue_Date", "<"); // past splits only
 

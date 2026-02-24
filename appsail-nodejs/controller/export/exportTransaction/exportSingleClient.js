@@ -44,7 +44,7 @@ export const exportTransactionPerAccount = async (req, res) => {
       const nextDay = new Date(asOnDate);
       nextDay.setDate(nextDay.getDate() + 1);
       const nextDayStr = nextDay.toISOString().split("T")[0];
-      clauses.push(`TRANDATE < '${nextDayStr}'`);
+      clauses.push(`SETDATE < '${nextDayStr}'`);
     }
 
     const whereSql = `WHERE ${clauses.join(" AND ")}`;
@@ -59,7 +59,7 @@ export const exportTransactionPerAccount = async (req, res) => {
         SELECT Tran_Type, Net_Amount, STT
         FROM Transaction
         ${whereSql}
-        ORDER BY TRANDATE ASC, executionPriority ASC, ROWID ASC
+        ORDER BY SETDATE ASC, executionPriority ASC, ROWID ASC
         LIMIT ${BATCH_SIZE} OFFSET ${offset}
       `);
 
@@ -88,7 +88,7 @@ export const exportTransactionPerAccount = async (req, res) => {
     while (true) {
       const rows = await zcql.executeZCQLQuery(`
         SELECT
-          TRANDATE,
+          SETDATE,
           Tran_Type,
           Security_Name,
           Security_code,
@@ -99,7 +99,7 @@ export const exportTransactionPerAccount = async (req, res) => {
           STT
         FROM Transaction
         ${whereSql}
-        ORDER BY TRANDATE ASC, executionPriority ASC, ROWID ASC
+        ORDER BY SETDATE ASC, executionPriority ASC, ROWID ASC
         LIMIT ${EXPORT_BATCH_SIZE} OFFSET ${exportOffset}
       `);
 
@@ -115,7 +115,7 @@ export const exportTransactionPerAccount = async (req, res) => {
         );
         runningBalance -= stt;
         const line = [
-          t.TRANDATE,
+          t.SETDATE,
           t.Tran_Type,
           t.Security_Name,
           t.Security_code,

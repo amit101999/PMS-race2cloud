@@ -10,7 +10,8 @@ export const applyCashEffect = (balance, tranType, amount) => {
     tranType === "OI1" ||
     tranType === "SQS" ||
     tranType === "DI1" ||
-    tranType === "IN+"
+    tranType === "IN+" ||
+    tranType === "DIV+"
   ) {
     return balance + amount;
   }
@@ -37,6 +38,8 @@ export const applyCashEffect = (balance, tranType, amount) => {
   return balance;
 };
 
+const escSql = (s) => s.replace(/'/g, "''");
+
 export const getPaginatedTransactions = async (req, res) => {
   try {
     const app = req.catalystApp;
@@ -55,7 +58,7 @@ export const getPaginatedTransactions = async (req, res) => {
         : null;
     const lastRowId =
       req.query.lastRowId != null
-        ? parseInt(String(req.query.lastRowId), 10)
+        ? String(req.query.lastRowId)
         : null;
 
     const direction = req.query.direction === "prev" ? "prev" : "next";
@@ -64,13 +67,12 @@ export const getPaginatedTransactions = async (req, res) => {
       lastDate &&
       lastPriority != null &&
       !Number.isNaN(lastPriority) &&
-      lastRowId != null &&
-      !Number.isNaN(lastRowId);
+      lastRowId != null;
 
     /* ================= FILTERS ================= */
     const accountCode = (req.query.accountCode || "").trim();
     const rawAsOnDate = (req.query.asOnDate || "").trim();
-    const securityName = (req.query.securityName || "").trim();
+    const securityNameFilter = (req.query.securityName || "").trim();
 
     if (!accountCode) {
       return res.status(200).json({
@@ -94,190 +96,33 @@ export const getPaginatedTransactions = async (req, res) => {
 
     const asOnDate = normalizeDate(rawAsOnDate);
 
-    const whereParts = [`WS_Account_code = '${accountCode.replace(/'/g, "''")}'`];
+    /* ================= FETCH TRANSACTIONS ================= */
 
+    const tranParts = ["WS_Account_code = '" + escSql(accountCode) + "'"];
+    if (securityNameFilter) {
+      tranParts.push("Security_Name = '" + escSql(securityNameFilter) + "'");
+    }
     if (asOnDate) {
       const nextDay = new Date(asOnDate);
       nextDay.setDate(nextDay.getDate() + 1);
       const nextDayStr = nextDay.toISOString().split("T")[0];
-      whereParts.push(`TRANDATE < '${nextDayStr}'`);
+      tranParts.push("TRANDATE < '" + nextDayStr + "'");
     }
 
-    if (securityName) {
-      whereParts.push(
-        `Security_Name = '${securityName.replace(/'/g, "''")}'`
-      );
-    }
+    const tranQuery = "SELECT ROWID, TRANDATE, executionPriority, Tran_Type, Security_Name, Security_code, ISIN, QTY, NETRATE, Net_Amount, STT FROM Transaction WHERE " + tranParts.join(" AND ") + " ORDER BY TRANDATE ASC, executionPriority ASC, ROWID ASC";
 
-    let whereSql = `WHERE ${whereParts.join(" AND ")}`;
+    let transactionRaw = [];
+    try {
+      transactionRaw = await zcql.executeZCQLQuery(tranQuery);
+    } catch (e) { console.error("Error fetching transactions", e); }
+    console.log("[DEBUG] Transaction rows:", (transactionRaw || []).length);
 
-    /* ================= CURSOR CONDITION ================= */
-
-    if (hasCursor) {
-      const operator =
-        direction === "next"
-          ? `
-            TRANDATE > '${lastDate}'
-            OR (
-              TRANDATE = '${lastDate}'
-              AND executionPriority > ${lastPriority}
-            )
-            OR (
-              TRANDATE = '${lastDate}'
-              AND executionPriority = ${lastPriority}
-              AND ROWID > ${lastRowId}
-            )
-          `
-          : `
-            TRANDATE < '${lastDate}'
-            OR (
-              TRANDATE = '${lastDate}'
-              AND executionPriority < ${lastPriority}
-            )
-            OR (
-              TRANDATE = '${lastDate}'
-              AND executionPriority = ${lastPriority}
-              AND ROWID < ${lastRowId}
-            )
-          `;
-
-      whereSql += ` AND (${operator})`;
-    }
-
-    /* ================= ORDERING ================= */
-
-    const orderSql =
-      direction === "next"
-        ? "ORDER BY TRANDATE ASC, executionPriority ASC, ROWID ASC"
-        : "ORDER BY TRANDATE DESC, executionPriority DESC, ROWID DESC";
-
-    /* ================= FETCH PAGE ================= */
-
-    const rowsRaw = await zcql.executeZCQLQuery(`
-      SELECT
-        ROWID,
-        TRANDATE,
-        executionPriority,
-        Tran_Type,
-        Security_Name,
-        Security_code,
-        ISIN,
-        QTY,
-        NETRATE,
-        Net_Amount,
-        STT
-      FROM Transaction
-      ${whereSql}
-      ${orderSql}
-      LIMIT 0, ${limit}
-    `);
-
-    const rows = direction === "prev"
-      ? [...(rowsRaw || [])].reverse()
-      : rowsRaw || [];
-
-    if (rows.length === 0) {
-      return res.status(200).json({
-        data: [],
-        nextCursor: null,
-        prevCursor: null,
-        hasNext: false,
-        hasPrev: hasCursor,
-      });
-    }
-
-    const getRow = (row) => {
+    const transactionRows = (transactionRaw || []).map(row => {
       const t = row.Transaction || row;
       return {
-        TRANDATE: t.TRANDATE ?? t.Trandate ?? null,
-        executionPriority: Number(t.executionPriority ?? t.ExecutionPriority ?? 0) || 0,
-        ROWID: t.ROWID ?? t.rowid ?? null,
-      };
-    };
-
-    /* ================= OPENING BALANCE ================= */
-
-    const first = getRow(rows[0]);
-    const firstDate = first.TRANDATE;
-    const firstPriority = first.executionPriority;
-    const firstRowId = first.ROWID;
-
-    let openingBalance = 0;
-
-    if (
-      firstDate != null &&
-      firstRowId != null &&
-      !Number.isNaN(Number(firstRowId))
-    ) {
-      const openingWhere = `
-      WHERE ${whereParts.join(" AND ")}
-      AND (
-        TRANDATE < '${firstDate}'
-        OR (
-          TRANDATE = '${firstDate}'
-          AND executionPriority < ${firstPriority}
-        )
-        OR (
-          TRANDATE = '${firstDate}'
-          AND executionPriority = ${firstPriority}
-          AND ROWID < ${firstRowId}
-        )
-      )
-      ORDER BY TRANDATE ASC, executionPriority ASC, ROWID ASC
-    `;
-
-      const BATCH = 300;
-      let offset = 0;
-
-      try {
-        while (true) {
-          const batch = await zcql.executeZCQLQuery(`
-            SELECT Tran_Type, Net_Amount, STT
-            FROM Transaction
-            ${openingWhere}
-            LIMIT ${offset}, ${BATCH}
-          `);
-
-          if (!batch || batch.length === 0) break;
-
-          for (const row of batch) {
-            const t = row.Transaction || row;
-            const stt = Number(t.STT ?? t.Stt ?? 0) || 0;
-            openingBalance = applyCashEffect(
-              openingBalance,
-              t.Tran_Type,
-              Number(t.Net_Amount) || 0
-            );
-            openingBalance -= stt;
-          }
-
-          if (batch.length < BATCH) break;
-          offset += BATCH;
-        }
-      } catch (openingErr) {
-        console.error("[getPaginatedTransactions] opening balance:", openingErr);
-        openingBalance = 0;
-      }
-    }
-
-    /* ================= RUNNING BALANCE ================= */
-
-    let runningBalance = openingBalance;
-
-    const transactions = rows.map((row) => {
-      const t = row.Transaction || row;
-      const stt = Number(t.STT ?? t.Stt ?? 0) || 0;
-      runningBalance = applyCashEffect(
-        runningBalance,
-        t.Tran_Type,
-        Number(t.Net_Amount) || 0
-      );
-      runningBalance -= stt;
-
-      return {
-        rowId: t.ROWID,
-        date: t.TRANDATE,
-        executionPriority: Number(t.executionPriority) || 0,
+        rowId: "TX-" + t.ROWID,
+        date: t.TRANDATE || t.Trandate || null,
+        executionPriority: Number(t.executionPriority || 0) || 0,
         type: t.Tran_Type,
         securityName: t.Security_Name,
         securityCode: t.Security_code,
@@ -285,40 +130,224 @@ export const getPaginatedTransactions = async (req, res) => {
         quantity: Number(t.QTY) || 0,
         price: Number(t.NETRATE) || 0,
         totalAmount: Number(t.Net_Amount) || 0,
-        stt: stt,
-        cashBalance: runningBalance,
+        stt: Number(t.STT || t.Stt || 0) || 0
       };
     });
 
-    /* ================= CURSORS ================= */
+    /* ================= RESOLVE ISINs FOR CORPORATE ACTIONS ================= */
+    // Use ISIN to match corporate actions (not Security_Name, because names differ across tables)
+    let isinsForCorpActions = [];
 
-    const firstRow = getRow(rows[0]);
-    const lastRow = getRow(rows[rows.length - 1]);
+    if (securityNameFilter) {
+      // Extract ISINs from the transactions we already fetched
+      const isinSet = new Set();
+      for (const t of transactionRows) {
+        if (t.isin) isinSet.add(t.isin);
+      }
+      isinsForCorpActions = Array.from(isinSet);
+    } else {
+      // Fetch all ISINs for this account
+      try {
+        const isinRows = await zcql.executeZCQLQuery(
+          "SELECT DISTINCT ISIN FROM Transaction WHERE WS_Account_code = '" + escSql(accountCode) + "' AND ISIN IS NOT NULL"
+        );
+        isinsForCorpActions = (isinRows || [])
+          .map(r => (r.Transaction || r).ISIN)
+          .filter(Boolean);
+      } catch (e) {
+        console.error("Error fetching ISINs", e);
+      }
+    }
+    console.log("[DEBUG] ISINs for corp actions:", isinsForCorpActions);
 
-    const prevCursor =
-      firstRow.TRANDATE != null && firstRow.ROWID != null
-        ? {
-            lastDate: firstRow.TRANDATE,
-            lastPriority: firstRow.executionPriority,
-            lastRowId: firstRow.ROWID,
-          }
-        : null;
+    /* ================= FETCH DIVIDENDS ================= */
+    // Dividend table columns: SecurityCode, Security_Name, ISIN, Rate, ExDate, ...
+    // NO WS_Account_code column => filter by ISIN
 
-    const nextCursor =
-      lastRow.TRANDATE != null && lastRow.ROWID != null
-        ? {
-            lastDate: lastRow.TRANDATE,
-            lastPriority: lastRow.executionPriority,
-            lastRowId: lastRow.ROWID,
-          }
-        : null;
+    let dividendRows = [];
+    if (isinsForCorpActions.length > 0) {
+      const quotedIsins = isinsForCorpActions.map(i => "'" + escSql(i) + "'").join(", ");
+      const divParts = ["ISIN IN (" + quotedIsins + ")"];
+      if (asOnDate) {
+        divParts.push("ExDate <= '" + asOnDate + "'");
+      }
+
+      const divQuery = "SELECT ROWID, Security_Name, ISIN, ExDate, Rate FROM Dividend WHERE " + divParts.join(" AND ") + " ORDER BY ExDate ASC, ROWID ASC";
+      console.log("[DEBUG] Dividend query:", divQuery);
+
+      let dividendRaw = [];
+      try {
+        dividendRaw = await zcql.executeZCQLQuery(divQuery);
+      } catch (e) { console.error("Error fetching dividends", e); }
+      console.log("[DEBUG] Dividend rows:", (dividendRaw || []).length);
+
+      dividendRows = (dividendRaw || []).map(row => {
+        const d = row.Dividend || row;
+        return {
+          rowId: "DIV-" + d.ROWID,
+          date: d.ExDate,
+          executionPriority: -1,
+          type: "DIV+",
+          securityName: d.Security_Name,
+          securityCode: null,
+          isin: d.ISIN,
+          quantity: 0,
+          price: Number(d.Rate) || 0,
+          totalAmount: Number(d.Rate) || 0,
+          stt: 0
+        };
+      });
+    }
+
+    /* ================= FETCH BONUS ================= */
+    // Bonus table columns: SecurityCode, SecurityName, BonusShare, ExDate, ..., WS_Account_code, ISIN
+    // HAS WS_Account_code => filter by account + ISIN
+
+    let bonusRows = [];
+    if (isinsForCorpActions.length > 0) {
+      const quotedIsins = isinsForCorpActions.map(i => "'" + escSql(i) + "'").join(", ");
+      const bonusParts = [
+        "WS_Account_code = '" + escSql(accountCode) + "'",
+        "ISIN IN (" + quotedIsins + ")"
+      ];
+      if (asOnDate) {
+        bonusParts.push("ExDate <= '" + asOnDate + "'");
+      }
+
+      const bonusQuery = "SELECT ROWID, SecurityName, ISIN, ExDate, BonusShare FROM Bonus WHERE " + bonusParts.join(" AND ") + " ORDER BY ExDate ASC, ROWID ASC";
+      console.log("[DEBUG] Bonus query:", bonusQuery);
+
+      let bonusRaw = [];
+      try {
+        bonusRaw = await zcql.executeZCQLQuery(bonusQuery);
+      } catch (e) { console.error("Error fetching bonus", e); }
+      console.log("[DEBUG] Bonus rows:", (bonusRaw || []).length);
+
+      bonusRows = (bonusRaw || []).map(row => {
+        const b = row.Bonus || row;
+        return {
+          rowId: "BON-" + b.ROWID,
+          date: b.ExDate,
+          executionPriority: -3,
+          type: "BONUS",
+          securityName: b.SecurityName,
+          securityCode: null,
+          isin: b.ISIN,
+          quantity: Number(b.BonusShare) || 0,
+          price: 0,
+          totalAmount: 0,
+          stt: 0
+        };
+      });
+    }
+
+    /* ================= FETCH SPLIT ================= */
+    // Split table columns: Security_Code, Security_Name, Ratio1, Ratio2, Issue_Date, ISIN
+    // NO WS_Account_code => filter by ISIN
+
+    let splitRows = [];
+    if (isinsForCorpActions.length > 0) {
+      const quotedIsins = isinsForCorpActions.map(i => "'" + escSql(i) + "'").join(", ");
+      const splitParts = ["ISIN IN (" + quotedIsins + ")"];
+      if (asOnDate) {
+        splitParts.push("Issue_Date <= '" + asOnDate + "'");
+      }
+
+      const splitQuery = "SELECT ROWID, Security_Name, ISIN, Issue_Date, Ratio1, Ratio2 FROM Split WHERE " + splitParts.join(" AND ") + " ORDER BY Issue_Date ASC, ROWID ASC";
+      console.log("[DEBUG] Split query:", splitQuery);
+
+      let splitRaw = [];
+      try {
+        splitRaw = await zcql.executeZCQLQuery(splitQuery);
+      } catch (e) { console.error("Error fetching split", e); }
+      console.log("[DEBUG] Split rows:", (splitRaw || []).length);
+
+      splitRows = (splitRaw || []).map(row => {
+        const s = row.Split || row;
+        return {
+          rowId: "SPL-" + s.ROWID,
+          date: s.Issue_Date,
+          executionPriority: -2,
+          type: "SPLIT",
+          securityName: s.Security_Name,
+          securityCode: null,
+          isin: s.ISIN,
+          quantity: 0,
+          price: 0,
+          totalAmount: 0,
+          stt: 0
+        };
+      });
+    }
+
+    /* ================= MERGE & SORT ================= */
+
+    let allRows = [].concat(transactionRows, dividendRows, bonusRows, splitRows);
+    console.log("[DEBUG] Merged total:", allRows.length, "(Tx:", transactionRows.length, "Div:", dividendRows.length, "Bon:", bonusRows.length, "Spl:", splitRows.length, ")");
+
+    allRows.sort((a, b) => {
+      const dA = new Date(a.date).getTime();
+      const dB = new Date(b.date).getTime();
+      if (dA !== dB) return dA - dB;
+      if (a.executionPriority !== b.executionPriority) return a.executionPriority - b.executionPriority;
+      return String(a.rowId).localeCompare(String(b.rowId));
+    });
+
+    /* ================= RUNNING BALANCE ================= */
+
+    let runningBalance = 0;
+    const transactions = allRows.map(t => {
+      runningBalance = applyCashEffect(runningBalance, t.type, t.totalAmount);
+      runningBalance -= t.stt || 0;
+      return Object.assign({}, t, { cashBalance: runningBalance });
+    });
+
+    /* ================= CURSOR-BASED PAGINATION ================= */
+
+    let startIdx = 0;
+
+    if (hasCursor) {
+      const cursorIdx = transactions.findIndex(t =>
+        t.date === lastDate &&
+        t.executionPriority === lastPriority &&
+        t.rowId === lastRowId
+      );
+
+      if (cursorIdx !== -1) {
+        if (direction === "next") {
+          startIdx = cursorIdx + 1;
+        } else {
+          startIdx = Math.max(0, cursorIdx - limit);
+        }
+      }
+    }
+
+    const paginated = transactions.slice(startIdx, startIdx + limit);
+
+    const hasNextPage = (startIdx + limit) < transactions.length;
+    const hasPrevPage = startIdx > 0;
+
+    const firstRow = paginated[0];
+    const lastRow = paginated[paginated.length - 1];
+
+    const prevCursorObj = firstRow ? {
+      lastDate: firstRow.date,
+      lastPriority: firstRow.executionPriority,
+      lastRowId: firstRow.rowId,
+    } : null;
+
+    const nextCursorObj = lastRow ? {
+      lastDate: lastRow.date,
+      lastPriority: lastRow.executionPriority,
+      lastRowId: lastRow.rowId,
+    } : null;
 
     return res.status(200).json({
-      data: transactions,
-      nextCursor,
-      prevCursor,
-      hasNext: transactions.length === limit,
-      hasPrev: hasCursor,
+      data: paginated,
+      nextCursor: nextCursorObj,
+      prevCursor: prevCursorObj,
+      hasNext: hasNextPage,
+      hasPrev: hasPrevPage,
     });
 
   } catch (err) {
@@ -330,42 +359,6 @@ export const getPaginatedTransactions = async (req, res) => {
   }
 };
 
-// export const getSecurityNameOptions = async (req, res) => {
-//   try {
-//     const app = req.catalystApp;
-//     if (!app) return res.status(500).json({ message: "Catalyst app missing" });
-//     const zcql = app.zcql();
-
-//     const rawSearch = (req.query.search || "").trim();
-//     const accountCode = (req.query.accountCode || "").trim();
-//     const safe = rawSearch.replace(/'/g, "''").toLowerCase();
-
-//     const clauses = [];
-//     if (accountCode)
-//       clauses.push(`WS_Account_code = '${accountCode.replace(/'/g, "''")}'`);
-//     if (safe) clauses.push(`LOWER(Security_Name) LIKE '%${safe}%'`);
-
-//     const whereSql = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
-//     const table = "Transaction";
-
-//     const rows = await zcql.executeZCQLQuery(`
-//       SELECT DISTINCT Security_Name
-//       FROM ${table}
-//       ${whereSql}
-//       ORDER BY Security_Name ASC
-//     `);
-
-//     const names = rows
-//       .map((r) => (r.Transaction || r).Security_Name)
-//       .filter(Boolean);
-//     return res.status(200).json({ data: names });
-//   } catch (err) {
-//     console.error("[getSecurityNameOptions]", err);
-//     return res
-//       .status(500)
-//       .json({ message: "Failed to fetch security names", error: err.message });
-//   }
-// };
 export const getSecurityNameOptions = async (req, res) => {
   try {
     const app = req.catalystApp;
@@ -377,34 +370,27 @@ export const getSecurityNameOptions = async (req, res) => {
 
     const rawSearch = (req.query.search || "").trim();
     const accountCode = (req.query.accountCode || "").trim();
-    const safe = rawSearch.replace(/'/g, "''").toLowerCase();
+    const safe = escSql(rawSearch);
 
     const clauses = [];
     if (accountCode) {
-      clauses.push(`WS_Account_code = '${accountCode.replace(/'/g, "''")}'`);
+      clauses.push("WS_Account_code = '" + escSql(accountCode) + "'");
     }
     if (safe) {
-      clauses.push(`LOWER(Security_Name) LIKE '%${safe}%'`);
+      clauses.push("Security_Name LIKE '%" + safe + "%'");
     }
 
-    const whereSql = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
-    const table = "Transaction";
+    const whereSql = clauses.length ? "WHERE " + clauses.join(" AND ") : "";
 
-    const limit = 300; // Catalyst max
+    const fetchLimit = 300;
     let offset = 0;
-
     const securityNameSet = new Set();
 
     while (true) {
-      const rows = await zcql.executeZCQLQuery(`
-        SELECT DISTINCT Security_Name
-        FROM ${table}
-        ${whereSql}
-        ORDER BY Security_Name ASC
-        LIMIT ${limit} OFFSET ${offset}
-      `);
+      const query = "SELECT DISTINCT Security_Name FROM Transaction " + whereSql + " ORDER BY Security_Name ASC LIMIT " + offset + ", " + fetchLimit;
+      const rows = await zcql.executeZCQLQuery(query);
 
-      if (!rows.length) break;
+      if (!rows || !rows.length) break;
 
       for (const r of rows) {
         const row = r.Transaction || r;
@@ -413,8 +399,8 @@ export const getSecurityNameOptions = async (req, res) => {
         }
       }
 
-      if (rows.length < limit) break;
-      offset += limit;
+      if (rows.length < fetchLimit) break;
+      offset += fetchLimit;
     }
 
     return res.status(200).json({

@@ -19,7 +19,7 @@ const toFifoTxnRow = (r) => {
     Security_Name: t.Security_Name ?? "",
     Tran_Type: t.Tran_Type,
     QTY: Number(t.QTY) || 0,
-    TRANDATE: t.TRANDATE ?? "",
+    TRANDATE: t.SETDATE ?? t.TRANDATE ?? "",
     NETRATE: Number(t.NETRATE) || 0,
   };
 };
@@ -30,7 +30,7 @@ const fetchTxnRows = async (zcql, tableName, isin, accountCode) => {
 
   while (true) {
     const rows = await zcql.executeZCQLQuery(`
-      SELECT ROWID, Security_Name, Security_code, Tran_Type, QTY, TRANDATE, NETRATE, ISIN, WS_Account_code
+      SELECT ROWID, Security_Name, Security_code, Tran_Type, QTY, SETDATE, NETRATE, ISIN, WS_Account_code
       FROM ${tableName}
       WHERE ISIN='${esc(isin)}' AND WS_Account_code='${esc(accountCode)}'
       ORDER BY ROWID ASC
@@ -162,7 +162,7 @@ const getAllGroups = async (zcql) => {
   return Array.from(groupCounts.values())
     .filter((g) => g.count > 0)
     .sort((a, b) =>
-      (a.accountCode + a.isin).localeCompare(b.accountCode + b.isin)
+      (a.accountCode + a.isin).localeCompare(b.accountCode + b.isin),
     );
 };
 
@@ -179,9 +179,14 @@ const getFinalHoldingsForGroup = async (
   zcql,
   accountCode,
   isin,
-  tempTransactions  // passed in — do NOT re-fetch inside
+  tempTransactions, // passed in — do NOT re-fetch inside
 ) => {
-  const dbTransactions = await fetchTxnRows(zcql, "Transaction", isin, accountCode);
+  const dbTransactions = await fetchTxnRows(
+    zcql,
+    "Transaction",
+    isin,
+    accountCode,
+  );
   const bonuses = await fetchBonusRows(zcql, isin, accountCode);
   const splits = await fetchSplitRows(zcql, isin);
 
@@ -241,6 +246,7 @@ const getCustodianRow = async (zcql, ucc, isin) => {
  *   3. getCustodianRow → single custodian balance for the comparison columns
  *   4. Emit one entry per temp row (all share the same computed Qty_FA / Qty_Cust / Diff)
  */
+
 async function getAllDiffRows(zcql) {
   const groups = await getAllGroups(zcql);
   const data = [];
@@ -253,7 +259,7 @@ async function getAllDiffRows(zcql) {
       zcql,
       "Temp_Transaction",
       g.isin,
-      g.accountCode
+      g.accountCode,
     );
 
     if (!tempTransactions.length) continue;
@@ -263,7 +269,7 @@ async function getAllDiffRows(zcql) {
       zcql,
       g.accountCode,
       g.isin,
-      tempTransactions
+      tempTransactions,
     );
 
     // ── 3. Get custodian balance ──────────────────────────────────────────────
@@ -276,8 +282,8 @@ async function getAllDiffRows(zcql) {
     const Mismatch_Reason = !cust
       ? "Not in custodian file"
       : diff !== 0
-      ? "Qty Mismatch"
-      : "";
+        ? "Qty Mismatch"
+        : "";
 
     // ── 4. One CSV row per uploaded transaction row ───────────────────────────
     for (const row of tempTransactions) {
@@ -335,7 +341,7 @@ function rowsToCsvLines(rows) {
         r.LTPPrice,
       ]
         .map(escapeCsv)
-        .join(",")
+        .join(","),
     ),
   ].join("\n");
 }

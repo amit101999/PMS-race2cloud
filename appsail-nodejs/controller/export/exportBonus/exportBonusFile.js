@@ -67,7 +67,7 @@ export const exportBonusPreviewFile = async (req, res) => {
       return out;
     };
 
-    const txRows = await fetchAll("Transaction", "TRANDATE");
+    const txRows = await fetchAll("Transaction", "SETDATE");
     const bonusRows = await fetchAll("Bonus", "ExDate");
     const splitRows = await fetchAll("Split", "Issue_Date");
 
@@ -86,9 +86,12 @@ export const exportBonusPreviewFile = async (req, res) => {
 
     const splits = splitRows.map(r => r.Split);
 
-    /* ================= FIFO + CSV ================= */
+    /* ================= FIFO + CSV (one per account) ================= */
+    const seenAccounts = new Set();
     for (const h of holdings) {
       const acc = h.Holdings.WS_Account_code;
+      if (seenAccounts.has(acc)) continue;
+      seenAccounts.add(acc);
       const tx = txByAcc[acc] || [];
       if (!tx.length) continue;
 
