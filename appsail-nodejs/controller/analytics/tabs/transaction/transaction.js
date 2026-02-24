@@ -106,10 +106,10 @@ export const getPaginatedTransactions = async (req, res) => {
       const nextDay = new Date(asOnDate);
       nextDay.setDate(nextDay.getDate() + 1);
       const nextDayStr = nextDay.toISOString().split("T")[0];
-      tranParts.push("TRANDATE < '" + nextDayStr + "'");
+      tranParts.push("SETDATE < '" + nextDayStr + "'");
     }
 
-    const tranQuery = "SELECT ROWID, TRANDATE, executionPriority, Tran_Type, Security_Name, Security_code, ISIN, QTY, NETRATE, Net_Amount, STT FROM Transaction WHERE " + tranParts.join(" AND ") + " ORDER BY TRANDATE ASC, executionPriority ASC, ROWID ASC";
+    const tranQuery = "SELECT ROWID, SETDATE, executionPriority, Tran_Type, Security_Name, Security_code, ISIN, QTY, NETRATE, Net_Amount, STT FROM Transaction WHERE " + tranParts.join(" AND ") + " ORDER BY SETDATE ASC, executionPriority ASC, ROWID ASC";
 
     let transactionRaw = [];
     try {
@@ -121,7 +121,7 @@ export const getPaginatedTransactions = async (req, res) => {
       const t = row.Transaction || row;
       return {
         rowId: "TX-" + t.ROWID,
-        date: t.TRANDATE || t.Trandate || null,
+        date: t.SETDATE || t.Setdate || null,
         executionPriority: Number(t.executionPriority || 0) || 0,
         type: t.Tran_Type,
         securityName: t.Security_Name,
@@ -186,7 +186,7 @@ export const getPaginatedTransactions = async (req, res) => {
         return {
           rowId: "DIV-" + d.ROWID,
           date: d.ExDate,
-          executionPriority: -1,
+          executionPriority: 4,
           type: "DIV+",
           securityName: d.Security_Name,
           securityCode: null,
@@ -228,7 +228,7 @@ export const getPaginatedTransactions = async (req, res) => {
         return {
           rowId: "BON-" + b.ROWID,
           date: b.ExDate,
-          executionPriority: -3,
+          executionPriority: 1,
           type: "BONUS",
           securityName: b.SecurityName,
           securityCode: null,
@@ -264,10 +264,12 @@ export const getPaginatedTransactions = async (req, res) => {
 
       splitRows = (splitRaw || []).map(row => {
         const s = row.Split || row;
+        const r1 = Number(s.Ratio1) || 1;
+        const r2 = Number(s.Ratio2) || 1;
         return {
           rowId: "SPL-" + s.ROWID,
           date: s.Issue_Date,
-          executionPriority: -2,
+          executionPriority: 1,
           type: "SPLIT",
           securityName: s.Security_Name,
           securityCode: null,
@@ -275,7 +277,10 @@ export const getPaginatedTransactions = async (req, res) => {
           quantity: 0,
           price: 0,
           totalAmount: 0,
-          stt: 0
+          stt: 0,
+          ratio1: r1,
+          ratio2: r2,
+          ratio: `${r1}:${r2}`
         };
       });
     }
@@ -292,6 +297,38 @@ export const getPaginatedTransactions = async (req, res) => {
       if (a.executionPriority !== b.executionPriority) return a.executionPriority - b.executionPriority;
       return String(a.rowId).localeCompare(String(b.rowId));
     });
+
+    /* ================= RUNNING HOLDING PER ISIN (for SPLIT quantity) ================= */
+    const isSellType = (type) => /^SL\+|SQS|OPO|NF-/.test(String(type || ""));
+    const runningHoldingByIsin = Object.create(null);
+
+    for (const row of allRows) {
+      const isin = row.isin;
+      if (!isin) continue;
+
+      const holding = runningHoldingByIsin[isin] ?? 0;
+
+      switch (row.type) {
+        case "BONUS":
+          runningHoldingByIsin[isin] = holding + (Number(row.quantity) || 0);
+          break;
+        case "SPLIT": {
+          const r1 = Number(row.ratio1) || 1;
+          const r2 = Number(row.ratio2) || 1;
+          const newHolding = Math.floor((holding * r2) / r1);
+          row.quantity = newHolding - holding;
+          runningHoldingByIsin[isin] = newHolding;
+          break;
+        }
+        case "DIV+":
+          break;
+        default:
+          // Transaction: buy adds, sell subtracts
+          const qty = Math.abs(Number(row.quantity) || 0);
+          runningHoldingByIsin[isin] = isSellType(row.type) ? holding - qty : holding + qty;
+          break;
+      }
+    }
 
     /* ================= RUNNING BALANCE ================= */
 

@@ -203,7 +203,7 @@ export const runFifoEngine = (
       });
     }
 
-    /* ========== SPLIT (REPLACEMENT MODEL – FINAL & CORRECT) ========== */
+    /* ========== SPLIT (aggregate rounding so total qty is correct) ========== */
     if (e.type === "SPLIT") {
       if (!buyQueue.length) continue;
 
@@ -214,36 +214,41 @@ export const runFifoEngine = (
       const multiplier = ratio2 / ratio1;
       const splitDate = normalizeDate(e.data.issueDate);
 
-      // 1️⃣ Get active lots before split
       const activeLots = buyQueue.filter((l) => l.isActive);
-
       if (!activeLots.length) continue;
 
-      // 2️⃣ Mark old lots & their BUY rows inactive
+      // Total new quantity at aggregate level (avoids per-lot floor error)
+      const totalOldQty = activeLots.reduce((s, l) => s + l.qty, 0);
+      const totalNewQty = Math.round(totalOldQty * multiplier);
+
+      // Allocate totalNewQty across lots (largest-remainder so sum is exact)
+      const ideal = activeLots.map((lot) => ({
+        lot,
+        floor: Math.floor(lot.qty * multiplier),
+        frac: (lot.qty * multiplier) % 1,
+      }));
+      let allocated = ideal.map((x) => x.floor);
+      let remainder = totalNewQty - allocated.reduce((a, b) => a + b, 0);
+      const byFracDesc = ideal.map((_, i) => i).sort((a, b) => ideal[b].frac - ideal[a].frac);
+      for (let r = 0; r < remainder; r++) allocated[byFracDesc[r]] += 1;
+
+      // Mark old lots inactive
       for (const oldLot of activeLots) {
         oldLot.isActive = false;
-
-        const oldRow = output.find(
-          (r) => r.lotId === oldLot.lotId && r.isActive,
-        );
+        const oldRow = output.find((r) => r.lotId === oldLot.lotId && r.isActive);
         if (oldRow) oldRow.isActive = false;
       }
-
-      // 3️⃣ Reset FIFO
       buyQueue.length = 0;
 
-      // 4️⃣ Running snapshot for ledger rows
       let runningHoldings = 0;
       let runningCost = 0;
 
-      // 5️⃣ Create split lots one by one (ledger-correct)
-      for (const oldLot of activeLots) {
-        // get only the floor values that is the lower numerical values
-        const newQty = Math.floor(oldLot.qty * multiplier);
+      for (let i = 0; i < activeLots.length; i++) {
+        const oldLot = activeLots[i];
+        const newQty = allocated[i];
         const newPrice = oldLot.price / multiplier;
         const newLotId = ++lotCounter;
 
-        // push new active lot
         buyQueue.push({
           lotId: newLotId,
           originalQty: newQty,
@@ -253,43 +258,35 @@ export const runFifoEngine = (
           isActive: true,
         });
 
-        // update running snapshot
         runningHoldings += newQty;
         runningCost += newQty * newPrice;
+        const runningWAP = runningHoldings > 0 ? runningCost / runningHoldings : 0;
 
-        const runningWAP =
-          runningHoldings > 0 ? runningCost / runningHoldings : 0;
-
-        // 6️⃣ Find correct insert position
         const buyRowIndex = output.findIndex((r) => r.lotId === oldLot.lotId);
-
         let insertIndex = output.length;
-        for (let i = buyRowIndex + 1; i < output.length; i++) {
-          if (new Date(output[i].trandate) > new Date(splitDate)) {
-            insertIndex = i;
+        for (let j = buyRowIndex + 1; j < output.length; j++) {
+          if (new Date(output[j].trandate) > new Date(splitDate)) {
+            insertIndex = j;
             break;
           }
         }
 
-        // 7️⃣ Insert SPLIT ledger row
         output.splice(insertIndex, 0, {
           lotId: newLotId,
-          trandate: splitDate, // ✅ record / issue date
+          trandate: splitDate,
           tranType: "SPLIT",
           qty: newQty,
           price: newPrice,
-          netAmount: Number((newQty * newPrice).toFixed(2)), // ✅ qty × price
+          netAmount: Number((newQty * newPrice).toFixed(2)),
           holdings: runningHoldings,
           costOfHoldings: runningCost,
           averageCostOfHoldings: runningWAP,
           profitLoss: null,
           isActive: true,
           isin: e.data.isin,
-          // cashBalance: 0,
         });
       }
 
-      // 8️⃣ Final authoritative holdings
       holdings = runningHoldings;
     }
   }
