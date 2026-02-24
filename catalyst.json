@@ -15,7 +15,8 @@
       "CashCalculation",
       "HoldingdataUpdate",
       "UpdateSecurity_ClientMaster",
-      "ExportDifferentialReport"
+      "ExportDifferentialReport",
+      "DeleteFile"
     ],
     "ignore": [],
     "source": "functions"
