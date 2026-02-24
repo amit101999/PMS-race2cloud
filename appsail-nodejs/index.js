@@ -70,10 +70,9 @@ app.put("/update", async (req, res) => {
   for (let i = 0; i < 25; i++) {
     await zcql.executeZCQLQuery(`
   UPDATE Transaction
-SET executionPriority = 2
-WHERE Tran_Type IN ('BY-', 'IN+', 'IN1', 'TDI', 'DI1', 'OI1', 'OPI', 'OPO', 'E01', 'E10', 'E22', 'E23')
-AND executionPriority=1
-LIMIT 300;
+SET executionPriority = 3
+WHERE Tran_Type IN ('SL+', 'TDO', 'DIO', 'RD0')
+AND executionPriority IS NULL
     `);
     console.log(count);
   }

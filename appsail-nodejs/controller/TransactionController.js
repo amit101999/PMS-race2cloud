@@ -39,9 +39,9 @@ export const getStockTransactionHistory = async (req, res) => {
     });
     const split = await fetchSplitForStock({
       zcql,
-      // securityCode,
       isin,
       tableName: "Split",
+      asOnDate,
     });
 
     const result = runFifoEngine(transactions, bonuses, split, false);
