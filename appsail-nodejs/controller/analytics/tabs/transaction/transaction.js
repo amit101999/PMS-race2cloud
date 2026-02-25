@@ -115,7 +115,7 @@ export const getPaginatedTransactions = async (req, res) => {
     try {
       transactionRaw = await zcql.executeZCQLQuery(tranQuery);
     } catch (e) { console.error("Error fetching transactions", e); }
-    console.log("[DEBUG] Transaction rows:", (transactionRaw || []).length);
+    // console.log("[DEBUG] Transaction rows:", (transactionRaw || []).length);
 
     const transactionRows = (transactionRaw || []).map(row => {
       const t = row.Transaction || row;
@@ -158,7 +158,7 @@ export const getPaginatedTransactions = async (req, res) => {
         console.error("Error fetching ISINs", e);
       }
     }
-    console.log("[DEBUG] ISINs for corp actions:", isinsForCorpActions);
+    // console.log("[DEBUG] ISINs for corp actions:", isinsForCorpActions);
 
     /* ================= FETCH DIVIDENDS ================= */
     // Dividend table columns: SecurityCode, Security_Name, ISIN, Rate, ExDate, ...
@@ -173,13 +173,13 @@ export const getPaginatedTransactions = async (req, res) => {
       }
 
       const divQuery = "SELECT ROWID, Security_Name, ISIN, ExDate, Rate FROM Dividend WHERE " + divParts.join(" AND ") + " ORDER BY ExDate ASC, ROWID ASC";
-      console.log("[DEBUG] Dividend query:", divQuery);
+      // console.log("[DEBUG] Dividend query:", divQuery);
 
       let dividendRaw = [];
       try {
         dividendRaw = await zcql.executeZCQLQuery(divQuery);
       } catch (e) { console.error("Error fetching dividends", e); }
-      console.log("[DEBUG] Dividend rows:", (dividendRaw || []).length);
+      // console.log("[DEBUG] Dividend rows:", (dividendRaw || []).length);
 
       dividendRows = (dividendRaw || []).map(row => {
         const d = row.Dividend || row;
@@ -215,13 +215,13 @@ export const getPaginatedTransactions = async (req, res) => {
       }
 
       const bonusQuery = "SELECT ROWID, SecurityName, ISIN, ExDate, BonusShare FROM Bonus WHERE " + bonusParts.join(" AND ") + " ORDER BY ExDate ASC, ROWID ASC";
-      console.log("[DEBUG] Bonus query:", bonusQuery);
+      // console.log("[DEBUG] Bonus query:", bonusQuery);
 
       let bonusRaw = [];
       try {
         bonusRaw = await zcql.executeZCQLQuery(bonusQuery);
       } catch (e) { console.error("Error fetching bonus", e); }
-      console.log("[DEBUG] Bonus rows:", (bonusRaw || []).length);
+      // console.log("[DEBUG] Bonus rows:", (bonusRaw || []).length);
 
       bonusRows = (bonusRaw || []).map(row => {
         const b = row.Bonus || row;
@@ -254,13 +254,13 @@ export const getPaginatedTransactions = async (req, res) => {
       }
 
       const splitQuery = "SELECT ROWID, Security_Name, ISIN, Issue_Date, Ratio1, Ratio2 FROM Split WHERE " + splitParts.join(" AND ") + " ORDER BY Issue_Date ASC, ROWID ASC";
-      console.log("[DEBUG] Split query:", splitQuery);
+      // console.log("[DEBUG] Split query:", splitQuery);
 
       let splitRaw = [];
       try {
         splitRaw = await zcql.executeZCQLQuery(splitQuery);
       } catch (e) { console.error("Error fetching split", e); }
-      console.log("[DEBUG] Split rows:", (splitRaw || []).length);
+      // console.log("[DEBUG] Split rows:", (splitRaw || []).length);
 
       splitRows = (splitRaw || []).map(row => {
         const s = row.Split || row;
@@ -288,7 +288,7 @@ export const getPaginatedTransactions = async (req, res) => {
     /* ================= MERGE & SORT ================= */
 
     let allRows = [].concat(transactionRows, dividendRows, bonusRows, splitRows);
-    console.log("[DEBUG] Merged total:", allRows.length, "(Tx:", transactionRows.length, "Div:", dividendRows.length, "Bon:", bonusRows.length, "Spl:", splitRows.length, ")");
+    // console.log("[DEBUG] Merged total:", allRows.length, "(Tx:", transactionRows.length, "Div:", dividendRows.length, "Bon:", bonusRows.length, "Spl:", splitRows.length, ")");
 
     allRows.sort((a, b) => {
       const dA = new Date(a.date).getTime();
@@ -414,7 +414,7 @@ export const getSecurityNameOptions = async (req, res) => {
       clauses.push("WS_Account_code = '" + escSql(accountCode) + "'");
     }
     if (safe) {
-      clauses.push("Security_Name LIKE '%" + safe + "%'");
+      clauses.push("Security_Name LIKE '*" + safe + "*'");
     }
 
     const whereSql = clauses.length ? "WHERE " + clauses.join(" AND ") : "";

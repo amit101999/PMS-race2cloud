@@ -4,9 +4,10 @@ const catalyst = require("zcatalyst-sdk-node");
 
 const esc = (v) => String(v ?? "").replace(/'/g, "''");
 
-const isValid = (v) => v != null && v !== "" && String(v).toLowerCase() !== "null";
+const isValid = (v) =>
+  v != null && v !== "" && String(v).toLowerCase() !== "null";
 
-// Tran_Type -> executionPriority (0=Reversal, 1=Corporate, 2=Inflow, 3=Outflow)
+// Tran_Type -> executionPriority
 const EXECUTION_PRIORITY_MAP = {
   "CS-": 0, "NF-": 0,
   "CS+": 1, "CSI": 1, "CUS": 1, "MGE": 1, "MGF": 1, "SQB": 1, "SQS": 1, "PRF": 1,
@@ -27,39 +28,98 @@ module.exports = async (event, context) => {
     const zcql = catalystApp.zcql();
 
     const events = RAW_DATA?.events || [];
+
+    const processedTranTypes = new Set();
+
     for (const ev of events) {
       const d = ev?.data || {};
+
       const wsClientId = d.WS_client_id ?? d.ws_client_id;
       const wsAccountCode = d.WS_Account_code ?? d.ws_account_code;
       const securityCode = d.Security_code ?? d.Security_Code;
       const isin = d.ISIN ?? d.isin;
       const securityName = d.Security_Name ?? d.security_name;
-
-      if (isValid(wsClientId) && isValid(wsAccountCode)) {
-        await zcql.executeZCQLQuery(`
-          INSERT INTO clientIds (WS_client_id, WS_Account_code)
-          VALUES ('${esc(wsClientId)}', '${esc(wsAccountCode)}')
-        `);
-      }
-      if (isValid(securityCode) || isValid(isin)) {
-        await zcql.executeZCQLQuery(`
-          INSERT INTO Security_List (Security_Code, ISIN, Security_Name)
-          VALUES ('${esc(securityCode || "")}', '${esc(isin || "")}', '${esc(securityName || "")}')
-        `);
-      }
-
-      // Update executionPriority on Transaction based on Tran_Type only
       const tranType = d.Tran_Type ?? d.tran_type;
-      const priority = getExecutionPriority(tranType);
-      if (isValid(tranType) && priority !== null) {
-        const typeKey = String(tranType).trim().toUpperCase();
-        await zcql.executeZCQLQuery(`
-          UPDATE Transaction SET executionPriority = ${priority} WHERE Tran_Type = '${esc(typeKey)}'
+
+      /* ---------------- CLIENT INSERT (Avoid Duplicate) ---------------- */
+      if (isValid(wsClientId) && isValid(wsAccountCode)) {
+
+        const existingClient = await zcql.executeZCQLQuery(`
+          SELECT ROWID FROM clientIds
+          WHERE WS_client_id = '${esc(wsClientId)}'
         `);
+
+        if (!existingClient.length) {
+          await zcql.executeZCQLQuery(`
+            INSERT INTO clientIds (WS_client_id, WS_Account_code)
+            VALUES ('${esc(wsClientId)}', '${esc(wsAccountCode)}')
+          `);
+        }
+      }
+
+      /* ---------------- SECURITY INSERT (Avoid Duplicate) ---------------- */
+      if (isValid(securityCode) || isValid(isin)) {
+
+        const existingSecurity = await zcql.executeZCQLQuery(`
+          SELECT ROWID FROM Security_List
+          WHERE Security_Code = '${esc(securityCode || "")}'
+        `);
+
+        if (!existingSecurity.length) {
+          await zcql.executeZCQLQuery(`
+            INSERT INTO Security_List (Security_Code, ISIN, Security_Name)
+            VALUES (
+              '${esc(securityCode || "")}',
+              '${esc(isin || "")}',
+              '${esc(securityName || "")}'
+            )
+          `);
+        }
+      }
+
+      /* ---------------- UPDATE TRANSACTION PRIORITY (NULL Only + 300 Limit Safe) ---------------- */
+      if (isValid(tranType)) {
+
+        const typeKey = String(tranType).trim().toUpperCase();
+        const priority = getExecutionPriority(typeKey);
+
+        if (priority !== null && !processedTranTypes.has(typeKey)) {
+
+          let hasMore = true;
+
+          while (hasMore) {
+
+            // Fetch max 300 NULL priority rows
+            const rows = await zcql.executeZCQLQuery(`
+              SELECT ROWID FROM Transaction
+              WHERE Tran_Type = '${esc(typeKey)}'
+              AND executionPriority IS NULL
+              LIMIT 300
+            `);
+
+            if (!rows || rows.length === 0) {
+              hasMore = false;
+              break;
+            }
+
+            for (const row of rows) {
+              const rowId = row.Transaction.ROWID;
+
+              await zcql.executeZCQLQuery(`
+                UPDATE Transaction
+                SET executionPriority = ${priority}
+                WHERE ROWID = '${rowId}'
+              `);
+            }
+          }
+
+          processedTranTypes.add(typeKey);
+        }
       }
     }
 
     context.closeWithSuccess();
+
   } catch (err) {
     console.error("UpdateSecurity_ClientMaster error:", err);
     context.closeWithFailure();
