@@ -44,7 +44,7 @@ export const exportTransactionPerAccount = async (req, res) => {
       const nextDay = new Date(asOnDate);
       nextDay.setDate(nextDay.getDate() + 1);
       const nextDayStr = nextDay.toISOString().split("T")[0];
-      tranParts.push("SETDATE < '" + nextDayStr + "'");
+      tranParts.push("TRANDATE < '" + nextDayStr + "'");
     }
 
     const BATCH_SIZE = 300;
@@ -53,9 +53,9 @@ export const exportTransactionPerAccount = async (req, res) => {
 
     while (true) {
       const rows = await zcql.executeZCQLQuery(
-        "SELECT ROWID, SETDATE, executionPriority, Tran_Type, Security_Name, Security_code, ISIN, QTY, NETRATE, Net_Amount, STT FROM Transaction WHERE " +
+        "SELECT ROWID, TRANDATE, executionPriority, Tran_Type, Security_Name, Security_code, ISIN, QTY, NETRATE, Net_Amount, STT FROM Transaction WHERE " +
         tranParts.join(" AND ") +
-        " ORDER BY SETDATE ASC, executionPriority ASC, ROWID ASC LIMIT " + offset + ", " + BATCH_SIZE
+        " ORDER BY TRANDATE ASC, executionPriority ASC, ROWID ASC LIMIT " + offset + ", " + BATCH_SIZE
       );
 
       if (!rows || !rows.length) break;
@@ -64,7 +64,7 @@ export const exportTransactionPerAccount = async (req, res) => {
         const t = r.Transaction || r;
         transactionRows.push({
           rowId: "TX-" + t.ROWID,
-          date: t.SETDATE || null,
+          date: t.TRANDATE || t.Trandate || null,
           executionPriority: Number(t.executionPriority || 0) || 0,
           type: t.Tran_Type,
           securityName: t.Security_Name,

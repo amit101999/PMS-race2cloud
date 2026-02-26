@@ -87,14 +87,20 @@ export const runFifoEngine = (
     /* ========== BUY / SELL ========== */
     const t = e.data;
     if (e.type === "TXN") {
-      
       const qty = Math.abs(Number(t.qty) || 0);
-    
-
       if (!qty) continue;
 
       const price =
         Number(t.netrate) || (t.netAmount && qty ? t.netAmount / qty : 0);
+
+        if (
+          String(t.tranType).toUpperCase() === "OPI" &&
+          qty > 0 &&
+          Number(price) === 0 &&
+          Number(t.netAmount) === 0
+        ) {
+          continue;
+        }
 
       /* ---- BUY ---- */
       if (isBuy(t.tranType)) {
