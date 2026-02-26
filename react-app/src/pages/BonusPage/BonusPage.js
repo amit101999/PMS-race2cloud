@@ -386,6 +386,8 @@ function BonusPage() {
                           ratio1: Number(ratio1),
                           ratio2: Number(ratio2),
                           exDate: date,
+                          securityCode,
+                          securityName,
                         }),
                       });
 
