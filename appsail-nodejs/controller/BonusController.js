@@ -273,8 +273,15 @@ export const previewStockBonus = async (req, res) => {
         });
       }
   
-      const { isin, ratio1, ratio2, exDate } = req.body;
-  
+      const {
+        isin,
+        ratio1,
+        ratio2,
+        exDate,
+        securityCode: bodySecurityCode,
+        securityName: bodySecurityName,
+      } = req.body;
+      console.log("complete requset body", req.body);
       const r1 = Number(ratio1);
       const r2 = Number(ratio2);
   
@@ -451,6 +458,8 @@ export const previewStockBonus = async (req, res) => {
           INSERT INTO Bonus
           (
             ISIN,
+            SecurityCode,
+            SecurityName,
             WS_Account_code,
             BonusShare,
             ExDate
@@ -458,6 +467,8 @@ export const previewStockBonus = async (req, res) => {
           VALUES
           (
             '${isin}',
+            '${bodySecurityCode}',
+            '${bodySecurityName}',
             '${accountCode}',
             ${bonusShares},
             '${exDateISO}'
@@ -479,8 +490,8 @@ export const previewStockBonus = async (req, res) => {
     )
     VALUES
     (
-      '${securityCode}',
-      '${securityName}',
+     '${bodySecurityCode}',
+     '${bodySecurityName}',
       '${isin}',
       ${r1},
       ${r2},
