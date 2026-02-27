@@ -169,6 +169,11 @@ const TransactionTab = ({ accountCode, asOnDate }) => {
       ? "-"
       : Number(v).toLocaleString("en-IN", { maximumFractionDigits: 2 });
 
+  const formatQuantity = (v) =>
+    v === null || v === undefined || Number.isNaN(Number(v))
+      ? "-"
+      : Math.floor(Number(v)).toLocaleString("en-IN");
+
   return (
     <Card>
       <div className="transaction-tab-header">
@@ -277,7 +282,7 @@ const TransactionTab = ({ accountCode, asOnDate }) => {
                     <td>{t.type || "-"}</td>
                     <td>{t.securityName || "-"}</td>
                     <td>{t.isin || "-"}</td>
-                    <td className="num">{formatNumber(t.quantity)}</td>
+                    <td className="num">{formatQuantity(t.quantity)}</td>
                     <td className="num">{formatNumber(t.price)}</td>
                     <td className="num">{formatNumber(t.totalAmount)}</td>
                     <td className="num">{formatNumber(t.stt)}</td>

@@ -97,6 +97,12 @@ function TransactionPage({ stock, accountCode, asOnDate, onClose }) {
     return num.toLocaleString("en-IN");
   };
 
+  const formatQuantity = (value) => {
+    const num = Number(value);
+    if (value === null || value === undefined || value === "" || isNaN(num)) return "-";
+    return Math.floor(num).toLocaleString("en-IN");
+  };
+
   const lastTransaction = transactions[transactions.length - 1];
   const currentHolding = lastTransaction?.holdings ?? 0;
   const totalProfitLoss = transactions.reduce(
@@ -118,7 +124,7 @@ function TransactionPage({ stock, accountCode, asOnDate, onClose }) {
         <div className="hd-summary">
           <div className="hd-card purple">
             <p>CURRENT HOLDING</p>
-            <h3>{formatNumber(currentHolding)}</h3>
+            <h3>{formatQuantity(currentHolding)}</h3>
           </div>
 
           <div className="hd-card green">
@@ -194,7 +200,7 @@ function TransactionPage({ stock, accountCode, asOnDate, onClose }) {
                       <td>{tx.tranType || "-"}</td>
                       <td>{tx.isin || "-"}</td>
                       <td>
-                        {formatNumber(tx.qty)}
+                        {formatQuantity(tx.qty)}
                         <span>
                           {tx.tranType === "BY-" && tx.isActive == false
                             ? "Inactive"
@@ -203,7 +209,7 @@ function TransactionPage({ stock, accountCode, asOnDate, onClose }) {
                       </td>
                       <td>{Math.trunc(tx.price * 100) / 100}</td>
                       <td>{formatCurrency(tx.netAmount)}</td>
-                      <td>{formatNumber(tx.holdings)}</td>
+                      <td>{formatQuantity(tx.holdings)}</td>
                       <td>
                         {Math.trunc(tx.averageCostOfHoldings * 100) / 100}
                       </td>

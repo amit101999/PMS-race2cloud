@@ -96,16 +96,33 @@ export const getExportAllJobStatus = async (req, res) => {
     const jobName = `EA_${dateStr}`;
 
     const result = await zcql.executeZCQLQuery(
-      `SELECT status FROM Jobs WHERE jobName = '${jobName}' LIMIT 1`
+      `SELECT ROWID, status, CREATEDTIME FROM Jobs WHERE jobName = '${jobName}' LIMIT 1`
     );
 
     if (!result.length) {
       return res.json({ status: "NOT_STARTED" });
     }
 
+    let status = result[0].Jobs.status;
+    const createdTime = result[0].Jobs.CREATEDTIME;
+
+    const STALE_TIMEOUT_MS = 60 * 60 * 1000; // 1 hour
+    const jobAge = createdTime ? Date.now() - new Date(createdTime).getTime() : 0;
+
+    if ((status === "PENDING" || status === "RUNNING") && jobAge > STALE_TIMEOUT_MS) {
+      try {
+        await zcql.executeZCQLQuery(
+          `UPDATE Jobs SET status = 'ERROR' WHERE jobName = '${jobName}'`
+        );
+      } catch (updateErr) {
+        console.error("Failed to mark stale job as ERROR:", updateErr);
+      }
+      status = "ERROR";
+    }
+
     return res.json({
       jobName,
-      status: result[0].Jobs.status,
+      status,
     });
   } catch (error) {
     console.error("Error fetching export job status:", error);
@@ -128,19 +145,26 @@ export const getExportAllHistory = async (req, res) => {
     let oldJobs = [];
     try {
       newJobs = await zcql.executeZCQLQuery(
-        `SELECT jobName, status FROM Jobs WHERE jobName LIKE 'EA_*' ORDER BY ROWID DESC LIMIT ${limit}`
+        `SELECT jobName, status, CREATEDTIME FROM Jobs WHERE jobName LIKE 'EA_*' ORDER BY ROWID DESC LIMIT ${limit}`
       );
     } catch (e) { console.error("Error fetching new jobs:", e); }
     try {
       oldJobs = await zcql.executeZCQLQuery(
-        `SELECT jobName, status FROM Jobs WHERE jobName LIKE 'EXPORT_ALL_*' ORDER BY ROWID DESC LIMIT ${limit}`
+        `SELECT jobName, status, CREATEDTIME FROM Jobs WHERE jobName LIKE 'EXPORT_ALL_*' ORDER BY ROWID DESC LIMIT ${limit}`
       );
     } catch (e) { console.error("Error fetching old jobs:", e); }
 
     const allResults = [...(newJobs || []), ...(oldJobs || [])];
 
-    const jobs = allResults.map((row) => {
+    const STALE_TIMEOUT_MS = 60 * 60 * 1000; // 1 hour
+    const now = Date.now();
+
+    const jobs = [];
+    for (const row of allResults) {
       const jobName = row.Jobs.jobName;
+      let status = row.Jobs.status;
+      const createdTime = row.Jobs.CREATEDTIME;
+
       let asOnDate;
       if (jobName.startsWith("EA_")) {
         asOnDate = jobName.replace("EA_", "");
@@ -148,12 +172,20 @@ export const getExportAllHistory = async (req, res) => {
         asOnDate = jobName.replace("EXPORT_ALL_", "");
       }
 
-      return {
-        jobName,
-        asOnDate,
-        status: row.Jobs.status,
-      };
-    });
+      const jobAge = createdTime ? now - new Date(createdTime).getTime() : 0;
+      if ((status === "PENDING" || status === "RUNNING") && jobAge > STALE_TIMEOUT_MS) {
+        try {
+          await zcql.executeZCQLQuery(
+            `UPDATE Jobs SET status = 'ERROR' WHERE jobName = '${jobName}'`
+          );
+        } catch (updateErr) {
+          console.error(`Failed to mark stale job ${jobName} as ERROR:`, updateErr);
+        }
+        status = "ERROR";
+      }
+
+      jobs.push({ jobName, asOnDate, status });
+    }
 
     return res.json(jobs);
   } catch (error) {
