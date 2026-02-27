@@ -57,7 +57,7 @@ export const runFifoEngine = (
       if (!ratio1 || !ratio2) continue;
   
       const multiplier = ratio2 / ratio1;
-      holdings = Math.floor(holdings * multiplier);
+      holdings = holdings * multiplier;
     }
   
     /* Safety */

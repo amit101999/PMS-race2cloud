@@ -32,6 +32,12 @@ function HoldingsGrid({ holdings = [], onSelectStock }) {
     });
   };
 
+  const formatQuantity = (value) => {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return "—";
+    return Math.floor(n).toLocaleString("en-IN");
+  };
+
   return (
     <div className="holdings-wrapper">
       <h2 className="holdings-title">Stock Holdings ({holdings.length})</h2>
@@ -66,7 +72,7 @@ function HoldingsGrid({ holdings = [], onSelectStock }) {
                   <td className="security-code">{item.securityCode || "—"}</td>
                   <td className="security-code">{item.isin || "—"}</td>
                   <td className="holding-value">
-                    {formatNumber(item.currentHolding)}
+                    {formatQuantity(item.currentHolding)}
                     {isSold && <span className="sold-badge">FULLY SOLD</span>}
                   </td>
                   <td className="security-code">

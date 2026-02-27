@@ -318,8 +318,8 @@ export const getPaginatedTransactions = async (req, res) => {
         case "SPLIT": {
           const r1 = Number(row.ratio1) || 1;
           const r2 = Number(row.ratio2) || 1;
-          const newHolding = Math.floor((holding * r2) / r1);
-          row.quantity = newHolding - holding;
+          const newHolding = (holding * r2) / r1;
+          row.quantity = newHolding;
           runningHoldingByIsin[isin] = newHolding;
           break;
         }

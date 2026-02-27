@@ -274,9 +274,9 @@ function BonusPage() {
                       <tr key={row.accountCode}>
                         <td>{row.accountCode}</td>
                         <td>{row.isin}</td>
-                        <td>{row.currentHolding}</td>
+                        <td>{Math.floor(Number(row.currentHolding) || 0)}</td>
                         <td>{row.bonusShares}</td>
-                        <td>{row.newHolding}</td>
+                        <td>{Math.floor(Number(row.newHolding) || 0)}</td>
                         <td style={{ color: "#166534", fontWeight: 600 }}>
                           +{row.delta}
                         </td>

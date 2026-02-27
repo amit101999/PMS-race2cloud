@@ -83,7 +83,7 @@ export const runHoldingQuantityEngine = (
         if (!r1 || !r2) continue;
   
         const multiplier = r2 / r1;
-        holdings = Math.floor(holdings * multiplier);
+        holdings = holdings * multiplier;
   
         output.push({
           date: e.date,

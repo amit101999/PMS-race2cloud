@@ -144,15 +144,16 @@ function HoldingsTab() {
   useEffect(() => {
     if (exportJobs.length === 0) return;
 
+    const terminalStatuses = ["COMPLETED", "FAILED", "ERROR"];
     const hasRunningJobs = exportJobs.some(
-      (j) => j.status !== "COMPLETED" && j.status !== "FAILED"
+      (j) => !terminalStatuses.includes(j.status)
     );
     if (!hasRunningJobs) return;
 
     const interval = setInterval(async () => {
       const updated = await Promise.all(
         exportJobs.map(async (job) => {
-          if (job.status === "COMPLETED" || job.status === "FAILED") {
+          if (terminalStatuses.includes(job.status)) {
             return job;
           }
 
@@ -330,7 +331,7 @@ function HoldingsTab() {
                     <span
                       className={`export-status ${job.status === "COMPLETED"
                           ? "completed"
-                          : job.status === "FAILED"
+                          : job.status === "FAILED" || job.status === "ERROR"
                             ? "failed"
                             : "pending"
                         }`}

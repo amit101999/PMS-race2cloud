@@ -71,7 +71,7 @@ function runFifoEngine(transactions, bonuses, splits, returnHoldingsOnly = false
     if (!ratio1 || !ratio2) continue;
 
     const multiplier = ratio2 / ratio1;
-    holdings = Math.floor(holdings * multiplier);
+    holdings = holdings * multiplier;
   }
 
   // Holdings can never go below zero
