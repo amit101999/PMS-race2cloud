@@ -19,6 +19,7 @@
       "DeleteFile",
       "DailyClientHoldingTransaction",
       "CalcullateAllTransactionHoldingOnce",
+      "Cal_CB_Per_TNX"
       "UpdateBonusTable"
     ],
     "ignore": [],

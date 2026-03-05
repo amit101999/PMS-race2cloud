@@ -409,7 +409,43 @@ export const getBonusApplyStatus = async (req, res) => {
       } catch (updateErr) {
         console.error("Failed to mark stale bonus job as ERROR:", updateErr);
       }
-      status = "ERROR";
+      // test
+ if (inserted > 0) {
+  await zcql.executeZCQLQuery(`
+    INSERT INTO Bonus_Record
+    (
+      SecurityCode,
+      SecurityName,
+      ISIN,
+      Ratio1,
+      Ratio2,
+      ExDate
+    )
+    VALUES
+    (
+     '${bodySecurityCode}',
+     '${bodySecurityName}',
+      '${isin}',
+      ${r1},
+      ${r2},
+      '${exDateISO}'
+    )
+  `);
+ }
+      return res.json({
+        success: true,
+        affectedAccounts: inserted,
+        message:
+          inserted === 0
+            ? "No accounts required bonus application"
+            : "Bonus applied successfully",
+      });
+    } catch (error) {
+      console.error("Apply bonus error:", error);
+      return res.status(500).json({
+        success: false,
+        message: error.message,
+      });
     }
 
     return res.json({ success: true, jobName, status });
