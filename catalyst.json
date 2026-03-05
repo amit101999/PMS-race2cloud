@@ -18,7 +18,8 @@
       "ExportDifferentialReport",
       "DeleteFile",
       "DailyClientHoldingTransaction",
-      "CalcullateAllTransactionHoldingOnce"
+      "CalcullateAllTransactionHoldingOnce",
+      "UpdateBonusTable"
     ],
     "ignore": [],
     "source": "functions"

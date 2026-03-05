@@ -23,6 +23,8 @@ function BonusPage() {
   const [applying, setApplying] = useState(false);
   const [applySuccess, setApplySuccess] = useState(false);
   const [success, setSuccess] = useState(false);
+  const [applyJobName, setApplyJobName] = useState(null);
+  const [applyStatus, setApplyStatus] = useState(null);
 
   const [previewData, setPreviewData] = useState([]);
   const [step, setStep] = useState("form");
@@ -77,6 +79,63 @@ function BonusPage() {
     document.addEventListener("mousedown", handler);
     return () => document.removeEventListener("mousedown", handler);
   }, []);
+
+  /* ===========================
+     POLL BONUS APPLY JOB STATUS
+     =========================== */
+  useEffect(() => {
+    if (!applyJobName || !applying) return;
+
+    const terminalStatuses = ["COMPLETED", "FAILED", "ERROR"];
+    if (terminalStatuses.includes(applyStatus)) return;
+
+    const interval = setInterval(async () => {
+      try {
+        const res = await fetch(
+          `${BASE_URL}/bonus/apply-status?jobName=${encodeURIComponent(applyJobName)}`,
+          { credentials: "include" }
+        );
+        const data = await res.json();
+
+        if (!data.success) return;
+
+        setApplyStatus(data.status);
+
+        if (data.status === "COMPLETED") {
+          clearInterval(interval);
+          setApplySuccess(true);
+
+          setTimeout(() => {
+            setIsin("");
+            setSearchQuery("");
+            setSecurityCode("");
+            setSecurityName("");
+            setRatio1("");
+            setRatio2("");
+            setDate("");
+            setPreviewData([]);
+            setStep("form");
+            setExportDownloadUrl("");
+            setApplying(false);
+            setApplySuccess(false);
+            setApplyJobName(null);
+            setApplyStatus(null);
+            setSuccess(true);
+          }, 800);
+        } else if (data.status === "FAILED" || data.status === "ERROR") {
+          clearInterval(interval);
+          setError("Bonus application failed. Please try again.");
+          setApplying(false);
+          setApplyJobName(null);
+          setApplyStatus(null);
+        }
+      } catch {
+        // ignore polling errors
+      }
+    }, 10000);
+
+    return () => clearInterval(interval);
+  }, [applyJobName, applying, applyStatus]);
 
   const filteredSecurities = securities.filter(
     (s) =>
@@ -376,6 +435,7 @@ function BonusPage() {
                   onClick={async () => {
                     setApplying(true);
                     setError(null);
+                    setApplyStatus("SUBMITTING");
 
                     try {
                       const res = await fetch(`${BASE_URL}/bonus/apply`, {
@@ -396,38 +456,24 @@ function BonusPage() {
                       if (!data.success) {
                         setError(data.message || "Failed to apply bonus");
                         setApplying(false);
+                        setApplyStatus(null);
                         return;
                       }
 
-                      // ✅ SUCCESS
-                      setApplySuccess(true);
-
-                      setTimeout(() => {
-                        // Clear form
-                        setIsin("");
-                        setSearchQuery("");
-                        setSecurityCode("");
-                        setSecurityName("");
-                        setRatio1("");
-                        setRatio2("");
-                        setDate("");
-
-                        // Clear preview and export link
-                        setPreviewData([]);
-                        setStep("form");
-                        setExportDownloadUrl("");
-
-                        setApplying(false);
-                        setApplySuccess(false);
-                        setSuccess(true);
-                      }, 800);
+                      setApplyJobName(data.jobName);
+                      setApplyStatus(data.status);
                     } catch (err) {
                       setError("Something went wrong");
                       setApplying(false);
+                      setApplyStatus(null);
                     }
                   }}
                 >
-                  {applying ? "Applying Bonus..." : "Confirm & Apply Bonus"}
+                  {applying
+                    ? applyStatus === "COMPLETED"
+                      ? "Bonus Applied!"
+                      : "Applying Bonus..."
+                    : "Confirm & Apply Bonus"}
                 </button>
               </div>
             </>
