@@ -111,12 +111,24 @@ export const getPaginatedTransactions = async (req, res) => {
     }
 
     // const tranQuery = "SELECT ROWID, SETDATE, executionPriority, Tran_Type, Security_Name, Security_code, ISIN, QTY, NETRATE, Net_Amount, STT FROM Transaction WHERE " + tranParts.join(" AND ") + " ORDER BY SETDATE ASC, executionPriority ASC, ROWID ASC";
+    // const tranQuery = "SELECT ROWID, TRANDATE, executionPriority, Tran_Type, Security_Name, Security_code, ISIN, QTY, NETRATE, Net_Amount, STT FROM Transaction WHERE " + tranParts.join(" AND ") + " ORDER BY TRANDATE ASC, executionPriority ASC, ROWID ASC";
+    const BATCH_SIZE = 300;  // or 270 to match other controllers; stay within ZCQL limit
     const tranQuery = "SELECT ROWID, TRANDATE, executionPriority, Tran_Type, Security_Name, Security_code, ISIN, QTY, NETRATE, Net_Amount, STT FROM Transaction WHERE " + tranParts.join(" AND ") + " ORDER BY TRANDATE ASC, executionPriority ASC, ROWID ASC";
 
     let transactionRaw = [];
+    let txnOffset = 0;
     try {
-      transactionRaw = await zcql.executeZCQLQuery(tranQuery);
-    } catch (e) { console.error("Error fetching transactions", e); }
+      while (true) {
+        const batchQuery = tranQuery + ` LIMIT ${BATCH_SIZE} OFFSET ${txnOffset}`;
+        const batch = await zcql.executeZCQLQuery(batchQuery);
+        if (!batch || batch.length === 0) break;
+        transactionRaw.push(...batch);
+        if (batch.length < BATCH_SIZE) break;
+        txnOffset += BATCH_SIZE;
+      }
+    } catch (e) {
+      console.error("Error fetching transactions", e);
+    }
     // console.log("[DEBUG] Transaction rows:", (transactionRaw || []).length);
 
     const transactionRows = (transactionRaw || []).map(row => {

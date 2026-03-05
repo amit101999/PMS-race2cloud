@@ -18,7 +18,8 @@
       "ExportDifferentialReport",
       "DeleteFile",
       "DailyClientHoldingTransaction",
-      "CalcullateAllTransactionHoldingOnce"
+      "CalcullateAllTransactionHoldingOnce",
+      "Cal_CB_Per_TNX"
     ],
     "ignore": [],
     "source": "functions"

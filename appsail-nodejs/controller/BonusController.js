@@ -477,6 +477,7 @@ export const previewStockBonus = async (req, res) => {
   
         inserted++;
       }
+      // test
  if (inserted > 0) {
   await zcql.executeZCQLQuery(`
     INSERT INTO Bonus_Record
