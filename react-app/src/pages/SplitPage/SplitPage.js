@@ -339,8 +339,8 @@ function SplitPage() {
                     {paginatedPreview.map((row, idx) => (
                       <tr key={(page - 1) * PAGE_SIZE + idx}>
                         <td>{row.accountCode}</td>
-                        <td>{row.currentHolding}</td>
-                        <td>{row.newHolding}</td>
+                        <td>{Math.floor(Number(row.currentHolding) || 0)}</td>
+                        <td>{Math.floor(Number(row.newHolding) || 0)}</td>
                         <td style={{ color: "#166534", fontWeight: 600 }}>
                           {row.delta > 0 ? `+${row.delta}` : row.delta}
                         </td>

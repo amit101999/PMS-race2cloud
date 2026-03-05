@@ -42,6 +42,11 @@ module.exports = async (jobRequest, context) => {
 
     /* ---------------- CREATE STREAM ---------------- */
     const csvStream = new PassThrough();
+    let streamError = null;
+    csvStream.on("error", (err) => {
+      streamError = err;
+      console.error("CSV stream error:", err);
+    });
 
     const uploadPromise = bucket.putObject(fileName, csvStream, {
       overwrite: true,
@@ -55,69 +60,74 @@ module.exports = async (jobRequest, context) => {
 
     /* ---------------- FETCH & WRITE DATA ---------------- */
     let count = 0;
+    let errorCount = 0;
+    const sharedPriceMap = {};
 
     for (const client of clientIds) {
       const accountCode = client.clientIds.WS_Account_code;
 
-      console.log(
-        `Processing client ${count + 1}/${clientIds.length} : ${accountCode}`,
-      );
-
-      const rows = await calculateHoldingsSummary({
-        catalystApp,
-        accountCode,
-        asOnDate,
-      });
-
-      if (!Array.isArray(rows) || !rows.length) {
-        count++;
-        continue;
-      }
-
-      // Delete old holdings for this account + date to prevent duplicates on re-export
       try {
-        await zcql.executeZCQLQuery(
-          `DELETE FROM Holdings WHERE WS_Account_code = '${accountCode}' AND Holding_Date = '${asOnDate}'`
+        console.log(
+          `Processing client ${count + 1}/${clientIds.length} : ${accountCode}`,
         );
-      } catch (delErr) {
-        console.error(`Error deleting old holdings for ${accountCode}:`, delErr);
-      }
 
-      for (const row of rows) {
-        const line = [
+        const rows = await calculateHoldingsSummary({
+          catalystApp,
           accountCode,
-          row.stockName ?? "",
-          row.securityCode ?? "",
-          row.isin ?? "",
-          row.currentHolding ?? "",
-          row.avgPrice ?? "",
-          row.holdingValue ?? "",
-          row.lastPrice ?? "",
-          row.marketValue ?? "",
-        ]
-          .map((v) => `"${String(v).replace(/"/g, '""')}"`)
-          .join(",");
+          asOnDate,
+          sharedPriceMap,
+        });
 
-        await zcql.executeZCQLQuery(
-          `INSERT INTO Holdings (WS_Account_code, ISIN, QTY, Holding_Date) VALUES ('${accountCode}', '${(row.isin || "").replace(/'/g, "''")}', '${row.currentHolding}', '${asOnDate}')`
-        );
+        if (!Array.isArray(rows) || !rows.length) {
+          count++;
+          continue;
+        }
 
-        csvStream.write(line + "\n");
+        for (const row of rows) {
+          const line = [
+            accountCode,
+            row.stockName ?? "",
+            row.securityCode ?? "",
+            row.isin ?? "",
+            row.currentHolding ?? "",
+            row.avgPrice ?? "",
+            row.holdingValue ?? "",
+            row.lastPrice ?? "",
+            row.marketValue ?? "",
+          ]
+            .map((v) => `"${String(v).replace(/"/g, '""')}"`)
+            .join(",");
+
+          csvStream.write(line + "\n");
+        }
+
+        count++;
+      } catch (clientErr) {
+        errorCount++;
+        console.error(`Error processing client ${accountCode} (${errorCount} errors so far):`, clientErr);
+        count++;
       }
-
-      count++;
     }
+
+    console.log(`Processed ${count} clients, ${errorCount} had errors`);
 
     /* ---------------- CLOSE STREAM ---------------- */
     csvStream.end();
     await uploadPromise;
 
+    if (streamError) {
+      throw new Error(`Stream error during upload: ${streamError.message}`);
+    }
+
     console.log("Export job completed successfully");
 
-    // Mark job as completed
-    await zcql.executeZCQLQuery(
-      `UPDATE Jobs SET status = 'COMPLETED' WHERE jobName = '${jobName}'`
-    );
+    try {
+      await zcql.executeZCQLQuery(
+        `UPDATE Jobs SET status = 'COMPLETED' WHERE jobName = '${jobName}'`
+      );
+    } catch (statusErr) {
+      console.error("Failed to mark job as COMPLETED (file was uploaded successfully):", statusErr);
+    }
     context.closeWithSuccess();
   } catch (error) {
     console.error("Export job failed:", error);

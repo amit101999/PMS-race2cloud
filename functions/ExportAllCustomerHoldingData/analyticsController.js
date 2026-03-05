@@ -191,6 +191,7 @@ exports.calculateHoldingsSummary = async ({
   catalystApp,
   accountCode,
   asOnDate,
+  sharedPriceMap,
 }) => {
   const zcql = catalystApp.zcql();
   const batchLimit = 250;
@@ -218,27 +219,32 @@ exports.calculateHoldingsSummary = async ({
   const seenSplitRowIds = new Set();
 
   while (true) {
-    const rows = await zcql.executeZCQLQuery(`
-      SELECT Security_Name, Security_code, Tran_Type, QTY, SETDATE,
-             NETRATE, Net_Amount, ISIN, ROWID
-      FROM Transaction
-      WHERE WS_Account_code = '${accountCode}'
-      ${txnDateCondition}
-      ORDER BY ROWID ASC
-      LIMIT ${batchLimit} OFFSET ${offset}
-    `);
+    try {
+      const rows = await zcql.executeZCQLQuery(`
+        SELECT Security_Name, Security_code, Tran_Type, QTY, SETDATE,
+               NETRATE, Net_Amount, ISIN, ROWID
+        FROM Transaction
+        WHERE WS_Account_code = '${accountCode}'
+        ${txnDateCondition}
+        ORDER BY ROWID ASC
+        LIMIT ${batchLimit} OFFSET ${offset}
+      `);
 
-    if (!rows.length) break;
-    for (const r of rows) {
-      const t = r.Transaction || r;
-      if (seenTxnRowIds.has(t.ROWID)) continue;
-      seenTxnRowIds.add(t.ROWID);
-      transactions.push(t);
-      if (t.ISIN) uniqueISINs.add(t.ISIN);
+      if (!rows.length) break;
+      for (const r of rows) {
+        const t = r.Transaction || r;
+        if (seenTxnRowIds.has(t.ROWID)) continue;
+        seenTxnRowIds.add(t.ROWID);
+        transactions.push(t);
+        if (t.ISIN) uniqueISINs.add(t.ISIN);
+      }
+
+      if (rows.length < batchLimit) break;
+      offset += batchLimit;
+    } catch (err) {
+      console.error(`Error fetching transactions for ${accountCode} at offset ${offset}:`, err);
+      break;
     }
-
-    if (rows.length < batchLimit) break;
-    offset += batchLimit;
   }
 
   /* ================= FETCH BONUS ================= */
@@ -246,31 +252,31 @@ exports.calculateHoldingsSummary = async ({
   offset = 0;
 
   while (true) {
-    const rows = await zcql.executeZCQLQuery(`
-      SELECT SecurityName, BonusShare, ExDate, ISIN, ROWID
-      FROM Bonus
-      WHERE WS_Account_code = '${accountCode}'
-      ${bonusDateCondition}
-      ORDER BY  ROWID ASC
-      LIMIT ${batchLimit} OFFSET ${offset}
-    `);
+    try {
+      const rows = await zcql.executeZCQLQuery(`
+        SELECT SecurityName, BonusShare, ExDate, ISIN, ROWID
+        FROM Bonus
+        WHERE WS_Account_code = '${accountCode}'
+        ${bonusDateCondition}
+        ORDER BY ROWID ASC
+        LIMIT ${batchLimit} OFFSET ${offset}
+      `);
 
-    if (!rows.length) break;
-    for (const r of rows) {
-      const b = r.Bonus || r;
+      if (!rows.length) break;
+      for (const r of rows) {
+        const b = r.Bonus || r;
+        if (!b || !b.ROWID) continue;
+        if (seenBonusRowIds.has(b.ROWID)) continue;
+        seenBonusRowIds.add(b.ROWID);
+        bonuses.push(b);
+      }
 
-      // safety guard
-      if (!b || !b.ROWID) continue;
-
-      // duplicate protection
-      if (seenBonusRowIds.has(b.ROWID)) continue;
-
-      seenBonusRowIds.add(b.ROWID);
-      bonuses.push(b);
+      if (rows.length < batchLimit) break;
+      offset += batchLimit;
+    } catch (err) {
+      console.error(`Error fetching bonuses for ${accountCode} at offset ${offset}:`, err);
+      break;
     }
-
-    if (rows.length < batchLimit) break;
-    offset += batchLimit;
   }
 
   /* ================= FETCH SPLITS ================= */
@@ -282,32 +288,36 @@ exports.calculateHoldingsSummary = async ({
     const inClause = isinList.map((i) => `'${i}'`).join(",");
 
     while (true) {
-      const rows = await zcql.executeZCQLQuery(`
-        SELECT Issue_Date, Ratio1, Ratio2, ISIN, ROWID
-        FROM Split
-        WHERE ISIN IN (${inClause})
-        ${splitDateCondition}
-        ORDER BY  ROWID ASC
-        LIMIT ${batchLimit} OFFSET ${offset}
-      `);
+      try {
+        const rows = await zcql.executeZCQLQuery(`
+          SELECT Issue_Date, Ratio1, Ratio2, ISIN, ROWID
+          FROM Split
+          WHERE ISIN IN (${inClause})
+          ${splitDateCondition}
+          ORDER BY ROWID ASC
+          LIMIT ${batchLimit} OFFSET ${offset}
+        `);
 
-      if (!rows.length) break;
-      for (const r of rows) {
-        const s = r.Split || r;
-        if (!s || !s.ROWID) continue;
-        // duplicate protection
-        if (seenSplitRowIds.has(s.ROWID)) continue;
-        seenSplitRowIds.add(s.ROWID);
-        splits.push({
-          issueDate: s.Issue_Date,
-          ratio1: s.Ratio1,
-          ratio2: s.Ratio2,
-          isin: s.ISIN,
-        });
+        if (!rows.length) break;
+        for (const r of rows) {
+          const s = r.Split || r;
+          if (!s || !s.ROWID) continue;
+          if (seenSplitRowIds.has(s.ROWID)) continue;
+          seenSplitRowIds.add(s.ROWID);
+          splits.push({
+            issueDate: s.Issue_Date,
+            ratio1: s.Ratio1,
+            ratio2: s.Ratio2,
+            isin: s.ISIN,
+          });
+        }
+
+        if (rows.length < batchLimit) break;
+        offset += batchLimit;
+      } catch (err) {
+        console.error(`Error fetching splits for ${accountCode} at offset ${offset}:`, err);
+        break;
       }
-
-      if (rows.length < batchLimit) break;
-      offset += batchLimit;
     }
   }
 
@@ -350,23 +360,31 @@ exports.calculateHoldingsSummary = async ({
   const todayStr = new Date().toISOString().split("T")[0];
   const priceDate = asOnDate && asOnDate < todayStr ? asOnDate : todayStr;
 
-  const priceMap = {};
+  const priceMap = sharedPriceMap || {};
 
   if (isinList.length) {
-    const inClause = isinList.map((i) => `'${i}'`).join(",");
+    const missingIsins = isinList.filter((isin) => !(isin in priceMap));
 
-    const priceRows = await zcql.executeZCQLQuery(`
-      SELECT ISIN, ClsPric, TradDt
-      FROM Bhav_Copy
-      WHERE ISIN IN (${inClause})
-        AND TradDt <= '${priceDate}'
-      ORDER BY ISIN ASC, TradDt DESC
-    `);
+    for (const isin of missingIsins) {
+      try {
+        const priceRows = await zcql.executeZCQLQuery(`
+          SELECT ISIN, ClsPric, TradDt
+          FROM Bhav_Copy
+          WHERE ISIN = '${isin}'
+            AND TradDt <= '${priceDate}'
+          ORDER BY TradDt DESC
+          LIMIT 1
+        `);
 
-    for (const r of priceRows) {
-      const row = r.Bhav_Copy || r;
-      if (!priceMap[row.ISIN]) {
-        priceMap[row.ISIN] = row.ClsPric || 0;
+        if (priceRows.length) {
+          const row = priceRows[0].Bhav_Copy || priceRows[0];
+          priceMap[isin] = row.ClsPric || 0;
+        } else {
+          priceMap[isin] = 0;
+        }
+      } catch (err) {
+        console.error(`Error fetching price for ISIN ${isin}:`, err);
+        priceMap[isin] = 0;
       }
     }
   }
@@ -374,8 +392,6 @@ exports.calculateHoldingsSummary = async ({
   /* ================= FINAL FIFO ================= */
 
   const result = [];
-
-  console.log("split are : ", splitByISIN);
 
   for (const key of Object.keys(holdingsMap)) {
     const fifo = runFifoEngine(
@@ -401,5 +417,5 @@ exports.calculateHoldingsSummary = async ({
     });
   }
 
-  return result.sort((a, b) => a.stockName.localeCompare(b.stockName));
+  return result.sort((a, b) => (a.stockName || "").localeCompare(b.stockName || ""));
 };

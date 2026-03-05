@@ -207,7 +207,7 @@ export const runFifoEngine = (
       });
     }
 
-    /* ========== SPLIT (aggregate rounding so total qty is correct) ========== */
+    /* ========== SPLIT (decimal quantities: store exact e.g. 22.5) ========== */
     if (e.type === "SPLIT") {
       if (!buyQueue.length) continue;
 
@@ -220,21 +220,6 @@ export const runFifoEngine = (
 
       const activeLots = buyQueue.filter((l) => l.isActive);
       if (!activeLots.length) continue;
-
-      // Total new quantity at aggregate level (avoids per-lot floor error)
-      const totalOldQty = activeLots.reduce((s, l) => s + l.qty, 0);
-      const totalNewQty = Math.round(totalOldQty * multiplier);
-
-      // Allocate totalNewQty across lots (largest-remainder so sum is exact)
-      const ideal = activeLots.map((lot) => ({
-        lot,
-        floor: Math.floor(lot.qty * multiplier),
-        frac: (lot.qty * multiplier) % 1,
-      }));
-      let allocated = ideal.map((x) => x.floor);
-      let remainder = totalNewQty - allocated.reduce((a, b) => a + b, 0);
-      const byFracDesc = ideal.map((_, i) => i).sort((a, b) => ideal[b].frac - ideal[a].frac);
-      for (let r = 0; r < remainder; r++) allocated[byFracDesc[r]] += 1;
 
       // Mark old lots inactive
       for (const oldLot of activeLots) {
@@ -249,7 +234,7 @@ export const runFifoEngine = (
 
       for (let i = 0; i < activeLots.length; i++) {
         const oldLot = activeLots[i];
-        const newQty = allocated[i];
+        const newQty = oldLot.qty * multiplier;
         const newPrice = oldLot.price / multiplier;
         const newLotId = ++lotCounter;
 

@@ -131,7 +131,7 @@ function calculateRunningQuantity(transactions, bonuses, splits) {
     } else if (e.type === "SPLIT") {
       const r1 = Number(e.data.ratio1 ?? e.data.Ratio1) || 0;
       const r2 = Number(e.data.ratio2 ?? e.data.Ratio2) || 0;
-      if (r1 && r2) holdings = Math.floor(holdings * (r2 / r1));
+      if (r1 && r2) holdings = holdings * (r2 / r1);
       if (holdings < 0) holdings = 0;
       output.push({
         trandate: e.date,

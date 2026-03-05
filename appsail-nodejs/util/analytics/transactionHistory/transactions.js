@@ -22,36 +22,45 @@ export const fetchStockTransactions = async ({
   `;
 
   const rows = [];
+  const seenRowIds = new Set();
   let offset = 0;
   const limit = 250;
 
   while (true) {
-    const query = `
-      SELECT SETDATE, Tran_Type, Security_code, QTY, NETRATE, Net_Amount, ISIN
-      FROM Transaction
-      ${where}
-      ORDER BY SETDATE ASC, ROWID ASC
-      LIMIT ${limit} OFFSET ${offset}
-    `;
+    try {
+      const query = `
+        SELECT SETDATE, Tran_Type, Security_code, QTY, NETRATE, Net_Amount, ISIN, ROWID
+        FROM Transaction
+        ${where}
+        ORDER BY SETDATE ASC, ROWID ASC
+        LIMIT ${limit} OFFSET ${offset}
+      `;
 
-    const batch = await zcql.executeZCQLQuery(query);
-    if (!batch || batch.length === 0) break;
+      const batch = await zcql.executeZCQLQuery(query);
+      if (!batch || batch.length === 0) break;
 
-    rows.push(...batch);
-    if (batch.length < limit) break;
-    offset += limit;
+      for (const row of batch) {
+        const r = row.Transaction || row[tableName] || row;
+        if (r.ROWID && seenRowIds.has(r.ROWID)) continue;
+        if (r.ROWID) seenRowIds.add(r.ROWID);
+        rows.push(r);
+      }
+
+      if (batch.length < limit) break;
+      offset += limit;
+    } catch (err) {
+      console.error(`Error fetching transactions for ${accountCode}/${isin} at offset ${offset}:`, err);
+      break;
+    }
   }
 
-  return rows.map((row) => {
-    const r = row.Transaction || row[tableName] || row;
-    return {
-      trandate: r.SETDATE,
-      tranType: r.Tran_Type,
-      securityCode: r.Security_code,
-      qty: Number(r.QTY) || 0,
-      netrate: Number(r.NETRATE) || 0,
-      netAmount: Number(r.Net_Amount) || 0,
-      isin: r.ISIN || "",
-    };
-  });
+  return rows.map((r) => ({
+    trandate: r.SETDATE,
+    tranType: r.Tran_Type,
+    securityCode: r.Security_code,
+    qty: Number(r.QTY) || 0,
+    netrate: Number(r.NETRATE) || 0,
+    netAmount: Number(r.Net_Amount) || 0,
+    isin: r.ISIN || "",
+  }));
 };

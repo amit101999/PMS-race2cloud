@@ -14,6 +14,8 @@ function HoldingsTab() {
   const [exportJobs, setExportJobs] = useState([]);
 
   const dropdownRef = useRef(null);
+  const exportJobsRef = useRef(exportJobs);
+  exportJobsRef.current = exportJobs;
   const { clientOptions } = useAccountCodes();
 
   /* ---------------- FILTERED OPTIONS ---------------- */
@@ -91,6 +93,7 @@ function HoldingsTab() {
       );
 
       const data = await response.json();
+      if (!response.ok) throw new Error(data.message || "Failed to start export");
 
       // Update or add the job in the list
       setExportJobs((prev) => {
@@ -142,17 +145,20 @@ function HoldingsTab() {
 
   /* ===================== SAFE POLLING (ONLY RUNNING JOBS) ===================== */
   useEffect(() => {
-    if (exportJobs.length === 0) return;
-
-    const hasRunningJobs = exportJobs.some(
-      (j) => j.status !== "COMPLETED" && j.status !== "FAILED"
-    );
-    if (!hasRunningJobs) return;
+    const terminalStatuses = ["COMPLETED", "FAILED", "ERROR"];
 
     const interval = setInterval(async () => {
+      const currentJobs = exportJobsRef.current;
+      if (!currentJobs.length) return;
+
+      const hasRunningJobs = currentJobs.some(
+        (j) => !terminalStatuses.includes(j.status)
+      );
+      if (!hasRunningJobs) return;
+
       const updated = await Promise.all(
-        exportJobs.map(async (job) => {
-          if (job.status === "COMPLETED" || job.status === "FAILED") {
+        currentJobs.map(async (job) => {
+          if (terminalStatuses.includes(job.status)) {
             return job;
           }
 
@@ -178,7 +184,7 @@ function HoldingsTab() {
     }, 15000);
 
     return () => clearInterval(interval);
-  }, [exportJobs]);
+  }, []);
 
   /* ===================== DOWNLOAD EXPORT ===================== */
   const handleExportAllDownload = async (date) => {
@@ -330,7 +336,7 @@ function HoldingsTab() {
                     <span
                       className={`export-status ${job.status === "COMPLETED"
                           ? "completed"
-                          : job.status === "FAILED"
+                          : job.status === "FAILED" || job.status === "ERROR"
                             ? "failed"
                             : "pending"
                         }`}
