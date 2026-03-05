@@ -42,6 +42,11 @@ module.exports = async (jobRequest, context) => {
 
     /* ---------------- CREATE STREAM ---------------- */
     const csvStream = new PassThrough();
+    let streamError = null;
+    csvStream.on("error", (err) => {
+      streamError = err;
+      console.error("CSV stream error:", err);
+    });
 
     const uploadPromise = bucket.putObject(fileName, csvStream, {
       overwrite: true,
@@ -56,6 +61,7 @@ module.exports = async (jobRequest, context) => {
     /* ---------------- FETCH & WRITE DATA ---------------- */
     let count = 0;
     let errorCount = 0;
+    const sharedPriceMap = {};
 
     for (const client of clientIds) {
       const accountCode = client.clientIds.WS_Account_code;
@@ -69,19 +75,12 @@ module.exports = async (jobRequest, context) => {
           catalystApp,
           accountCode,
           asOnDate,
+          sharedPriceMap,
         });
 
         if (!Array.isArray(rows) || !rows.length) {
           count++;
           continue;
-        }
-
-        try {
-          await zcql.executeZCQLQuery(
-            `DELETE FROM Holdings WHERE WS_Account_code = '${accountCode}' AND Holding_Date = '${asOnDate}'`
-          );
-        } catch (delErr) {
-          console.error(`Error deleting old holdings for ${accountCode}:`, delErr);
         }
 
         for (const row of rows) {
@@ -98,14 +97,6 @@ module.exports = async (jobRequest, context) => {
           ]
             .map((v) => `"${String(v).replace(/"/g, '""')}"`)
             .join(",");
-
-          try {
-            await zcql.executeZCQLQuery(
-              `INSERT INTO Holdings (WS_Account_code, ISIN, QTY, Holding_Date) VALUES ('${accountCode}', '${(row.isin || "").replace(/'/g, "''")}', '${row.currentHolding}', '${asOnDate}')`
-            );
-          } catch (insertErr) {
-            console.error(`Error inserting holding for ${accountCode} / ${row.isin}:`, insertErr);
-          }
 
           csvStream.write(line + "\n");
         }
@@ -124,12 +115,19 @@ module.exports = async (jobRequest, context) => {
     csvStream.end();
     await uploadPromise;
 
+    if (streamError) {
+      throw new Error(`Stream error during upload: ${streamError.message}`);
+    }
+
     console.log("Export job completed successfully");
 
-    // Mark job as completed
-    await zcql.executeZCQLQuery(
-      `UPDATE Jobs SET status = 'COMPLETED' WHERE jobName = '${jobName}'`
-    );
+    try {
+      await zcql.executeZCQLQuery(
+        `UPDATE Jobs SET status = 'COMPLETED' WHERE jobName = '${jobName}'`
+      );
+    } catch (statusErr) {
+      console.error("Failed to mark job as COMPLETED (file was uploaded successfully):", statusErr);
+    }
     context.closeWithSuccess();
   } catch (error) {
     console.error("Export job failed:", error);

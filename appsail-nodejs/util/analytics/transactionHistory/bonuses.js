@@ -16,41 +16,45 @@ export const fetchBonusesForStock = async ({
     dateCondition = ` AND ExDate < '${nextDayStr}'`;
   }
   const rows = [];
+  const seenRowIds = new Set();
   let offset = 0;
   const limit = 250;
 
   while (true) {
-    const query = `
-      SELECT SecurityCode, SecurityName, ExDate, BonusShare, ISIN
-      FROM Bonus
-      WHERE WS_Account_code = '${accountCode.replace(/'/g, "''")}'
-      AND ISIN = '${isin.replace(/'/g, "''")}'
-      ${dateCondition}
-      ORDER BY ExDate ASC, ROWID ASC
-      LIMIT ${limit} OFFSET ${offset}
-    `;
+    try {
+      const query = `
+        SELECT SecurityCode, SecurityName, ExDate, BonusShare, ISIN, ROWID
+        FROM Bonus
+        WHERE WS_Account_code = '${accountCode.replace(/'/g, "''")}'
+        AND ISIN = '${isin.replace(/'/g, "''")}'
+        ${dateCondition}
+        ORDER BY ExDate ASC, ROWID ASC
+        LIMIT ${limit} OFFSET ${offset}
+      `;
 
-    const batch = await zcql.executeZCQLQuery(query);
-    if (!batch || batch.length === 0) break;
+      const batch = await zcql.executeZCQLQuery(query);
+      if (!batch || batch.length === 0) break;
 
-    rows.push(...batch);
-    if (batch.length < limit) break;
-    offset += limit;
+      for (const row of batch) {
+        const b = row.Bonus || row;
+        if (b.ROWID && seenRowIds.has(b.ROWID)) continue;
+        if (b.ROWID) seenRowIds.add(b.ROWID);
+        rows.push(b);
+      }
+
+      if (batch.length < limit) break;
+      offset += limit;
+    } catch (err) {
+      console.error(`Error fetching bonuses for ${accountCode}/${isin} at offset ${offset}:`, err);
+      break;
+    }
   }
 
-  return rows.map((row) => {
-    const b = row.Bonus || row;
-    return {
-      // securityCode: b.SecurityCode,
-      // securityName: b.SecurityName, // display only
-      // exDate: b.ExDate,
-      // bonusShare: Number(b.BonusShare) || 0,
-      // isin: b.ISIN || "",
-      securityCode: b.SecurityCode,
-      securityName: b.SecurityName,
-      exDate: b.ExDate,
-      bonusShare: Number(b.BonusShare) || 0,
-      isin: b.ISIN || "",
-    };
-  });
+  return rows.map((b) => ({
+    securityCode: b.SecurityCode,
+    securityName: b.SecurityName,
+    exDate: b.ExDate,
+    bonusShare: Number(b.BonusShare) || 0,
+    isin: b.ISIN || "",
+  }));
 };

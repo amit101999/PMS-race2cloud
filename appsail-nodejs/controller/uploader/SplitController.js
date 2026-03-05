@@ -190,6 +190,7 @@ export const previewStockSplit = async (req, res) => {
        STEP 2: FETCH TRANSACTIONS ≤ ISSUE DATE
        ====================================================== */
     const txRows = [];
+    const seenTxnRowIds = new Set();
     let txOffset = 0;
 
     while (true) {
@@ -203,7 +204,13 @@ export const previewStockSplit = async (req, res) => {
       `);
 
       if (!batch || batch.length === 0) break;
-      txRows.push(...batch);
+      for (const row of batch) {
+        const t = row.Transaction || row;
+        const rowId = t.ROWID;
+        if (rowId != null && seenTxnRowIds.has(rowId)) continue;
+        if (rowId != null) seenTxnRowIds.add(rowId);
+        txRows.push(row);
+      }
       if (batch.length < ZCQL_ROW_LIMIT) break;
       txOffset += ZCQL_ROW_LIMIT;
     }
@@ -269,7 +276,15 @@ export const previewStockSplit = async (req, res) => {
       bonusByAccount[b.WS_Account_code].push(b);
     });
 
-    const splits = splitRows.map((r) => r.Split);
+    const splits = splitRows.map((r) => {
+      const s = r.Split;
+      return {
+        issueDate: s.Issue_Date,
+        ratio1: Number(s.Ratio1) || 0,
+        ratio2: Number(s.Ratio2) || 0,
+        isin: s.ISIN,
+      };
+    });
 
     /* ======================================================
        STEP 6: FIFO PREVIEW
@@ -291,8 +306,7 @@ export const previewStockSplit = async (req, res) => {
       // Apply split directly on quantity
       const splitMultiplier = r2 / r1;
 
-      // Choose rounding rule (MOST brokers use floor)
-      const newHolding = Math.floor(fifoBefore.holdings * splitMultiplier);
+      const newHolding = fifoBefore.holdings * splitMultiplier;
 
       preview.push({
         isin,

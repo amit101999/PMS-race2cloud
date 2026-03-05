@@ -1,3 +1,10 @@
+const parseCatalystTime = (ct) => {
+  if (!ct) return 0;
+  const fixed = ct.replace(/:(\d{3})$/, ".$1");
+  const ms = new Date(fixed).getTime();
+  return isNaN(ms) ? 0 : ms;
+};
+
 export const exportAllData = async (req, res) => {
   try {
     const catalystApp = req.catalystApp;
@@ -21,9 +28,8 @@ export const exportAllData = async (req, res) => {
       const oldRowId = existing[0].Jobs.ROWID;
       const createdTime = existing[0].Jobs.CREATEDTIME;
 
-      // Check if job is stale (stuck in PENDING/RUNNING for over 30 minutes)
-      const STALE_TIMEOUT_MS = 30 * 60 * 1000;
-      const jobAge = createdTime ? Date.now() - new Date(createdTime).getTime() : 0;
+      const STALE_TIMEOUT_MS = 60 * 60 * 1000;
+      const jobAge = Date.now() - parseCatalystTime(createdTime);
       const isStale = jobAge > STALE_TIMEOUT_MS;
 
       // If still running AND not stale, don't allow re-export
@@ -106,8 +112,8 @@ export const getExportAllJobStatus = async (req, res) => {
     let status = result[0].Jobs.status;
     const createdTime = result[0].Jobs.CREATEDTIME;
 
-    const STALE_TIMEOUT_MS = 60 * 60 * 1000; // 1 hour
-    const jobAge = createdTime ? Date.now() - new Date(createdTime).getTime() : 0;
+    const STALE_TIMEOUT_MS = 60 * 60 * 1000;
+    const jobAge = Date.now() - parseCatalystTime(createdTime);
 
     if ((status === "PENDING" || status === "RUNNING") && jobAge > STALE_TIMEOUT_MS) {
       try {
@@ -156,7 +162,7 @@ export const getExportAllHistory = async (req, res) => {
 
     const allResults = [...(newJobs || []), ...(oldJobs || [])];
 
-    const STALE_TIMEOUT_MS = 60 * 60 * 1000; // 1 hour
+    const STALE_TIMEOUT_MS = 60 * 60 * 1000;
     const now = Date.now();
 
     const jobs = [];
@@ -172,7 +178,7 @@ export const getExportAllHistory = async (req, res) => {
         asOnDate = jobName.replace("EXPORT_ALL_", "");
       }
 
-      const jobAge = createdTime ? now - new Date(createdTime).getTime() : 0;
+      const jobAge = now - parseCatalystTime(createdTime);
       if ((status === "PENDING" || status === "RUNNING") && jobAge > STALE_TIMEOUT_MS) {
         try {
           await zcql.executeZCQLQuery(
