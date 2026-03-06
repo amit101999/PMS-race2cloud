@@ -93,7 +93,7 @@ export const runFifoEngine = (
 
       if (
         String(t.tranType).toUpperCase() === "OPI" &&
-        qty > 0 &&
+        qty == 1 &&
         Number(price) === 0 &&
         Number(t.netAmount) === 0
       ) {
