@@ -1,4 +1,4 @@
-const { PassThrough } = require("stream");
+const { Readable } = require("stream");
 const { getAllAccountCodesFromDatabase } = require("./allAccountCodes.js");
 const { calculateHoldingsSummary } = require("./analyticsController.js");
 const catalyst = require("zcatalyst-sdk-node");
@@ -23,7 +23,6 @@ module.exports = async (jobRequest, context) => {
 
     const tableName = "clientIds";
 
-    // Insert job status as PENDING
     await zcql.executeZCQLQuery(
       `INSERT INTO Jobs (jobName, status) VALUES ('${jobName}', 'PENDING')`
     );
@@ -40,25 +39,12 @@ module.exports = async (jobRequest, context) => {
       return;
     }
 
-    /* ---------------- CREATE STREAM ---------------- */
-    const csvStream = new PassThrough();
-    let streamError = null;
-    csvStream.on("error", (err) => {
-      streamError = err;
-      console.error("CSV stream error:", err);
-    });
-
-    const uploadPromise = bucket.putObject(fileName, csvStream, {
-      overwrite: true,
-      contentType: "text/csv",
-    });
-
-    /* ---------------- CSV HEADER ---------------- */
-    csvStream.write(
-      "ACCOUNT_CODE,SECURITY_NAME,SECURITY_CODE,ISIN,HOLDING,WAP,HOLDING_VALUE,LAST_PRICE,MARKET_VALUE\n",
+    /* ---------------- BUILD CSV IN MEMORY ---------------- */
+    const csvLines = [];
+    csvLines.push(
+      "ACCOUNT_CODE,SECURITY_NAME,SECURITY_CODE,ISIN,HOLDING,WAP,HOLDING_VALUE,LAST_PRICE,MARKET_VALUE\n"
     );
 
-    /* ---------------- FETCH & WRITE DATA ---------------- */
     let count = 0;
     let errorCount = 0;
     const sharedPriceMap = {};
@@ -68,7 +54,7 @@ module.exports = async (jobRequest, context) => {
 
       try {
         console.log(
-          `Processing client ${count + 1}/${clientIds.length} : ${accountCode}`,
+          `Processing client ${count + 1}/${clientIds.length} : ${accountCode}`
         );
 
         const rows = await calculateHoldingsSummary({
@@ -98,26 +84,34 @@ module.exports = async (jobRequest, context) => {
             .map((v) => `"${String(v).replace(/"/g, '""')}"`)
             .join(",");
 
-          csvStream.write(line + "\n");
+          csvLines.push(line + "\n");
         }
 
         count++;
       } catch (clientErr) {
         errorCount++;
-        console.error(`Error processing client ${accountCode} (${errorCount} errors so far):`, clientErr);
+        console.error(
+          `Error processing client ${accountCode} (${errorCount} errors so far):`,
+          clientErr
+        );
         count++;
       }
     }
 
     console.log(`Processed ${count} clients, ${errorCount} had errors`);
 
-    /* ---------------- CLOSE STREAM ---------------- */
-    csvStream.end();
-    await uploadPromise;
+    /* ---------------- UPLOAD COMPLETE CSV ---------------- */
+    const csvContent = csvLines.join("");
+    const readableStream = Readable.from([csvContent]);
 
-    if (streamError) {
-      throw new Error(`Stream error during upload: ${streamError.message}`);
-    }
+    console.log(
+      `Uploading CSV (${csvLines.length} lines, ~${Math.round(csvContent.length / 1024)} KB)`
+    );
+
+    await bucket.putObject(fileName, readableStream, {
+      overwrite: true,
+      contentType: "text/csv",
+    });
 
     console.log("Export job completed successfully");
 
@@ -126,13 +120,15 @@ module.exports = async (jobRequest, context) => {
         `UPDATE Jobs SET status = 'COMPLETED' WHERE jobName = '${jobName}'`
       );
     } catch (statusErr) {
-      console.error("Failed to mark job as COMPLETED (file was uploaded successfully):", statusErr);
+      console.error(
+        "Failed to mark job as COMPLETED (file was uploaded successfully):",
+        statusErr
+      );
     }
     context.closeWithSuccess();
   } catch (error) {
     console.error("Export job failed:", error);
 
-    // Mark job as failed
     try {
       await zcql.executeZCQLQuery(
         `UPDATE Jobs SET status = 'FAILED' WHERE jobName = '${jobName}'`

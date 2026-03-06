@@ -1,10 +1,3 @@
-/**
- * Running quantity backfill: for each account and ISIN, compute holding after each
- * event (transaction, bonus, split) and insert into Holding_Quantity.
- * No FIFO, no cost/WAP/P&L — quantity only.
- */
-
-const { getAllAccountCodesFromDatabase } = require("./accountCodes");
 const { fetchStockTransactions } = require("./transactions");
 const { fetchBonusesForStock } = require("./Bonuses");
 const { fetchSplitForStock } = require("./split");
@@ -28,43 +21,47 @@ function normalizeDate(d) {
   return `${fullYear}-${String(m).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
 }
 
-/**
- * Get distinct ISINs for an account from Transaction table.
- */
-async function getIsinsForAccount(zcql, accountCode) {
-  const seen = new Set();
-  const list = [];
-  let offset = 0;
-  const limit = 250;
+function getIsinsForAccount(zcql, accountCode) {
+  return (async () => {
+    const seen = new Set();
+    const list = [];
+    let offset = 0;
+    const limit = 250;
 
-  while (true) {
-    const q = `
-      SELECT ISIN FROM Transaction
-      WHERE WS_Account_code = '${esc(accountCode)}'
-      ORDER BY ISIN ASC
-      LIMIT ${limit} OFFSET ${offset}
-    `;
-    const rows = await zcql.executeZCQLQuery(q);
-    if (!rows || rows.length === 0) break;
+    while (true) {
+      try {
+        const q = `
+          SELECT ISIN FROM Transaction
+          WHERE WS_Account_code = '${esc(accountCode)}'
+          ORDER BY ISIN ASC
+          LIMIT ${limit} OFFSET ${offset}
+        `;
+        const rows = await zcql.executeZCQLQuery(q);
+        if (!rows || rows.length === 0) break;
 
-    for (const row of rows) {
-      const r = row.Transaction || row;
-      const isin = (r.ISIN || "").toString().trim();
-      if (isin && !seen.has(isin)) {
-        seen.add(isin);
-        list.push(isin);
+        for (const row of rows) {
+          const r = row.Transaction || row;
+          const isin = (r.ISIN || "").toString().trim();
+          if (isin && !seen.has(isin)) {
+            seen.add(isin);
+            list.push(isin);
+          }
+        }
+        if (rows.length < limit) break;
+        offset += rows.length;
+      } catch (err) {
+        console.error(`Error fetching ISINs for ${accountCode} at offset ${offset}:`, err);
+        break;
       }
     }
-    if (rows.length < limit) break;
-    offset += rows.length;
-  }
 
-  return list;
+    return list;
+  })();
 }
 
 /**
  * Merge transactions, bonuses, splits; sort by date; compute running holdings.
- * Returns array of { trandate, tranType, qty, holdings }.
+ * Consistent with the Analytics holding page FIFO engine (quantity-only version).
  */
 function calculateRunningQuantity(transactions, bonuses, splits) {
   const events = [];
@@ -105,7 +102,20 @@ function calculateRunningQuantity(transactions, bonuses, splits) {
     if (e.type === "TXN") {
       const t = e.data;
       const qty = Math.abs(Number(t.qty ?? t.QTY) || 0);
+      if (!qty) continue;
+
       const tranType = t.tranType ?? t.Tran_Type ?? "";
+      const price = Number(t.netrate ?? t.NETRATE) || 0;
+      const netAmount = Number(t.netAmount ?? t.Net_Amount) || 0;
+
+      if (
+        String(tranType).toUpperCase() === "OPI" &&
+        qty ==1  &&
+        price === 0 &&
+        netAmount === 0
+      ) {
+        continue;
+      }
 
       if (isBuy(tranType)) holdings += qty;
       if (isSell(tranType)) {
@@ -121,6 +131,7 @@ function calculateRunningQuantity(transactions, bonuses, splits) {
       });
     } else if (e.type === "BONUS") {
       const qty = Number(e.data.bonusShare ?? e.data.BonusShare) || 0;
+      if (!qty) continue;
       holdings += qty;
       output.push({
         trandate: e.date,
@@ -145,51 +156,72 @@ function calculateRunningQuantity(transactions, bonuses, splits) {
   return output;
 }
 
-/**
- * Single entry: loop accounts → loop ISINs → fetch → compute running quantity → insert.
- */
 async function runQuantityBackfill(zcql) {
-  const accounts = await getAllAccountCodesFromDatabase(zcql, "clientIds");
-  if (!accounts || accounts.length === 0) {
-    return;
-  }
+  const accounts = [{ clientIds: { WS_Account_code: "AYAN002" } }];
 
   for (const client of accounts) {
     const accountCode = client.clientIds.WS_Account_code;
     if (!accountCode) continue;
 
+    console.log(`[Backfill] Processing account: ${accountCode}`);
+
     const isins = await getIsinsForAccount(zcql, accountCode);
+    console.log(`[Backfill] Found ${isins.length} ISINs for ${accountCode}`);
+
+    try {
+      await zcql.executeZCQLQuery(
+        `DELETE FROM Daily_Holding_Quantity WHERE WS_Account_code = '${esc(accountCode)}'`
+      );
+      console.log(`[Backfill] Deleted old rows for ${accountCode}`);
+    } catch (delErr) {
+      console.error(`[Backfill] Error deleting old rows for ${accountCode}:`, delErr);
+    }
+
+    let totalInserted = 0;
+    let totalErrors = 0;
 
     for (const isin of isins) {
-      const transactions = await fetchStockTransactions({
-        zcql,
-        tableName: "Transaction",
-        accountCode,
-        isin,
-      });
-      const bonuses = await fetchBonusesForStock({
-        zcql,
-        accountCode,
-        isin,
-      });
-      const splits = await fetchSplitForStock({
-        zcql,
-        isin,
-        tableName: "Split",
-      });
+      try {
+        const transactions = await fetchStockTransactions({
+          zcql,
+          tableName: "Transaction",
+          accountCode,
+          isin,
+        });
+        const bonuses = await fetchBonusesForStock({
+          zcql,
+          accountCode,
+          isin,
+        });
+        const splits = await fetchSplitForStock({
+          zcql,
+          isin,
+          tableName: "Split",
+        });
 
-      const ledger = calculateRunningQuantity(transactions, bonuses, splits);
+        const ledger = calculateRunningQuantity(transactions, bonuses, splits);
 
-      for (const row of ledger) {
-        const insertQuery = `
-          INSERT INTO Daily_Holding_Quantity
-          ( WS_Account_code, ISIN, TRANDATE, Tran_Type, QTY, HOLDINGS )
-          VALUES
-          ( '${esc(accountCode)}', '${esc(isin)}', '${esc(row.trandate)}', '${esc(row.tranType)}', ${Number(row.qty) || 0}, ${Number(row.holdings) || 0} )
-        `;
-        await zcql.executeZCQLQuery(insertQuery);
+        for (const row of ledger) {
+          try {
+            await zcql.executeZCQLQuery(`
+              INSERT INTO Daily_Holding_Quantity
+              ( WS_Account_code, ISIN, TRANDATE, Tran_Type, QTY, HOLDINGS )
+              VALUES
+              ( '${esc(accountCode)}', '${esc(isin)}', '${esc(row.trandate)}', '${esc(row.tranType)}', ${Number(row.qty) || 0}, ${Number(row.holdings) || 0} )
+            `);
+            totalInserted++;
+          } catch (insertErr) {
+            totalErrors++;
+            console.error(`[Backfill] Insert error ${accountCode}/${isin}/${row.trandate}:`, insertErr);
+          }
+        }
+      } catch (isinErr) {
+        totalErrors++;
+        console.error(`[Backfill] Error processing ISIN ${isin} for ${accountCode}:`, isinErr);
       }
     }
+
+    console.log(`[Backfill] ${accountCode} done. Inserted: ${totalInserted}, Errors: ${totalErrors}`);
   }
 }
 
