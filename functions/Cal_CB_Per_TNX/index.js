@@ -131,8 +131,134 @@ module.exports = async (jobRequest, context) => {
       };
     }, "Bonus");
 
-    // Merge and sort by impact date; same date: inflows first, then outflows; bonus included
-    const allEvents = [...inflowRows, ...outflowRows, ...bonusRows];
+    // Query 4: Split — collect ISINs from all rows, query Split table, then look up holdings
+    const uniqueISINs = new Set();
+    for (const row of [...inflowRows, ...outflowRows, ...bonusRows]) {
+      if (row.isin) uniqueISINs.add(row.isin);
+    }
+
+    const splitRows = [];
+    if (uniqueISINs.size > 0) {
+      const isinList = [...uniqueISINs].map((i) => `'${esc(i)}'`).join(", ");
+      const splitQueryBase = `
+        SELECT ROWID, Security_Code, Security_Name, Ratio1, Ratio2, Issue_Date, ISIN
+        FROM Split
+        WHERE ISIN IN (${isinList})
+          AND Issue_Date >= '${START_DATE}'
+          AND Issue_Date <= '${END_DATE}'
+        ORDER BY Issue_Date ASC, ROWID ASC
+      `;
+      const rawSplits = await fetchBatched(zcql, splitQueryBase, (s) => ({
+        rowId: s.ROWID,
+        securityName: s.Security_Name || "",
+        ratio1: Number(s.Ratio1) || 0,
+        ratio2: Number(s.Ratio2) || 0,
+        issueDate: (s.Issue_Date || "").toString().slice(0, 10),
+        isin: String(s.ISIN ?? "").trim() || "",
+      }), "Split");
+
+      for (const sp of rawSplits) {
+        if (!sp.ratio1 || !sp.ratio2 || !sp.isin || !sp.issueDate) continue;
+
+        const holdingQuery = `
+          SELECT HOLDINGS
+          FROM Daily_Holding_Quantity
+          WHERE WS_Account_code = '${esc(ACCOUNT_CODE)}'
+            AND ISIN = '${esc(sp.isin)}'
+            AND TRANDATE <= '${sp.issueDate}'
+          ORDER BY TRANDATE DESC
+          LIMIT 1
+        `;
+        const holdingResult = await zcql.executeZCQLQuery(holdingQuery);
+        const holdingRow = holdingResult?.[0]?.Daily_Holding_Quantity || holdingResult?.[0];
+        const holdings = Number(holdingRow?.HOLDINGS) || 0;
+
+        if (holdings <= 0) continue;
+
+        const qty = Math.round(holdings * (sp.ratio2 / sp.ratio1));
+
+        splitRows.push({
+          rowId: sp.rowId,
+          trandate: sp.issueDate,
+          setdate: sp.issueDate,
+          executionPriority: 600,
+          type: "SPLIT",
+          securityName: sp.securityName,
+          netAmount: 0,
+          impactDate: sp.issueDate,
+          isInflow: true,
+          qty,
+          clientCode: "",
+          price: 0,
+          isin: sp.isin,
+          stt: 0,
+        });
+      }
+    }
+
+    // Query 5: Dividend — verify holdings on ExDate, use PaymentDate as impact date, cash inflow = HOLDINGS × Rate
+    const dividendRows = [];
+    if (uniqueISINs.size > 0) {
+      const isinList = [...uniqueISINs].map((i) => `'${esc(i)}'`).join(", ");
+      const dividendQueryBase = `
+        SELECT ROWID, SecurityCode, Security_Name, ISIN, Rate, ExDate, PaymentDate, Dividend_Type
+        FROM Dividend
+        WHERE ISIN IN (${isinList})
+          AND PaymentDate >= '${START_DATE}'
+          AND PaymentDate <= '${END_DATE}'
+        ORDER BY PaymentDate ASC, ROWID ASC
+      `;
+      const rawDividends = await fetchBatched(zcql, dividendQueryBase, (d) => ({
+        rowId: d.ROWID,
+        securityName: d.Security_Name || "",
+        rate: Number(d.Rate) || 0,
+        exDate: (d.ExDate || "").toString().slice(0, 10),
+        paymentDate: (d.PaymentDate || "").toString().slice(0, 10),
+        isin: String(d.ISIN ?? "").trim() || "",
+        dividendType: d.Dividend_Type || "",
+      }), "Dividend");
+
+      for (const div of rawDividends) {
+        if (!div.rate || !div.isin || !div.exDate || !div.paymentDate) continue;
+
+        const holdingQuery = `
+          SELECT HOLDINGS
+          FROM Daily_Holding_Quantity
+          WHERE WS_Account_code = '${esc(ACCOUNT_CODE)}'
+            AND ISIN = '${esc(div.isin)}'
+            AND TRANDATE <= '${div.exDate}'
+          ORDER BY TRANDATE DESC
+          LIMIT 1
+        `;
+        const holdingResult = await zcql.executeZCQLQuery(holdingQuery);
+        const holdingRow = holdingResult?.[0]?.Daily_Holding_Quantity || holdingResult?.[0];
+        const holdings = Number(holdingRow?.HOLDINGS) || 0;
+
+        if (holdings <= 0) continue;
+
+        const totalAmount = Math.round(holdings * div.rate * 100) / 100;
+
+        dividendRows.push({
+          rowId: div.rowId,
+          trandate: div.paymentDate,
+          setdate: div.paymentDate,
+          executionPriority: 550,
+          type: "DIVIDEND",
+          securityName: div.securityName,
+          netAmount: totalAmount,
+          impactDate: div.paymentDate,
+          isInflow: true,
+          qty: holdings,
+          clientCode: "",
+          price: div.rate,
+          isin: div.isin,
+          stt: 0,
+        });
+      }
+    }
+
+    // Merge and sort by impact date; same date: inflows first, then outflows; bonus/split/dividend included
+    const allEvents = [...inflowRows, ...outflowRows, ...bonusRows, ...splitRows, ...dividendRows];
     allEvents.sort((a, b) => {
       const dA = new Date(a.impactDate).getTime();
       const dB = new Date(b.impactDate).getTime();
