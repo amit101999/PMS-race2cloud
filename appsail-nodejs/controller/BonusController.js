@@ -82,41 +82,40 @@ export const previewStockBonus = async (req, res) => {
       });
     }
 
-    /* Normalize Ex-Date (start of day) */
     const exDateObj = new Date(exDate);
     exDateObj.setHours(0, 0, 0, 0);
     const exDateISO = exDateObj.toISOString().split("T")[0];
 
-    
     const zcql = req.catalystApp.zcql();
 
     /* ======================================================
-       STEP 1: FETCH ELIGIBLE ACCOUNTS
+       STEP 1: FIND ACCOUNTS WITH TRANSACTIONS FOR THIS ISIN
        ====================================================== */
-    const holdingRows = [];
+    const accountSet = new Set();
     let holdOffset = 0;
 
     while (true) {
       const batch = await zcql.executeZCQLQuery(`
-        SELECT WS_Account_code, QTY
-        FROM Holdings
-        WHERE ISIN='${isin}' AND QTY > 0
-        ORDER BY ROWID ASC
+        SELECT WS_Account_code
+        FROM Transaction
+        WHERE ISIN='${isin}'
         LIMIT ${ZCQL_ROW_LIMIT} OFFSET ${holdOffset}
       `);
 
       if (!batch || batch.length === 0) break;
-      holdingRows.push(...batch);
+      batch.forEach((r) => accountSet.add(r.Transaction.WS_Account_code));
       if (batch.length < ZCQL_ROW_LIMIT) break;
       holdOffset += ZCQL_ROW_LIMIT;
     }
 
-    if (!holdingRows.length) {
+    const eligibleAccounts = Array.from(accountSet);
+
+    if (!eligibleAccounts.length) {
       return res.json({ success: true, data: [] });
     }
 
     /* ======================================================
-       STEP 2: FETCH TRANSACTIONS (<= EX-DATE) – dedupe by ROWID
+       STEP 2: FETCH TRANSACTIONS (<= EX-DATE)
        ====================================================== */
     const txRows = [];
     const seenTxnRowIds = new Set();
@@ -219,12 +218,8 @@ export const previewStockBonus = async (req, res) => {
        STEP 6: FIFO PREVIEW (one per account)
        ====================================================== */
     const preview = [];
-    const seenPreview = new Set();
 
-    for (const h of holdingRows) {
-      const accountCode = h.Holdings.WS_Account_code;
-      if (seenPreview.has(accountCode)) continue;
-      seenPreview.add(accountCode);
+    for (const accountCode of eligibleAccounts) {
       const transactions = txByAccount[accountCode] || [];
       if (!transactions.length) continue;
 
@@ -233,10 +228,7 @@ export const previewStockBonus = async (req, res) => {
       const fifoBefore = runFifoEngine(transactions, bonuses, splits, true);
       if (!fifoBefore || fifoBefore.holdings <= 0) continue;
 
-      const bonusShares = Math.floor(
-        (fifoBefore.holdings * r1) / r2
-      );
-      
+      const bonusShares = Math.floor((fifoBefore.holdings * r1) / r2);
       if (bonusShares <= 0) continue;
 
       const previewBonus = {
@@ -382,7 +374,6 @@ export const getBonusApplyStatus = async (req, res) => {
     const catalystApp = req.catalystApp;
     const zcql = catalystApp.zcql();
 
-  
     const { jobName } = req.query;
     if (!jobName) {
       return res.status(400).json({ success: false, message: "jobName is required" });

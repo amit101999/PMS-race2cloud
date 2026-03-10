@@ -20,7 +20,10 @@
       "DailyClientHoldingTransaction",
       "CalcullateAllTransactionHoldingOnce",
       "Cal_CB_Per_TNX",
-      "UpdateBonusTable"
+      "UpdateBonusTable",
+      "ExportDividendAccounts",
+      "ExportSplitAccountHolding",
+      "ExportBonusAccountholding"
     ],
     "ignore": [],
     "source": "functions"

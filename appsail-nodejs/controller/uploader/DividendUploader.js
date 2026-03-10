@@ -72,48 +72,50 @@ export const getAllSecuritiesISINs = async (req, res) => {
           message: "Invalid ISIN, record date or payment date",
         });
       }
-      /* Normalize Record Date (used for calculation – holdings as on this date) */
+
       const recordDateObj = new Date(recordDate);
       recordDateObj.setHours(0, 0, 0, 0);
       const recordDateISO = recordDateObj.toISOString().split("T")[0];
-      /* Normalize Payment Date (start of day) */
+
       const paymentDateObj = new Date(paymentDate);
       paymentDateObj.setHours(0, 0, 0, 0);
       const paymentDateISO = paymentDateObj.toISOString().split("T")[0];
+
       const zcql = req.catalystApp.zcql();
-  
+
       /* ======================================================
-         STEP 1: FETCH ELIGIBLE ACCOUNTS
+         STEP 1: FIND ACCOUNTS WITH TRANSACTIONS FOR THIS ISIN
          ====================================================== */
-      const holdingRows = [];
+      const accountSet = new Set();
       let holdOffset = 0;
-  
+
       while (true) {
         const batch = await zcql.executeZCQLQuery(`
           SELECT WS_Account_code
-          FROM Holdings
-          WHERE ISIN='${isin}' AND QTY > 0
-          ORDER BY ROWID ASC
+          FROM Transaction
+          WHERE ISIN='${isin}'
           LIMIT ${ZCQL_ROW_LIMIT} OFFSET ${holdOffset}
         `);
-  
+
         if (!batch || batch.length === 0) break;
-        holdingRows.push(...batch);
+        batch.forEach((r) => accountSet.add(r.Transaction.WS_Account_code));
         if (batch.length < ZCQL_ROW_LIMIT) break;
         holdOffset += ZCQL_ROW_LIMIT;
       }
-  
-      if (!holdingRows.length) {
+
+      const eligibleAccounts = Array.from(accountSet);
+
+      if (!eligibleAccounts.length) {
         return res.json({ success: true, data: [] });
       }
-  
+
       /* ======================================================
-         STEP 2: FETCH TRANSACTIONS (<= RECORD DATE) – dedupe by ROWID
+         STEP 2: FETCH TRANSACTIONS (<= RECORD DATE)
          ====================================================== */
       const txRows = [];
       const seenTxnRowIds = new Set();
       let txOffset = 0;
-  
+
       while (true) {
         const batch = await zcql.executeZCQLQuery(`
           SELECT *
@@ -123,7 +125,7 @@ export const getAllSecuritiesISINs = async (req, res) => {
           ORDER BY SETDATE ASC, ROWID ASC
           LIMIT ${ZCQL_ROW_LIMIT} OFFSET ${txOffset}
         `);
-  
+
         if (!batch || batch.length === 0) break;
         for (const row of batch) {
           const t = row.Transaction || row;
@@ -135,90 +137,83 @@ export const getAllSecuritiesISINs = async (req, res) => {
         if (batch.length < ZCQL_ROW_LIMIT) break;
         txOffset += ZCQL_ROW_LIMIT;
       }
-  
+
       /* ======================================================
-         STEP 3: FETCH BONUSES (< RECORD DATE)
+         STEP 3: FETCH BONUSES (<= RECORD DATE)
          ====================================================== */
       const bonusRows = [];
       let bonusOffset = 0;
-  
+
       while (true) {
         const batch = await zcql.executeZCQLQuery(`
           SELECT *
           FROM Bonus
           WHERE ISIN='${isin}'
-          AND ExDate < '${recordDateISO}'
+          AND ExDate <= '${recordDateISO}'
           ORDER BY ExDate ASC, ROWID ASC
           LIMIT ${ZCQL_ROW_LIMIT} OFFSET ${bonusOffset}
         `);
-  
+
         if (!batch || batch.length === 0) break;
         bonusRows.push(...batch);
         if (batch.length < ZCQL_ROW_LIMIT) break;
         bonusOffset += ZCQL_ROW_LIMIT;
       }
-  
+
       /* ======================================================
-         STEP 4: FETCH SPLITS (< RECORD DATE)
+         STEP 4: FETCH SPLITS (<= RECORD DATE)
          ====================================================== */
       const splitRows = [];
       let splitOffset = 0;
-  
+
       while (true) {
         const batch = await zcql.executeZCQLQuery(`
           SELECT *
           FROM Split
           WHERE ISIN='${isin}'
-          AND Issue_Date < '${recordDateISO}'
+          AND Issue_Date <= '${recordDateISO}'
           ORDER BY Issue_Date ASC, ROWID ASC
           LIMIT ${ZCQL_ROW_LIMIT} OFFSET ${splitOffset}
         `);
-  
+
         if (!batch || batch.length === 0) break;
         splitRows.push(...batch);
         if (batch.length < ZCQL_ROW_LIMIT) break;
         splitOffset += ZCQL_ROW_LIMIT;
       }
-  
+
       /* ======================================================
          STEP 5: GROUP DATA BY ACCOUNT
          ====================================================== */
       const txByAccount = {};
       txRows.forEach((r) => {
         const t = r.Transaction;
-        if (!txByAccount[t.WS_Account_code]) txByAccount[t.WS_Account_code] = [];
-        txByAccount[t.WS_Account_code].push(t);
+        (txByAccount[t.WS_Account_code] ||= []).push(t);
       });
-  
+
       const bonusByAccount = {};
       bonusRows.forEach((r) => {
         const b = r.Bonus;
-        if (!bonusByAccount[b.WS_Account_code]) bonusByAccount[b.WS_Account_code] = [];
-        bonusByAccount[b.WS_Account_code].push(b);
+        (bonusByAccount[b.WS_Account_code] ||= []).push(b);
       });
-  
+
       const splits = splitRows.map((r) => r.Split);
-  
+
       /* ======================================================
-         STEP 6: FIFO PREVIEW (dedupe by account via Set)
+         STEP 6: FIFO PREVIEW
          ====================================================== */
       const preview = [];
-      const seenAccounts = new Set();
 
-      for (const h of holdingRows) {
-        const accountCode = h.Holdings.WS_Account_code;
-        if (seenAccounts.has(accountCode)) continue;
-        seenAccounts.add(accountCode);
-
+      for (const accountCode of eligibleAccounts) {
         const transactions = txByAccount[accountCode] || [];
         if (!transactions.length) continue;
 
         const bonuses = bonusByAccount[accountCode] || [];
 
-        const fifoResult = runFifoEngine(transactions, bonuses, splits, true);
-        if (!fifoResult || fifoResult.holdings <= 0) continue;
+        const fifo = runFifoEngine(transactions, bonuses, splits, true);
+        if (!fifo || fifo.holdings <= 0) continue;
 
-        const holdingAsOnRecordDate = fifoResult.holdings;
+        const holdingAsOnRecordDate = fifo.holdings;
         const dividendAmount = holdingAsOnRecordDate * rateNum;
 
         preview.push({
@@ -230,7 +225,7 @@ export const getAllSecuritiesISINs = async (req, res) => {
           dividendAmount,
         });
       }
-  
+
       return res.json({ success: true, data: preview });
     } catch (error) {
       console.error("Preview dividend error:", error);
@@ -263,7 +258,6 @@ export const getAllSecuritiesISINs = async (req, res) => {
 
       const rate = Number(rateParam);
 
-
       if (!Number.isFinite(rate) || rate <= 0) {
         return res.status(400).json({
           success: false,
@@ -283,7 +277,6 @@ export const getAllSecuritiesISINs = async (req, res) => {
         });
       }
 
-      /* Normalize Dates (exDate optional for UI – ExDate column; recordDate used for duplicate check) */
       const normalizeDate = (d) => {
         const dt = new Date(d);
         dt.setHours(0, 0, 0, 0);
@@ -298,9 +291,6 @@ export const getAllSecuritiesISINs = async (req, res) => {
   
       const zcql = req.catalystApp.zcql();
   
-      /* ======================================================
-         CHECK DUPLICATE (ISIN + RECORD DATE)
-         ====================================================== */
       const existing = await zcql.executeZCQLQuery(`
         SELECT ROWID
         FROM Dividend
@@ -316,9 +306,6 @@ export const getAllSecuritiesISINs = async (req, res) => {
         });
       }
   
-      /* ======================================================
-         INSERT MASTER RECORD
-         ====================================================== */
       await zcql.executeZCQLQuery(`
         INSERT INTO Dividend
         (
@@ -359,4 +346,3 @@ export const getAllSecuritiesISINs = async (req, res) => {
       });
     }
   };
-  
