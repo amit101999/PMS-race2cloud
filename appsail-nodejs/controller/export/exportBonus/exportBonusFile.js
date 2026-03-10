@@ -1,6 +1,6 @@
 import { runFifoEngine } from "../../../util/analytics/transactionHistory/fifo.js";
 
-const BATCH_SIZE = 200;
+const BATCH_SIZE = 270;
 
 export const exportBonusPreviewFile = async (req, res) => {
   try {
@@ -22,29 +22,29 @@ export const exportBonusPreviewFile = async (req, res) => {
     const zcql = catalystApp.zcql();
     const bucket = catalystApp.stratus().bucket("export-app-data");
 
-    /* ================= CSV BUFFER ================= */
-    let csv =
-      "ISIN,ACCOUNT_CODE,CURRENT_HOLDING,BONUS_SHARES,NEW_HOLDING,DELTA\n";
+    let csv = "ISIN,ACCOUNT_CODE,CURRENT_HOLDING,BONUS_SHARES,NEW_HOLDING,DELTA\n";
 
-    /* ================= FETCH HOLDINGS ================= */
-    const holdings = [];
+    /* ================= FIND ACCOUNTS WITH TRANSACTIONS ================= */
+    const accountSet = new Set();
     let offset = 0;
 
     while (true) {
       const rows = await zcql.executeZCQLQuery(`
-        SELECT WS_Account_code, QTY
-        FROM Holdings
-        WHERE ISIN='${isin}' AND QTY > 0
+        SELECT WS_Account_code
+        FROM Transaction
+        WHERE ISIN='${isin}'
         LIMIT ${BATCH_SIZE} OFFSET ${offset}
       `);
 
       if (!rows.length) break;
-      holdings.push(...rows);
+      rows.forEach((r) => accountSet.add(r.Transaction.WS_Account_code));
       if (rows.length < BATCH_SIZE) break;
       offset += BATCH_SIZE;
     }
 
-    if (!holdings.length) {
+    const eligibleAccounts = Array.from(accountSet);
+
+    if (!eligibleAccounts.length) {
       return res.json({ success: false, message: "No eligible accounts" });
     }
 
@@ -86,12 +86,8 @@ export const exportBonusPreviewFile = async (req, res) => {
 
     const splits = splitRows.map(r => r.Split);
 
-    /* ================= FIFO + CSV (one per account) ================= */
-    const seenAccounts = new Set();
-    for (const h of holdings) {
-      const acc = h.Holdings.WS_Account_code;
-      if (seenAccounts.has(acc)) continue;
-      seenAccounts.add(acc);
+    /* ================= FIFO + CSV ================= */
+    for (const acc of eligibleAccounts) {
       const tx = txByAcc[acc] || [];
       if (!tx.length) continue;
 

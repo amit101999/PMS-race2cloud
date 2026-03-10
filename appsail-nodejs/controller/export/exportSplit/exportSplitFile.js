@@ -1,6 +1,6 @@
 import { runFifoEngine } from "../../../util/analytics/transactionHistory/fifo.js";
 
-const BATCH_SIZE = 200;
+const BATCH_SIZE = 270;
 
 export const exportSplitPreviewFile = async (req, res) => {
   try {
@@ -26,33 +26,30 @@ export const exportSplitPreviewFile = async (req, res) => {
     const zcql = catalystApp.zcql();
     const bucket = catalystApp.stratus().bucket("export-app-data");
 
-    /* ================= CSV HEADER ================= */
-    let csv =
-      "ISIN,ACCOUNT_CODE,CURRENT_HOLDING,NEW_HOLDING,DELTA\n";
+    let csv = "ISIN,ACCOUNT_CODE,CURRENT_HOLDING,NEW_HOLDING,DELTA\n";
 
-    /* ================= FETCH HOLDINGS ================= */
-    const holdings = [];
+    /* ================= FIND ACCOUNTS WITH TRANSACTIONS ================= */
+    const accountSet = new Set();
     let offset = 0;
 
     while (true) {
       const rows = await zcql.executeZCQLQuery(`
-        SELECT WS_Account_code, QTY
-        FROM Holdings
-        WHERE ISIN='${isin}' AND QTY > 0
+        SELECT WS_Account_code
+        FROM Transaction
+        WHERE ISIN='${isin}'
         LIMIT ${BATCH_SIZE} OFFSET ${offset}
       `);
 
       if (!rows || rows.length === 0) break;
-      holdings.push(...rows);
+      rows.forEach((r) => accountSet.add(r.Transaction.WS_Account_code));
       if (rows.length < BATCH_SIZE) break;
       offset += BATCH_SIZE;
     }
 
-    if (!holdings.length) {
-      return res.json({
-        success: false,
-        message: "No eligible accounts",
-      });
+    const eligibleAccounts = Array.from(accountSet);
+
+    if (!eligibleAccounts.length) {
+      return res.json({ success: false, message: "No eligible accounts" });
     }
 
     /* ================= FETCH TX / BONUS / PAST SPLITS ================= */
@@ -78,7 +75,7 @@ export const exportSplitPreviewFile = async (req, res) => {
 
     const txRows = await fetchAll("Transaction", "SETDATE", "<=");
     const bonusRows = await fetchAll("Bonus", "ExDate", "<=");
-    const splitRows = await fetchAll("Split", "Issue_Date", "<"); // past splits only
+    const splitRows = await fetchAll("Split", "Issue_Date", "<");
 
     /* ================= GROUP DATA ================= */
     const txByAcc = {};
@@ -98,18 +95,15 @@ export const exportSplitPreviewFile = async (req, res) => {
     /* ================= FIFO + CSV ================= */
     const splitMultiplier = r2 / r1;
 
-    for (const h of holdings) {
-      const acc = h.Holdings.WS_Account_code;
+    for (const acc of eligibleAccounts) {
       const tx = txByAcc[acc] || [];
       if (!tx.length) continue;
 
       const bonuses = bonusByAcc[acc] || [];
 
-      // FIFO BEFORE split (same as preview)
       const before = runFifoEngine(tx, bonuses, pastSplits, true);
       if (!before || before.holdings <= 0) continue;
 
-      // APPLY SPLIT (same logic as preview)
       const newHolding = Math.floor(before.holdings * splitMultiplier);
       const delta = newHolding - before.holdings;
 

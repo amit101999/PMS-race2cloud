@@ -1,5 +1,5 @@
-const { runFifoEngine } = require("./fifo.js");
 const catalyst = require("zcatalyst-sdk-node");
+const { runFifoEngine } = require("./fifo.js");
 
 const ZCQL_ROW_LIMIT = 270;
 
@@ -28,27 +28,28 @@ module.exports = async (jobRequest, context) => {
     const exDateISO = exDate;
 
     /* ======================================================
-       STEP 1: FETCH HOLDINGS (ACCOUNTS)
+       STEP 1: FIND ACCOUNTS WITH TRANSACTIONS FOR THIS ISIN
        ====================================================== */
-    const holdingRows = [];
+    const accountSet = new Set();
     let holdOffset = 0;
 
     while (true) {
       const batch = await zcql.executeZCQLQuery(`
         SELECT WS_Account_code
-        FROM Holdings
-        WHERE ISIN='${isin}' AND QTY > 0
-        ORDER BY ROWID ASC
+        FROM Transaction
+        WHERE ISIN='${isin}'
         LIMIT ${ZCQL_ROW_LIMIT} OFFSET ${holdOffset}
       `);
 
       if (!batch || batch.length === 0) break;
-      holdingRows.push(...batch);
+      batch.forEach((r) => accountSet.add(r.Transaction.WS_Account_code));
       if (batch.length < ZCQL_ROW_LIMIT) break;
       holdOffset += ZCQL_ROW_LIMIT;
     }
 
-    if (!holdingRows.length) {
+    const eligibleAccounts = Array.from(accountSet);
+
+    if (!eligibleAccounts.length) {
       console.log("No eligible accounts found");
       await zcql.executeZCQLQuery(
         `UPDATE Jobs SET status = 'COMPLETED' WHERE jobName = '${jobName}'`
@@ -58,127 +59,61 @@ module.exports = async (jobRequest, context) => {
     }
 
     /* ======================================================
-       STEP 2: FETCH TRANSACTIONS <= EX-DATE (dedupe by ROWID)
+       STEP 2: FETCH TX / BONUS / SPLIT
        ====================================================== */
-    const txRows = [];
-    const seenTxnRowIds = new Set();
-    let txOffset = 0;
-
-    while (true) {
-      const batch = await zcql.executeZCQLQuery(`
-        SELECT *
-        FROM Transaction
-        WHERE ISIN='${isin}'
-          AND SETDATE <= '${exDateISO}'
-        ORDER BY SETDATE ASC, ROWID ASC
-        LIMIT ${ZCQL_ROW_LIMIT} OFFSET ${txOffset}
-      `);
-
-      if (!batch || batch.length === 0) break;
-      for (const row of batch) {
-        const t = row.Transaction || row;
-        const rowId = t.ROWID;
-        if (rowId != null && seenTxnRowIds.has(rowId)) continue;
-        if (rowId != null) seenTxnRowIds.add(rowId);
-        txRows.push(row);
+    const fetchAll = async (table, dateCol, operator) => {
+      const out = [];
+      let off = 0;
+      while (true) {
+        const r = await zcql.executeZCQLQuery(`
+          SELECT *
+          FROM ${table}
+          WHERE ISIN='${isin}' AND ${dateCol} ${operator} '${exDateISO}'
+          LIMIT ${ZCQL_ROW_LIMIT} OFFSET ${off}
+        `);
+        if (!r || r.length === 0) break;
+        out.push(...r);
+        if (r.length < ZCQL_ROW_LIMIT) break;
+        off += ZCQL_ROW_LIMIT;
       }
-      if (batch.length < ZCQL_ROW_LIMIT) break;
-      txOffset += ZCQL_ROW_LIMIT;
-    }
+      return out;
+    };
 
-    /* ======================================================
-       STEP 3: FETCH BONUSES < EX-DATE
-       ====================================================== */
-    const bonusRows = [];
-    let bonusOffset = 0;
+    const txRows = await fetchAll("Transaction", "SETDATE", "<=");
+    const bonusRows = await fetchAll("Bonus", "ExDate", "<");
+    const splitRows = await fetchAll("Split", "Issue_Date", "<");
 
-    while (true) {
-      const batch = await zcql.executeZCQLQuery(`
-        SELECT *
-        FROM Bonus
-        WHERE ISIN='${isin}'
-          AND ExDate < '${exDateISO}'
-        ORDER BY ExDate ASC, ROWID ASC
-        LIMIT ${ZCQL_ROW_LIMIT} OFFSET ${bonusOffset}
-      `);
-
-      if (!batch || batch.length === 0) break;
-      bonusRows.push(...batch);
-      if (batch.length < ZCQL_ROW_LIMIT) break;
-      bonusOffset += ZCQL_ROW_LIMIT;
-    }
-
-    /* ======================================================
-       STEP 4: FETCH SPLITS < EX-DATE
-       ====================================================== */
-    const splitRows = [];
-    let splitOffset = 0;
-
-    while (true) {
-      const batch = await zcql.executeZCQLQuery(`
-        SELECT *
-        FROM Split
-        WHERE ISIN='${isin}'
-          AND Issue_Date < '${exDateISO}'
-        ORDER BY Issue_Date ASC, ROWID ASC
-        LIMIT ${ZCQL_ROW_LIMIT} OFFSET ${splitOffset}
-      `);
-
-      if (!batch || batch.length === 0) break;
-      splitRows.push(...batch);
-      if (batch.length < ZCQL_ROW_LIMIT) break;
-      splitOffset += ZCQL_ROW_LIMIT;
-    }
-
-    /* ======================================================
-       STEP 5: GROUP DATA BY ACCOUNT
-       ====================================================== */
-    const txByAccount = {};
+    const txByAcc = {};
     txRows.forEach((r) => {
       const t = r.Transaction;
-      if (!txByAccount[t.WS_Account_code]) txByAccount[t.WS_Account_code] = [];
-      txByAccount[t.WS_Account_code].push(t);
+      (txByAcc[t.WS_Account_code] ||= []).push(t);
     });
 
-    const bonusByAccount = {};
+    const bonusByAcc = {};
     bonusRows.forEach((r) => {
       const b = r.Bonus;
-      if (!bonusByAccount[b.WS_Account_code]) bonusByAccount[b.WS_Account_code] = [];
-      bonusByAccount[b.WS_Account_code].push(b);
+      (bonusByAcc[b.WS_Account_code] ||= []).push(b);
     });
 
-    const splits = splitRows.map((r) => {
-      const s = r.Split;
-      return {
-        issueDate: s.Issue_Date,
-        ratio1: Number(s.Ratio1) || 0,
-        ratio2: Number(s.Ratio2) || 0,
-        isin: s.ISIN,
-      };
-    });
+    const splits = splitRows.map((r) => r.Split);
 
     /* ======================================================
-       STEP 6: FIFO + INSERT BONUS (one per account)
+       STEP 3: FIFO + INSERT BONUS (one per eligible account)
        ====================================================== */
     let inserted = 0;
     let errorCount = 0;
-    const processedAccounts = new Set();
 
-    for (const h of holdingRows) {
-      const accountCode = h.Holdings.WS_Account_code;
-      if (processedAccounts.has(accountCode)) continue;
-      processedAccounts.add(accountCode);
-
+    for (const accountCode of eligibleAccounts) {
       try {
-        const transactions = txByAccount[accountCode] || [];
-        if (!transactions.length) continue;
+        const tx = txByAcc[accountCode] || [];
+        if (!tx.length) continue;
 
-        const bonuses = bonusByAccount[accountCode] || [];
+        const bonuses = bonusByAcc[accountCode] || [];
 
-        const fifoBefore = runFifoEngine(transactions, bonuses, splits, true);
-        if (!fifoBefore || fifoBefore.holdings <= 0) continue;
+        const fifo = runFifoEngine(tx, bonuses, splits, true);
+        if (!fifo || fifo.holdings <= 0) continue;
 
-        const bonusShares = Math.floor((fifoBefore.holdings * r1) / r2);
+        const bonusShares = Math.floor((fifo.holdings * r1) / r2);
         if (bonusShares <= 0) continue;
 
         await zcql.executeZCQLQuery(`
@@ -211,7 +146,7 @@ module.exports = async (jobRequest, context) => {
     }
 
     /* ======================================================
-       STEP 7: INSERT BONUS_RECORD (master record)
+       STEP 4: INSERT BONUS_RECORD (master record)
        ====================================================== */
     if (inserted > 0) {
       try {
