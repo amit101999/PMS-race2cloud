@@ -1,6 +1,7 @@
 {
 	"main": "index.js",
 	"dependencies": {
+		"pdfkit": "^0.17.2",
 		"zcatalyst-sdk-node": "beta"
 	}
 }
