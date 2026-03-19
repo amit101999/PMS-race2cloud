@@ -121,7 +121,15 @@ module.exports = async (jobRequest, context) => {
       (bonusByAcc[b.WS_Account_code] ||= []).push(b);
     });
 
-    const splits = splitRows.map((r) => r.Split);
+    const splits = splitRows.map((r) => {
+      const s = r.Split;
+      return {
+        issueDate: s.Issue_Date,
+        ratio1: Number(s.Ratio1) || 0,
+        ratio2: Number(s.Ratio2) || 0,
+        isin: s.ISIN,
+      };
+    });
 
     /* ================= STEP 3: FIFO + BUILD CSV ================= */
     const UTF8_BOM = "\uFEFF";

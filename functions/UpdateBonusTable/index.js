@@ -59,29 +59,52 @@ module.exports = async (jobRequest, context) => {
     }
 
     /* ======================================================
-       STEP 2: FETCH TX / BONUS / SPLIT
+       STEP 2: FETCH TX / BONUS / SPLIT (ROWID dedupe — matches preview API)
        ====================================================== */
-    const fetchAll = async (table, dateCol, operator) => {
+    const fetchAllDeduped = async (table, dateCol, operator, orderBySql) => {
       const out = [];
+      const seenRowIds = new Set();
       let off = 0;
       while (true) {
         const r = await zcql.executeZCQLQuery(`
           SELECT *
           FROM ${table}
           WHERE ISIN='${isin}' AND ${dateCol} ${operator} '${exDateISO}'
+          ORDER BY ${orderBySql}
           LIMIT ${ZCQL_ROW_LIMIT} OFFSET ${off}
         `);
         if (!r || r.length === 0) break;
-        out.push(...r);
+        for (const row of r) {
+          const rec = row[table] || row.Transaction || row.Bonus || row.Split || row;
+          const rowId = rec.ROWID;
+          if (rowId != null && seenRowIds.has(rowId)) continue;
+          if (rowId != null) seenRowIds.add(rowId);
+          out.push(row);
+        }
         if (r.length < ZCQL_ROW_LIMIT) break;
         off += ZCQL_ROW_LIMIT;
       }
       return out;
     };
 
-    const txRows = await fetchAll("Transaction", "SETDATE", "<=");
-    const bonusRows = await fetchAll("Bonus", "ExDate", "<");
-    const splitRows = await fetchAll("Split", "Issue_Date", "<");
+    const txRows = await fetchAllDeduped(
+      "Transaction",
+      "SETDATE",
+      "<=",
+      "SETDATE ASC, ROWID ASC"
+    );
+    const bonusRows = await fetchAllDeduped(
+      "Bonus",
+      "ExDate",
+      "<=",
+      "ExDate ASC, ROWID ASC"
+    );
+    const splitRows = await fetchAllDeduped(
+      "Split",
+      "Issue_Date",
+      "<=",
+      "Issue_Date ASC, ROWID ASC"
+    );
 
     const txByAcc = {};
     txRows.forEach((r) => {
@@ -95,7 +118,15 @@ module.exports = async (jobRequest, context) => {
       (bonusByAcc[b.WS_Account_code] ||= []).push(b);
     });
 
-    const splits = splitRows.map((r) => r.Split);
+    const splits = splitRows.map((r) => {
+      const s = r.Split;
+      return {
+        issueDate: s.Issue_Date,
+        ratio1: Number(s.Ratio1) || 0,
+        ratio2: Number(s.Ratio2) || 0,
+        isin: s.ISIN,
+      };
+    });
 
     /* ======================================================
        STEP 3: FIFO + INSERT BONUS (one per eligible account)

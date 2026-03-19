@@ -143,6 +143,7 @@ export const previewStockSplit = async (req, res) => {
        STEP 3: FETCH BONUSES (<= ISSUE DATE)
        ====================================================== */
     const bonusRows = [];
+    const seenBonusRowIds = new Set();
     let bonusOffset = 0;
 
     while (true) {
@@ -156,15 +157,22 @@ export const previewStockSplit = async (req, res) => {
       `);
 
       if (!batch || batch.length === 0) break;
-      bonusRows.push(...batch);
+      for (const row of batch) {
+        const b = row.Bonus || row;
+        const rowId = b.ROWID;
+        if (rowId != null && seenBonusRowIds.has(rowId)) continue;
+        if (rowId != null) seenBonusRowIds.add(rowId);
+        bonusRows.push(row);
+      }
       if (batch.length < ZCQL_ROW_LIMIT) break;
       bonusOffset += ZCQL_ROW_LIMIT;
     }
 
     /* ======================================================
-       STEP 4: FETCH PAST SPLITS (< ISSUE DATE)
+       STEP 4: FETCH PAST SPLITS (<= ISSUE DATE)
        ====================================================== */
     const splitRows = [];
+    const seenSplitRowIds = new Set();
     let splitOffset = 0;
 
     while (true) {
@@ -172,13 +180,19 @@ export const previewStockSplit = async (req, res) => {
         SELECT *
         FROM Split
         WHERE ISIN='${isin}'
-        AND Issue_Date < '${issueDateISO}'
+        AND Issue_Date <= '${issueDateISO}'
         ORDER BY Issue_Date ASC, ROWID ASC
         LIMIT ${ZCQL_ROW_LIMIT} OFFSET ${splitOffset}
       `);
 
       if (!batch || batch.length === 0) break;
-      splitRows.push(...batch);
+      for (const row of batch) {
+        const s = row.Split || row;
+        const rowId = s.ROWID;
+        if (rowId != null && seenSplitRowIds.has(rowId)) continue;
+        if (rowId != null) seenSplitRowIds.add(rowId);
+        splitRows.push(row);
+      }
       if (batch.length < ZCQL_ROW_LIMIT) break;
       splitOffset += ZCQL_ROW_LIMIT;
     }
@@ -198,7 +212,15 @@ export const previewStockSplit = async (req, res) => {
       (bonusByAccount[b.WS_Account_code] ||= []).push(b);
     });
 
-    const pastSplits = splitRows.map((r) => r.Split);
+    const pastSplits = splitRows.map((r) => {
+      const s = r.Split;
+      return {
+        issueDate: s.Issue_Date,
+        ratio1: Number(s.Ratio1) || 0,
+        ratio2: Number(s.Ratio2) || 0,
+        isin: s.ISIN,
+      };
+    });
 
     /* ======================================================
        STEP 6: FIFO PREVIEW

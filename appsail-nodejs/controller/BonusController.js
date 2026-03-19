@@ -144,9 +144,10 @@ export const previewStockBonus = async (req, res) => {
     }
 
     /* ======================================================
-       STEP 3: FETCH BONUSES (< EX-DATE)
+       STEP 3: FETCH BONUSES (<= EX-DATE)
        ====================================================== */
     const bonusRows = [];
+    const seenBonusRowIds = new Set();
     let bonusOffset = 0;
 
     while (true) {
@@ -154,21 +155,28 @@ export const previewStockBonus = async (req, res) => {
         SELECT *
         FROM Bonus
         WHERE ISIN='${isin}'
-        AND ExDate < '${exDateISO}'
+        AND ExDate <= '${exDateISO}'
         ORDER BY ExDate ASC, ROWID ASC
         LIMIT ${ZCQL_ROW_LIMIT} OFFSET ${bonusOffset}
       `);
 
       if (!batch || batch.length === 0) break;
-      bonusRows.push(...batch);
+      for (const row of batch) {
+        const b = row.Bonus || row;
+        const rowId = b.ROWID;
+        if (rowId != null && seenBonusRowIds.has(rowId)) continue;
+        if (rowId != null) seenBonusRowIds.add(rowId);
+        bonusRows.push(row);
+      }
       if (batch.length < ZCQL_ROW_LIMIT) break;
       bonusOffset += ZCQL_ROW_LIMIT;
     }
 
     /* ======================================================
-       STEP 4: FETCH SPLITS (< EX-DATE)
+       STEP 4: FETCH SPLITS (<= EX-DATE)
        ====================================================== */
     const splitRows = [];
+    const seenSplitRowIds = new Set();
     let splitOffset = 0;
 
     while (true) {
@@ -176,13 +184,19 @@ export const previewStockBonus = async (req, res) => {
         SELECT *
         FROM Split
         WHERE ISIN='${isin}'
-        AND Issue_Date < '${exDateISO}'
+        AND Issue_Date <= '${exDateISO}'
         ORDER BY Issue_Date ASC, ROWID ASC
         LIMIT ${ZCQL_ROW_LIMIT} OFFSET ${splitOffset}
       `);
 
       if (!batch || batch.length === 0) break;
-      splitRows.push(...batch);
+      for (const row of batch) {
+        const s = row.Split || row;
+        const rowId = s.ROWID;
+        if (rowId != null && seenSplitRowIds.has(rowId)) continue;
+        if (rowId != null) seenSplitRowIds.add(rowId);
+        splitRows.push(row);
+      }
       if (batch.length < ZCQL_ROW_LIMIT) break;
       splitOffset += ZCQL_ROW_LIMIT;
     }

@@ -4,9 +4,8 @@ const { runQuantityBackfill } = require("./runQuantityBackfill");
 module.exports = async (jobRequest, context) => {
   try {
     const catalystApp = catalyst.initialize(context);
-    const zcql = catalystApp.zcql();
 
-    await runQuantityBackfill(zcql);
+    await runQuantityBackfill(catalystApp);
 
     console.log("[CalculateAllTransactionHoldingOnce] Completed successfully");
     context.closeWithSuccess();
