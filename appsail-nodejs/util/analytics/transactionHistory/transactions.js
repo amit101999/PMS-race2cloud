@@ -29,7 +29,7 @@ export const fetchStockTransactions = async ({
   while (true) {
     try {
       const query = `
-        SELECT SETDATE, Tran_Type, Security_code, QTY, NETRATE, Net_Amount, ISIN, ROWID
+        SELECT SETDATE, TRANDATE, Tran_Type, Security_code, QTY, NETRATE, Net_Amount, ISIN, ROWID
         FROM Transaction
         ${where}
         ORDER BY SETDATE ASC, ROWID ASC
@@ -55,7 +55,8 @@ export const fetchStockTransactions = async ({
   }
 
   return rows.map((r) => ({
-    trandate: r.SETDATE,
+    SETDATE: r.SETDATE,
+    TRANDATE: r.TRANDATE,
     tranType: r.Tran_Type,
     securityCode: r.Security_code,
     qty: Number(r.QTY) || 0,
