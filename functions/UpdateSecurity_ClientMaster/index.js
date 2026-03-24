@@ -86,6 +86,8 @@ module.exports = async (event, context) => {
         if (priority !== null && !processedTranTypes.has(typeKey)) {
 
           let hasMore = true;
+        
+          
 
           while (hasMore) {
 

@@ -221,7 +221,7 @@ exports.calculateHoldingsSummary = async ({
   while (true) {
     try {
       const rows = await zcql.executeZCQLQuery(`
-        SELECT Security_Name, Security_code, Tran_Type, QTY, SETDATE,
+        SELECT Security_Name, Security_code, Tran_Type, QTY, SETDATE, TRANDATE,
                NETRATE, Net_Amount, ISIN, ROWID
         FROM Transaction
         WHERE WS_Account_code = '${accountCode}'
