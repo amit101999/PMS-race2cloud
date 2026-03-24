@@ -1,5 +1,3 @@
-
-
 exports.runFifoEngine = (
   transactions = [],
   bonuses = [],
@@ -31,21 +29,33 @@ exports.runFifoEngine = (
     )}`;
   };
 
+  const isBuy = (type) => /^BY-|SQB|OPI/.test(String(type || "").toUpperCase());
+
+  /** Buy → settlement date (SETDATE); Sell → transaction date (TRANDATE). */
+  const getTxnEventDate = (t) => {
+    const setDate = t.SETDATE || t.setdate;
+    const tradeDate = t.TRANDATE || t.trandate;
+    return isBuy(t.Tran_Type || t.tranType) ? setDate || tradeDate : tradeDate || setDate;
+  };
+
   const events = [
     ...transactions
       .filter((t) => (t.ISIN || t.isin) === activeIsin)
-      .map((t) => ({
-        type: "TXN",
-        date: normalizeDate(t.SETDATE || t.setdate || t.TRANDATE || t.trandate),
-        data: {
-          tranType: t.Tran_Type || t.tranType,
-          qty: t.QTY || t.qty,
-          netrate: t.NETRATE || t.netrate,
-          netAmount: t.NETAMOUNT || t.netAmount || t.Net_Amount || 0,
-          trandate: t.SETDATE || t.setdate || t.TRANDATE || t.trandate,
-          isin: t.ISIN || t.isin,
-        },
-      })),
+      .map((t) => {
+        const eventDate = getTxnEventDate(t);
+        return {
+          type: "TXN",
+          date: normalizeDate(eventDate),
+          data: {
+            tranType: t.Tran_Type || t.tranType,
+            qty: t.QTY || t.qty,
+            netrate: t.NETRATE || t.netrate,
+            netAmount: t.NETAMOUNT || t.netAmount || t.Net_Amount || 0,
+            trandate: eventDate,
+            isin: t.ISIN || t.isin,
+          },
+        };
+      }),
 
     ...bonuses
       .filter((b) => (b.ISIN || b.isin) === activeIsin)
@@ -74,7 +84,6 @@ exports.runFifoEngine = (
   ].sort((a, b) => new Date(a.date) - new Date(b.date));
 
   /* ---------------- HELPERS ---------------- */
-  const isBuy = (t) => /^BY-|SQB|OPI/.test(String(t).toUpperCase());
   const isSell = (t) => /^SL\+|SQS|OPO|NF-/.test(String(t).toUpperCase());
 
   const getCostOfHoldings = () =>

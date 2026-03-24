@@ -66,6 +66,15 @@ function getIsinsForAccount(zcql, accountCode) {
 }
 
 /**
+ * Buy → settlement date (SETDATE); Sell → transaction date (TRANDATE).
+ */
+function getTxnEventDate(t) {
+  const setDate = t.setdate || t.SETDATE;
+  const tradeDate = t.trandate || t.TRANDATE;
+  return isBuy(t.tranType ?? t.Tran_Type ?? "") ? setDate || tradeDate : tradeDate || setDate;
+}
+
+/**
  * Merge transactions, bonuses, splits; sort by date; compute running holdings.
  * Consistent with the Analytics holding page FIFO engine (quantity-only version).
  */
@@ -75,7 +84,7 @@ function calculateRunningQuantity(transactions, bonuses, splits) {
   for (const t of transactions || []) {
     events.push({
       type: "TXN",
-      date: normalizeDate(t.setdate || t.SETDATE || t.trandate || t.TRANDATE),
+      date: normalizeDate(getTxnEventDate(t)),
       data: t,
     });
   }

@@ -87,31 +87,31 @@ module.exports = async (event, context) => {
 
           let hasMore = true;
 
-          while (hasMore) {
+          // while (hasMore) {
 
-            // Fetch max 300 NULL priority rows
-            const rows = await zcql.executeZCQLQuery(`
-              SELECT ROWID FROM Transaction
-              WHERE Tran_Type = '${esc(typeKey)}'
-              AND executionPriority IS NULL
-              LIMIT 300
-            `);
+          //   // Fetch max 300 NULL priority rows
+          //   const rows = await zcql.executeZCQLQuery(`
+          //     SELECT ROWID FROM Transaction
+          //     WHERE Tran_Type = '${esc(typeKey)}'
+          //     AND executionPriority IS NULL
+          //     LIMIT 300
+          //   `);
 
-            if (!rows || rows.length === 0) {
-              hasMore = false;
-              break;
-            }
+          //   if (!rows || rows.length === 0) {
+          //     hasMore = false;
+          //     break;
+          //   }
 
-            for (const row of rows) {
-              const rowId = row.Transaction.ROWID;
+          //   for (const row of rows) {
+          //     const rowId = row.Transaction.ROWID;
 
-              await zcql.executeZCQLQuery(`
-                UPDATE Transaction
-                SET executionPriority = ${priority}
-                WHERE ROWID = '${rowId}'
-              `);
-            }
-          }
+          //     await zcql.executeZCQLQuery(`
+          //       UPDATE Transaction
+          //       SET executionPriority = ${priority}
+          //       WHERE ROWID = '${rowId}'
+          //     `);
+          //   }
+          // }
 
           processedTranTypes.add(typeKey);
         }
