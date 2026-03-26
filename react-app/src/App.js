@@ -9,6 +9,7 @@ import ReportsPage from "./pages/Reports/ReportsPage";
 import BonusPage from "./pages/BonusPage/BonusPage";
 import DividendPage from "./pages/Dividend/DividendPage";
 import TempTransaction from "./pages/TempTransactionUpload/TempTransaction";
+import UpdateISINPage from "./pages/update-isin/UpdateISINPage";
 
 function App() {
   return (
@@ -22,6 +23,7 @@ function App() {
         <Route path="/bhav-copy" element={<BhavCopyUploadPage />} />
         <Route path="/transaction-upload" element={<TransactionUploadPage />} />
         <Route path="/temp-transaction" element={<TempTransaction />} />
+        <Route path="/updateISIN" element={<UpdateISINPage />} />
         <Route path="/reports" element={<ReportsPage />} />
       </Routes>
     </HashRouter>

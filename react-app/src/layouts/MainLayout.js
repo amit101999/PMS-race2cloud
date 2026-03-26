@@ -32,6 +32,9 @@ function MainLayout({ title, rightContent, children }) {
     if (location.pathname === "/temp-transaction") {
       return "temp-transaction";
     }
+    if (location.pathname === "/updateISIN") {
+      return "updateISIN";
+    }
     if (location.pathname === "/reports") {
       return "reports";
     }
@@ -52,6 +55,7 @@ function MainLayout({ title, rightContent, children }) {
     { key: "bhav-copy", label: "Bhav Copy" },
     { key: "transaction-upload", label: "Transaction Upload" },
     { key: "temp-transaction", label: "Temp Transaction" },
+    { key: "updateISIN", label: "Update ISIN" },
     { key: "reports", label: "Reports" },
   ];
 

@@ -15,6 +15,7 @@ import TempTransactionUploaderRouter from "./router/uploaderRouter/TempTransacti
 import CashBalanceRouter from "./router/cashBalanceRouter/CashbalanceRouter.js";
 import BonusRouter from "./router/BonusRouter.js";
 import DividendUploaderRouter from "./router/uploaderRouter/DividendUploaderRouter.js";
+import IsinRouter from "./router/IsinRouter.js";
 
 app.use(cors());
 app.use(Express.json());
@@ -61,7 +62,7 @@ app.use("/api/transaction-uploader", TempTransactionUploaderRouter);
 app.use("/api/cash-balance", CashBalanceRouter);
 app.use("/api/bonus", BonusRouter);
 app.use("/api/dividend", DividendUploaderRouter);
-
+app.use("/api/isin", IsinRouter);
 
 app.put("/update", async (req, res) => {
   console.log("Update started");
