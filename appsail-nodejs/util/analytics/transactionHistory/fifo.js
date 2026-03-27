@@ -53,6 +53,8 @@ export const runFifoEngine = (
             netrate: t.NETRATE || t.netrate,
             netAmount: t.NETAMOUNT || t.netAmount || t.Net_Amount || 0,
             trandate: eventDate,
+            originalTrandate: t.TRANDATE || t.trandate || null,
+            setdate: t.SETDATE || t.setdate || null,
             isin: t.ISIN || t.isin,
           },
         };
@@ -130,6 +132,8 @@ export const runFifoEngine = (
         output.push({
           lotId,
           trandate: t.trandate,
+          originalTrandate: t.originalTrandate,
+          setdate: t.setdate,
           tranType: t.tranType,
           qty,
           price,
@@ -140,9 +144,7 @@ export const runFifoEngine = (
           profitLoss: null,
           isActive: true,
           isin: t.ISIN || t.isin,
-          // cashBalance: Balance,
         });
-        // console.log("Output Queue:", output);
       }
 
       /* ---- SELL ---- */
@@ -169,6 +171,8 @@ export const runFifoEngine = (
 
         output.push({
           trandate: t.trandate,
+          originalTrandate: t.originalTrandate,
+          setdate: t.setdate,
           tranType: t.tranType,
           qty,
           price,
@@ -177,9 +181,8 @@ export const runFifoEngine = (
           costOfHoldings: getCostOfHoldings(),
           averageCostOfHoldings: getWAP(),
           profitLoss: sellQty * price - fifoCost,
-          isActive: false, //
+          isActive: false,
           isin: t.ISIN || t.isin,
-          // cashBalance: Balance,
         });
       }
     }

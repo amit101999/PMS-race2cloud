@@ -34,6 +34,7 @@ function AnalyticsPage() {
   const [cashBalance, setCashBalance] = useState(0);
 
   const dropdownRef = useRef(null);
+  const cashRequestIdRef = useRef(0);
   /* -------------------- EFFECTS -------------------- */
   useEffect(() => {
     const handleClickOutside = (e) => {
@@ -165,6 +166,8 @@ function AnalyticsPage() {
   const fetchCashBalance = async (accountCode, asOnDate) => {
     if (!accountCode) return;
 
+    const currentRequestId = ++cashRequestIdRef.current;
+
     try {
       let url = `${BASE_URL}/analytics/getCashBalanceSummary?accountCode=${accountCode}`;
 
@@ -175,8 +178,10 @@ function AnalyticsPage() {
       const response = await fetch(url);
       const data = await response.json();
 
+      if (currentRequestId !== cashRequestIdRef.current) return;
       setCashBalance(data?.cashBalance || 0);
     } catch (error) {
+      if (currentRequestId !== cashRequestIdRef.current) return;
       console.error("Error fetching cash balance:", error);
       setCashBalance(0);
     }

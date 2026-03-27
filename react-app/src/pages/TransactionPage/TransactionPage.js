@@ -166,7 +166,8 @@ function TransactionPage({ stock, accountCode, asOnDate, onClose }) {
             <table className="hd-table">
               <thead>
                 <tr>
-                  <th>Date</th>
+                  <th>Transaction Date</th>
+                  <th>Settlement Date</th>
                   <th>Type</th>
                   <th>ISIN</th>
                   <th>Quantity</th>
@@ -176,14 +177,13 @@ function TransactionPage({ stock, accountCode, asOnDate, onClose }) {
                   <th>WAP</th>
                   <th>Holding Value</th>
                   <th>P/L</th>
-                  {/* <th>Cash Balance</th> */}
                 </tr>
               </thead>
               <tbody>
                 {transactions.length === 0 ? (
                   <tr>
                     <td
-                      colSpan="8"
+                      colSpan="11"
                       style={{
                         textAlign: "center",
                         padding: "40px",
@@ -196,7 +196,8 @@ function TransactionPage({ stock, accountCode, asOnDate, onClose }) {
                 ) : (
                   transactions.map((tx, idx) => (
                     <tr key={idx} className={getRowClass(tx.tranType)}>
-                      <td>{tx.trandate || "-"}</td>
+                      <td>{tx.originalTrandate || tx.trandate || "-"}</td>
+                      <td>{tx.setdate || "-"}</td>
                       <td>{tx.tranType || "-"}</td>
                       <td>{tx.isin || "-"}</td>
                       <td>
