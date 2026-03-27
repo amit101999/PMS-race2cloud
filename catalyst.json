@@ -23,7 +23,8 @@
       "UpdateBonusTable",
       "ExportDividendAccounts",
       "ExportSplitAccountHolding",
-      "ExportBonusAccountholding"
+      "ExportBonusAccountholding",
+      "UpdateISIN"
     ],
     "ignore": [],
     "source": "functions"

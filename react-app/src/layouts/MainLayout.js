@@ -17,7 +17,7 @@ function MainLayout({ title, rightContent, children }) {
     if (location.pathname === "/split") {
       return "split";
     }
-    if(location.pathname === "/bonus"){
+    if (location.pathname === "/bonus") {
       return "bonus";
     }
     if (location.pathname === "/dividend") {
@@ -29,6 +29,12 @@ function MainLayout({ title, rightContent, children }) {
     if (location.pathname === "/transaction-upload") {
       return "transaction-upload";
     }
+    if (location.pathname === "/temp-transaction") {
+      return "temp-transaction";
+    }
+    if (location.pathname === "/updateISIN") {
+      return "updateISIN";
+    }
     if (location.pathname === "/reports") {
       return "reports";
     }
@@ -39,13 +45,17 @@ function MainLayout({ title, rightContent, children }) {
   const items = [
     { key: "dashboard", label: "Dashboard" },
     { key: "analytics", label: "Analytics" },
-    { key: "corporate-actions", label: "Corporate Actions", children: [
-      { key: "split", label: "Split" },
-      { key: "bonus", label: "Bonus" },
-      { key: "dividend", label: "Dividend" },
-    ]},
+    {
+      key: "corporate-actions", label: "Corporate Actions", children: [
+        { key: "split", label: "Split" },
+        { key: "bonus", label: "Bonus" },
+        { key: "dividend", label: "Dividend" },
+      ]
+    },
     { key: "bhav-copy", label: "Bhav Copy" },
     { key: "transaction-upload", label: "Transaction Upload" },
+    { key: "temp-transaction", label: "Temp Transaction" },
+    { key: "updateISIN", label: "Update ISIN" },
     { key: "reports", label: "Reports" },
   ];
 
