@@ -11,9 +11,11 @@ import ExportRouter from "./router/export/ExportRouter.js";
 import catalyst from "zcatalyst-sdk-node";
 import BhavUploaderRouter from "./router/uploaderRouter/BhavUploaderRouter.js";
 import TransactionUploaderRouter from "./router/uploaderRouter/TransactionUploaderRouter.js";
+import TempTransactionUploaderRouter from "./router/uploaderRouter/TempTransactionUploaderRouter.js";
 import CashBalanceRouter from "./router/cashBalanceRouter/CashbalanceRouter.js";
 import BonusRouter from "./router/BonusRouter.js";
 import DividendUploaderRouter from "./router/uploaderRouter/DividendUploaderRouter.js";
+import IsinRouter from "./router/IsinRouter.js";
 
 app.use(cors());
 app.use(Express.json());
@@ -56,10 +58,11 @@ app.use("/api/split", SplitRouter);
 app.use("/api/export", ExportRouter);
 app.use("/api/bhav", BhavUploaderRouter);
 app.use("/api/transaction-uploader", TransactionUploaderRouter);
+app.use("/api/transaction-uploader", TempTransactionUploaderRouter);
 app.use("/api/cash-balance", CashBalanceRouter);
 app.use("/api/bonus", BonusRouter);
 app.use("/api/dividend", DividendUploaderRouter);
-
+app.use("/api/isin", IsinRouter);
 
 app.put("/update", async (req, res) => {
   console.log("Update started");
