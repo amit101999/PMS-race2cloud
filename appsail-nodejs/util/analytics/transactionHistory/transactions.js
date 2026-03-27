@@ -1,3 +1,13 @@
+const isBuyType = (type) => /^BY-|SQB|OPI/i.test(String(type || ""));
+
+const getEffectiveDate = (r) => {
+  const setDate = r.SETDATE || r.setdate;
+  const tradeDate = r.TRANDATE || r.trandate;
+  return isBuyType(r.Tran_Type || r.tranType)
+    ? setDate || tradeDate
+    : tradeDate || setDate;
+};
+
 export const fetchStockTransactions = async ({
   zcql,
   tableName,
@@ -7,12 +17,14 @@ export const fetchStockTransactions = async ({
   asOnDate,
 }) => {
   let dateCondition = "";
+  let cutoff = null;
 
   if (asOnDate && /^\d{4}-\d{2}-\d{2}$/.test(asOnDate)) {
     const nextDay = new Date(asOnDate);
     nextDay.setDate(nextDay.getDate() + 1);
     const nextDayStr = nextDay.toISOString().split("T")[0];
-    dateCondition = ` AND SETDATE < '${nextDayStr}'`;
+    dateCondition = ` AND (TRANDATE < '${nextDayStr}' OR SETDATE < '${nextDayStr}')`;
+    cutoff = nextDayStr;
   }
 
   const where = `
@@ -54,7 +66,14 @@ export const fetchStockTransactions = async ({
     }
   }
 
-  return rows.map((r) => ({
+  const filteredRows = cutoff
+    ? rows.filter((r) => {
+        const effectiveDate = getEffectiveDate(r);
+        return !effectiveDate || effectiveDate < cutoff;
+      })
+    : rows;
+
+  return filteredRows.map((r) => ({
     SETDATE: r.SETDATE,
     TRANDATE: r.TRANDATE,
     tranType: r.Tran_Type,

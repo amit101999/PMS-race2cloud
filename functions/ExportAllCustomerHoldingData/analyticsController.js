@@ -1,5 +1,15 @@
 const { runFifoEngine } = require("./fifo");
 
+const isBuyType = (type) => /^BY-|SQB|OPI/i.test(String(type || ""));
+
+const getEffectiveDate = (t) => {
+  const setDate = t.SETDATE || t.setdate;
+  const tradeDate = t.TRANDATE || t.trandate;
+  return isBuyType(t.Tran_Type || t.tranType)
+    ? setDate || tradeDate
+    : tradeDate || setDate;
+};
+
 // exports.calculateHoldingsSummary = async ({
 //   catalystApp,
 //   accountCode,
@@ -205,7 +215,7 @@ exports.calculateHoldingsSummary = async ({
     nextDay.setDate(nextDay.getDate() + 1);
     const nextDayStr = nextDay.toISOString().split("T")[0];
 
-    txnDateCondition = `AND SETDATE < '${nextDayStr}'`;
+    txnDateCondition = `AND (TRANDATE < '${nextDayStr}' OR SETDATE < '${nextDayStr}')`;
     bonusDateCondition = `AND ExDate < '${nextDayStr}'`;
     splitDateCondition = `AND Issue_Date < '${nextDayStr}'`;
   }
@@ -245,6 +255,25 @@ exports.calculateHoldingsSummary = async ({
       console.error(`Error fetching transactions for ${accountCode} at offset ${offset}:`, err);
       break;
     }
+  }
+
+  if (asOnDate && /^\d{4}-\d{2}-\d{2}$/.test(asOnDate)) {
+    const nextDay = new Date(asOnDate);
+    nextDay.setDate(nextDay.getDate() + 1);
+    const cutoff = nextDay.toISOString().split("T")[0];
+
+    const beforeCount = transactions.length;
+    const filtered = [];
+    for (let i = 0; i < transactions.length; i++) {
+      const effectiveDate = getEffectiveDate(transactions[i]);
+      if (!effectiveDate || effectiveDate < cutoff) {
+        filtered.push(transactions[i]);
+      }
+    }
+    transactions.length = 0;
+    for (const t of filtered) transactions.push(t);
+
+    console.log(`Effective-date filter: ${beforeCount} → ${transactions.length} transactions (cutoff ${cutoff})`);
   }
 
   /* ================= FETCH BONUS ================= */
