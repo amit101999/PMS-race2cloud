@@ -23,6 +23,9 @@ function MainLayout({ title, rightContent, children }) {
     if (location.pathname === "/dividend") {
       return "dividend";
     }
+    if (location.pathname === "/demerger") {
+      return "demerger";
+    }
     if (location.pathname === "/bhav-copy") {
       return "bhav-copy";
     }
@@ -50,11 +53,12 @@ function MainLayout({ title, rightContent, children }) {
         { key: "split", label: "Split" },
         { key: "bonus", label: "Bonus" },
         { key: "dividend", label: "Dividend" },
+        { key: "demerger", label: "Demerger" },
       ]
     },
     { key: "bhav-copy", label: "Bhav Copy" },
-    { key: "transaction-upload", label: "Transaction Upload" },
-    { key: "temp-transaction", label: "Temp Transaction" },
+    // { key: "transaction-upload", label: "Transaction Upload" },
+    { key: "temp-transaction", label: "Transaction Upload" },
     { key: "updateISIN", label: "Update ISIN" },
     { key: "reports", label: "Reports" },
   ];

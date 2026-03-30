@@ -1,0 +1,80 @@
+/* Demerger — extends SplitPage.css classes (imported in component) */
+
+.demerger-page .split-card {
+  align-items: start;
+}
+
+.demerger-section {
+  grid-column: 1 / -1;
+  margin-top: 8px;
+  padding-top: 16px;
+  border-top: 1px solid #e5e7eb;
+}
+
+.demerger-section-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: #111827;
+  margin: 0 0 12px;
+  letter-spacing: 0.02em;
+}
+
+.demerger-cost-hint {
+  font-size: 12px;
+  color: #6b7280;
+  margin-top: 6px;
+}
+
+.demerger-cost-hint.warn {
+  color: #b45309;
+  font-weight: 600;
+}
+
+.demerger-cost-hint.ok {
+  color: #166534;
+  font-weight: 500;
+}
+
+.demerger-actions {
+  grid-column: 1 / -1;
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+  margin-top: 12px;
+  padding-top: 8px;
+}
+
+.demerger-actions .bonus-submit {
+  min-width: 180px;
+}
+
+.account-code-search {
+  position: relative;
+}
+
+.demerger-select-field {
+  max-width: 100%;
+}
+
+.demerger-select {
+  height: 44px;
+  padding: 10px 14px;
+  border-radius: 10px;
+  border: 1px solid #e5e7eb;
+  font-size: 14px;
+  outline: none;
+  background: #fff;
+  width: 100%;
+  max-width: 560px;
+  cursor: pointer;
+}
+
+.demerger-select:focus {
+  border-color: #c2185b;
+}
+
+.demerger-summary-inline {
+  border-top: none;
+  padding-top: 0;
+  margin-top: 0;
+}
