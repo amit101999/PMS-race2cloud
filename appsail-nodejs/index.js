@@ -17,17 +17,17 @@ import BonusRouter from "./router/BonusRouter.js";
 import DividendUploaderRouter from "./router/uploaderRouter/DividendUploaderRouter.js";
 import IsinRouter from "./router/IsinRouter.js";
 
-app.use(cors());
+// app.use(
+//   cors({
+//     // Reflect caller origin so any dev port (CRA / catalyst serve) works with credentials.
+//     origin: true,
+//     credentials: true,
+//     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
+//     allowedHeaders: ["Content-Type", "Authorization"],
+//   }),
+// );
 app.use(Express.json());
 app.use(Express.urlencoded({ extended: true }));
-app.use(
-  cors({
-    origin: "http://localhost:3000",
-    credentials: true,
-    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization"],
-  }),
-);
 
 app.use((req, res, next) => {
   try {
@@ -49,7 +49,6 @@ app.get("/", (req, res) => {
     message: "Catalyst Express backend is running",
   });
 });
-app.use(Express.json());
 
 app.use("/api/analytics", AnalyticsRouter);
 app.use("/api/transaction", TransactionsRouter);

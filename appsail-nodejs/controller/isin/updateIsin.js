@@ -1,11 +1,75 @@
 /**
- * POST /api/isin/update
- * Triggers the UpdateISIN Catalyst job, passing oldIsin and newIsin directly as job params.
- * The job then replaces the old ISIN with the new one across all relevant database tables.
+ * GET /api/isin/security-list-isins — ISINs from Security_List (dropdown data).
+ * POST /api/isin/update — Queues UpdateISIN job; old ISIN must exist in Security_List.
+ * The job replaces the old ISIN with the new one across all relevant database tables.
  */
 
 /** Catalyst console mein jis job pool mein "UpdateISIN" function add hai, wahi naam yahan hona chahiye. */
 const UPDATE_ISIN_JOBPOOL = "UpdateMasters";
+const SECURITY_LIST_BATCH = 270;
+
+const escSql = (value) => String(value ?? "").replace(/'/g, "''");
+
+/**
+ * GET /api/isin/security-list-isins
+ * ISINs from Security_List for the Old ISIN dropdown (deduped, sorted).
+ */
+export const getSecurityListIsins = async (req, res) => {
+  try {
+    if (!req.catalystApp) {
+      return res.status(500).json({
+        success: false,
+        message: "Catalyst not initialized",
+      });
+    }
+
+    const zcql = req.catalystApp.zcql();
+    const raw = [];
+    let offset = 0;
+
+    while (true) {
+      const rows = await zcql.executeZCQLQuery(`
+        SELECT ISIN, Security_Code, Security_Name
+        FROM Security_List
+        WHERE ISIN IS NOT NULL
+        ORDER BY ISIN ASC, ROWID ASC
+        LIMIT ${SECURITY_LIST_BATCH} OFFSET ${offset}
+      `);
+
+      if (!rows?.length) break;
+
+      for (const r of rows) {
+        const s = r.Security_List || r;
+        const isin = String(s.ISIN ?? "").trim();
+        if (!isin) continue;
+        raw.push({
+          isin,
+          securityCode: String(s.Security_Code ?? "").trim(),
+          securityName: String(s.Security_Name ?? "").trim(),
+        });
+      }
+
+      if (rows.length < SECURITY_LIST_BATCH) break;
+      offset += SECURITY_LIST_BATCH;
+    }
+
+    const seen = new Set();
+    const data = [];
+    for (const row of raw) {
+      if (seen.has(row.isin)) continue;
+      seen.add(row.isin);
+      data.push(row);
+    }
+
+    return res.status(200).json({ success: true, data });
+  } catch (error) {
+    console.error("[getSecurityListIsins]", error);
+    return res.status(500).json({
+      success: false,
+      message: error?.message || "Failed to load Security List ISINs",
+    });
+  }
+};
 
 export const postUpdateIsin = async (req, res) => {
   try {
@@ -30,6 +94,20 @@ export const postUpdateIsin = async (req, res) => {
       return res.status(400).json({
         success: false,
         message: "Old ISIN and New ISIN must be different.",
+      });
+    }
+
+    const zcql = req.catalystApp.zcql();
+    const existsRows = await zcql.executeZCQLQuery(`
+      SELECT ROWID
+      FROM Security_List
+      WHERE ISIN='${escSql(oldTrim)}'
+      LIMIT 1
+    `);
+    if (!existsRows?.length) {
+      return res.status(400).json({
+        success: false,
+        message: "Old ISIN must exist in Security List.",
       });
     }
 
