@@ -510,7 +510,7 @@ export function Sidebar({ items = [], activeKey }) {
   const [openKey, setOpenKey] = useState(null);
 
   // Keep Corporate Actions open when on any of its child routes (Split, Bonus, Dividend)
-  const corporateActionPaths = ["/split", "/bonus", "/dividend"];
+  const corporateActionPaths = ["/split", "/bonus", "/dividend", "/demerger"];
   const isOnCorporateActionChild = corporateActionPaths.includes(location.pathname);
 
   useEffect(() => {
