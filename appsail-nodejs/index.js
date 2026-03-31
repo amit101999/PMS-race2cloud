@@ -49,7 +49,6 @@ app.get("/", (req, res) => {
     message: "Catalyst Express backend is running",
   });
 });
-app.use(Express.json());
 
 app.use("/api/analytics", AnalyticsRouter);
 app.use("/api/transaction", TransactionsRouter);

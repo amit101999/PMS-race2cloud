@@ -5,7 +5,7 @@
  * @param {import("./types/job").JobRequest} jobRequest
  * @param {import("./types/job").Context} context
  */
-
+console.log("hh")
 const catalyst = require("zcatalyst-sdk-node");
 console.log("Cal_CB_Per_TNX started");
 const ACCOUNT_CODE = "AYAN002";
