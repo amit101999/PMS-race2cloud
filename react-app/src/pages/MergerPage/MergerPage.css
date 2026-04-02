@@ -1,0 +1,245 @@
+/* Merger — extends SplitPage.css classes (imported in component) */
+
+.merger-page .split-card {
+  align-items: start;
+}
+
+/* One full-width column: top row, divider + companies, summary, actions */
+.merger-page .split-card.merger-split-card {
+  grid-template-columns: 1fr;
+}
+
+/* Row 1: Effective date | Record date | Ratio 1 | Ratio 2 */
+.merger-top-row {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 16px 18px;
+  align-items: start;
+}
+
+@media (max-width: 960px) {
+  .merger-top-row {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 520px) {
+  .merger-top-row {
+    grid-template-columns: 1fr;
+  }
+}
+
+.merger-section {
+  grid-column: 1 / -1;
+  margin-top: 8px;
+  padding-top: 16px;
+  border-top: 1px solid #e5e7eb;
+}
+
+.merger-section-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: #111827;
+  margin: 0 0 12px;
+  letter-spacing: 0.02em;
+}
+
+/* Companies: two old selects side by side, then new ISIN text */
+.merger-companies-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  width: 100%;
+}
+
+.merger-old-two-cols {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px 20px;
+  align-items: start;
+  width: 100%;
+  max-width: 840px;
+}
+
+@media (max-width: 720px) {
+  .merger-old-two-cols {
+    grid-template-columns: 1fr;
+    max-width: 400px;
+  }
+}
+
+/* "Merge Into New Company": three fields in one row */
+.merger-companies-stack > h3.merger-section-title {
+  margin-top: 16px;
+  margin-bottom: 6px;
+}
+
+.merger-new-company-fields {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 12px 16px;
+  width: 100%;
+  max-width: 100%;
+}
+
+.merger-new-company-fields .merger-new-isin-field {
+  flex: 1 1 0;
+  min-width: min(100%, 160px);
+  max-width: none;
+}
+
+.merger-new-company-fields .split-field label {
+  margin-bottom: 4px;
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  color: #374151;
+  line-height: 1.25;
+}
+
+.merger-new-company-fields .merger-text-input {
+  width: 100%;
+  max-width: none;
+}
+
+.merger-new-isin-field {
+  max-width: 520px;
+}
+
+.merger-new-isin-update-style {
+  max-width: 520px;
+}
+
+.merger-new-isin-hint {
+  font-size: 12px;
+  color: #6b7280;
+  margin: 0 0 8px;
+  line-height: 1.45;
+}
+
+.merger-new-isin-update-style .update-isin-combobox input {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.merger-text-input {
+  height: 40px;
+  padding: 8px 12px;
+  border-radius: 10px;
+  border: 1px solid #e5e7eb;
+  font-size: 13px;
+  outline: none;
+  background: #fff;
+  width: 100%;
+  max-width: 400px;
+  color: #374151;
+  box-sizing: border-box;
+}
+
+.merger-text-input:focus {
+  border-color: #c2185b;
+}
+
+.merger-text-input::placeholder {
+  color: #9ca3af;
+}
+
+.merger-cost-hint {
+  font-size: 12px;
+  color: #6b7280;
+  margin-top: 6px;
+}
+
+.merger-actions {
+  grid-column: 1 / -1;
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+  margin-top: 12px;
+  padding-top: 8px;
+}
+
+.merger-actions-row {
+  flex-wrap: wrap;
+  justify-content: flex-start;
+}
+
+.merger-legs-cell {
+  font-size: 12px;
+  max-width: 420px;
+  word-break: break-word;
+}
+
+.merger-actions .bonus-submit {
+  min-width: 180px;
+}
+
+.merger-select-field {
+  max-width: 100%;
+}
+
+/* Old ISIN: same width behavior as “New ISIN” (merger-new-isin-field, max-width 520px) */
+.merger-select-field.merger-old-isin-field {
+  width: 100%;
+  max-width: 520px;
+  min-width: 0;
+}
+
+.merger-text-input.merger-old-isin-input {
+  width: 100%;
+  max-width: none;
+  box-sizing: border-box;
+  align-self: stretch;
+  white-space: nowrap;
+  overflow-x: auto;
+}
+
+.merger-select {
+  height: 40px;
+  padding: 8px 12px;
+  border-radius: 10px;
+  border: 1px solid #e5e7eb;
+  font-size: 13px;
+  outline: none;
+  background: #fff;
+  width: 100%;
+  max-width: 400px;
+  cursor: pointer;
+  color: #374151;
+}
+
+.merger-select:focus {
+  border-color: #c2185b;
+}
+
+.merger-summary-inline {
+  border-top: none;
+  padding-top: 0;
+  margin-top: 0;
+}
+
+.merger-preview-table-scroll {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.merger-preview-detail-table th,
+.merger-preview-detail-table td {
+  white-space: nowrap;
+}
+
+.merger-preview-detail-table td:nth-child(2),
+.merger-preview-detail-table td:nth-child(3),
+.merger-preview-detail-table td:nth-child(4) {
+  white-space: normal;
+  max-width: 140px;
+  word-break: break-all;
+}
+
+.merger-account-cell {
+  font-weight: 600;
+  color: #111827;
+}

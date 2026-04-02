@@ -9,6 +9,7 @@ import ReportsPage from "./pages/Reports/ReportsPage";
 import BonusPage from "./pages/BonusPage/BonusPage";
 import DividendPage from "./pages/Dividend/DividendPage";
 import DemergerPage from "./pages/DemergerPage/DemergerPage";
+import MergerPage from "./pages/MergerPage/MergerPage";
 import TempTransaction from "./pages/TempTransactionUpload/TempTransaction";
 import UpdateISINPage from "./pages/update-isin/UpdateISINPage";
 
@@ -22,6 +23,7 @@ function App() {
         <Route path="/bonus" element={<BonusPage />} />
         <Route path="/dividend" element={<DividendPage />} />
         <Route path="/demerger" element={<DemergerPage />} />
+        <Route path="/merger" element={<MergerPage />} />
         <Route path="/bhav-copy" element={<BhavCopyUploadPage />} />
         {/* <Route path="/transaction-upload" element={<TransactionUploadPage />} /> */}
         <Route path="/temp-transaction" element={<TempTransaction />} />

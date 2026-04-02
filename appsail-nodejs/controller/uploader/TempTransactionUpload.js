@@ -4,10 +4,78 @@ import { PassThrough, Readable } from "stream";
 const BUCKET_NAME = "temporary-files";
 const TABLE_NAME = "Transaction";
 
-const DATE_FORMAT_ERROR =
-  "Date format in sheet is not yyyy-mm-dd. Please update the date format and re-upload it.";
-
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * Headers must appear in this exact order. Name match is case-insensitive (trimmed).
+ * All wrong, missing, or extra columns are collected and returned together.
+ */
+const REQUIRED_TRANSACTION_HEADERS = [
+  "WS_client_id",
+  "WS_Account_code",
+  "TRANDATE",
+  "SETDATE",
+  "Tran_Type",
+  "Tran_Desc",
+  "Security_Type",
+  "Security_Type_Description",
+  "DETAILTYPENAME",
+  "ISIN",
+  "Security_code",
+  "Security_Name",
+  "EXCHG",
+  "BROKERCODE",
+  "Depositoy_Registrar",
+  "DPID_AMC",
+  "Dp_Client_id_Folio",
+  "BANKCODE",
+  "BANKACID",
+  "QTY",
+  "RATE",
+  "BROKERAGE",
+  "SERVICETAX",
+  "NETRATE",
+  "Net_Amount",
+  "STT",
+  "TRFDATE",
+  "TRFRATE",
+  "TRFAMT",
+  "TOTAL_TRXNFEE",
+  "TOTAL_TRXNFEE_STAX",
+  "Txn_Ref_No",
+  "DESCMEMO",
+  "CHEQUENO",
+  "CHEQUEDTL",
+  "PORTFOLIOID",
+  "DELIVERYDATE",
+  "PAYMENTDATE",
+  "ACCRUEDINTEREST",
+  "ISSUER",
+  "ISSUERNAME",
+  "TDSAMOUNT",
+  "STAMPDUTY",
+  "TPMSGAIN",
+  "RMID",
+  "RMNAME",
+  "ADVISORID",
+  "ADVISORNAME",
+  "BRANCHID",
+  "BRANCHNAME",
+  "GROUPID",
+  "GROUPNAME",
+  "OWNERID",
+  "OWNERNAME",
+  "WEALTHADVISOR_NAME",
+  "SCHEMEID",
+  "SCHEMENAME",
+  "executionPriority",
+];
+
+/** Must be yyyy-mm-dd on every sample row (non-empty). */
+const REQUIRED_DATE_COLUMNS = ["TRANDATE", "SETDATE"];
+
+/** If non-empty, value must be yyyy-mm-dd. */
+const OPTIONAL_DATE_COLUMNS = ["TRFDATE", "DELIVERYDATE", "PAYMENTDATE"];
 
 function stripBom(text) {
   if (text.charCodeAt(0) === 0xfeff) {
@@ -38,13 +106,61 @@ function isValidYyyyMmDd(value) {
   );
 }
 
+function normalizeHeaderKey(k) {
+  return String(k).trim().toUpperCase();
+}
+
+/**
+ * @returns {Array<{ type: 'wrongOrMissing' | 'extra', uploaded: string, expected: string | null, position: number }>}
+ */
+function collectAllHeaderMismatches(fileHeaders) {
+  const required = REQUIRED_TRANSACTION_HEADERS;
+  const mismatches = [];
+
+  for (let i = 0; i < required.length; i++) {
+    const expected = required[i];
+    const raw = i < fileHeaders.length ? fileHeaders[i] : "";
+    const uploaded = String(raw ?? "").trim();
+    if (normalizeHeaderKey(uploaded) !== normalizeHeaderKey(expected)) {
+      mismatches.push({
+        type: "wrongOrMissing",
+        uploaded: uploaded === "" ? "(missing)" : uploaded,
+        expected,
+        position: i + 1,
+      });
+    }
+  }
+
+  for (let i = required.length; i < fileHeaders.length; i++) {
+    const uploaded = String(fileHeaders[i] ?? "").trim() || "(empty)";
+    mismatches.push({
+      type: "extra",
+      uploaded,
+      expected: null,
+      position: i + 1,
+    });
+  }
+
+  return mismatches;
+}
+
+function buildHeaderMismatchMessage(mismatches) {
+  const templateCount = REQUIRED_TRANSACTION_HEADERS.length;
+  const lines = mismatches.map((m) => {
+    if (m.type === "extra") {
+      return `Column ${m.position}: Unexpected header '${m.uploaded}' — the template has exactly ${templateCount} columns in order. Remove extra columns.`;
+    }
+    return `Column ${m.position}: Header '${m.uploaded}' in your file does not match the expected header '${m.expected}'. Please rename it to '${m.expected}'.`;
+  });
+  return `One or more headers do not match the template. Fix the issues below and re-upload the file.\n${lines.join("\n")}`;
+}
+
 const SAMPLE_DATA_ROW_COUNT = 5;
 
 /**
- * Parses the first SAMPLE_DATA_ROW_COUNT data rows and ensures TRANDATE and SETDATE
- * are present and each value matches yyyy-mm-dd (calendar-valid).
+ * Parses the first SAMPLE_DATA_ROW_COUNT data rows from the CSV buffer.
  */
-function validateTempTransactionDateColumns(fileBuffer) {
+function parseTempTransactionSampleRows(fileBuffer) {
   return new Promise((resolve, reject) => {
     const text = stripBom(fileBuffer.toString("utf8"));
     const rows = [];
@@ -86,13 +202,11 @@ function validateTempTransactionDateColumns(fileBuffer) {
 }
 
 /**
- * POST /api/temp-transaction/upload
- *temporary-files
+ * POST /api/transaction-uploader/upload-temp-file
  * 1. Validates the uploaded CSV file.
- * 2. Parses sample data rows and validates TRANDATE / SETDATE as yyyy-mm-dd.
- *    (No Stratus or bulk job work runs until this passes — wrong dates return 400.)
- * 3. Streams the file to the Stratus bucket under temp-files/temp-transactions/.
- * 4. Triggers a Catalyst Bulk Write Job to insert the CSV rows into the Transaction table.
+ * 2. Ensures CSV headers match the template in order; validates date columns on sample rows.
+ * 3. Streams the file to Stratus under temp-files/temp-transactions/.
+ * 4. Triggers a Catalyst Bulk Write Job to insert into the Transaction table.
  */
 export const uploadTempTransaction = async (req, res) => {
   try {
@@ -124,7 +238,7 @@ export const uploadTempTransaction = async (req, res) => {
     /* ─── 1b. PARSE CSV + DATE CHECK (before Stratus — must pass to continue) ─ */
     let sampleRows;
     try {
-      sampleRows = await validateTempTransactionDateColumns(file.data);
+      sampleRows = await parseTempTransactionSampleRows(file.data);
     } catch (parseErr) {
       console.error(
         `[TempTransactionUpload] CSV parse error [${new Date().toISOString()}]:`,
@@ -140,32 +254,44 @@ export const uploadTempTransaction = async (req, res) => {
       return res.status(400).json({
         success: false,
         message:
-          "The CSV has no data rows. Add at least one row with TRANDATE and SETDATE before uploading.",
+          "The CSV has no data rows. Add at least one data row before uploading.",
       });
     }
 
     const headerKeys = Object.keys(sampleRows[0] || {});
-    const hasTrandateCol = headerKeys.some(
-      (k) => k.trim().toUpperCase() === "TRANDATE"
-    );
-    const hasSetdateCol = headerKeys.some(
-      (k) => k.trim().toUpperCase() === "SETDATE"
-    );
-    if (!hasTrandateCol || !hasSetdateCol) {
+    const headerMismatches = collectAllHeaderMismatches(headerKeys);
+    if (headerMismatches.length > 0) {
       return res.status(400).json({
         success: false,
-        message:
-          "The CSV must include TRANDATE and SETDATE columns (header names).",
+        message: buildHeaderMismatchMessage(headerMismatches),
+        mismatches: headerMismatches,
       });
     }
 
     for (let i = 0; i < sampleRows.length; i++) {
-      const trandate = getCell(sampleRows[i], "TRANDATE");
-      const setdate = getCell(sampleRows[i], "SETDATE");
-      if (!isValidYyyyMmDd(trandate) || !isValidYyyyMmDd(setdate)) {
+      const rowNumber = i + 2;
+      const invalidDateFields = [];
+
+      for (const col of REQUIRED_DATE_COLUMNS) {
+        const v = getCell(sampleRows[i], col);
+        if (!isValidYyyyMmDd(v)) {
+          invalidDateFields.push(col);
+        }
+      }
+
+      for (const col of OPTIONAL_DATE_COLUMNS) {
+        const v = getCell(sampleRows[i], col);
+        if (v !== "" && !isValidYyyyMmDd(v)) {
+          invalidDateFields.push(col);
+        }
+      }
+
+      if (invalidDateFields.length > 0) {
         return res.status(400).json({
           success: false,
-          message: DATE_FORMAT_ERROR,
+          message: `Invalid date format (use yyyy-mm-dd) in data row ${rowNumber} for: ${invalidDateFields.join(", ")}.`,
+          fields: invalidDateFields,
+          row: rowNumber,
         });
       }
     }
