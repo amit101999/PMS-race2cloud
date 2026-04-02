@@ -134,12 +134,6 @@ function MergerPage() {
       ? String(oldSecurity.isin ?? "").trim().toUpperCase()
       : undefined;
 
-  /** Input width ~ character count (fallback where CSS field-sizing is unsupported). */
-  const mergerOldIsinInputSize = Math.min(
-    Math.max(MERGER_OLD_ISIN_PLACEHOLDER.length, oldIsinInputValue.length) + 2,
-    120,
-  );
-
   const validateForm = () => {
     if (!effectiveDate || !recordDate) {
       return "Effective date and record date are required.";
@@ -336,7 +330,6 @@ function MergerPage() {
                     placeholder={MERGER_OLD_ISIN_PLACEHOLDER}
                     title={oldIsinInputTitle}
                     value={oldIsinInputValue}
-                    size={mergerOldIsinInputSize}
                     onFocus={() => {
                       clearStatus();
                       setOldIsinFocused(true);

@@ -2,6 +2,23 @@ import { runFifoEngine } from "../analytics/transactionHistory/fifo.js";
 
 export const ZCQL_ROW_LIMIT = 270;
 
+/** Matches Analytics `tabs/holding/AnalyticsControllers.js` (holding summary as-on date). */
+const isBuyType = (type) => /^BY-|SQB|OPI/i.test(String(type || ""));
+
+const getEffectiveDate = (t) => {
+  const setDate = t.SETDATE || t.setdate;
+  const tradeDate = t.TRANDATE || t.trandate;
+  return isBuyType(t.Tran_Type || t.tranType)
+    ? setDate || tradeDate
+    : tradeDate || setDate;
+};
+
+function nextDayIso(asOnDateISO) {
+  const nextDay = new Date(asOnDateISO);
+  nextDay.setDate(nextDay.getDate() + 1);
+  return nextDay.toISOString().split("T")[0];
+}
+
 export function escSql(value) {
   return String(value ?? "").replace(/'/g, "''");
 }
@@ -27,24 +44,85 @@ export async function fetchAccountsForIsin(zcql, isin) {
   return accountSet;
 }
 
-async function fetchAllDeduped(zcql, table, isin, dateCol, dateISO) {
+async function fetchTransactionsForIsinAsOnDate(zcql, isin, asOnDateISO) {
+  const nextDayStr = nextDayIso(asOnDateISO);
   const out = [];
-  const seenRowIds = new Set();
+  const seenTxnRowIds = new Set();
   let off = 0;
   while (true) {
     const r = await zcql.executeZCQLQuery(`
       SELECT *
-      FROM ${table}
-      WHERE ISIN='${escSql(isin)}' AND ${dateCol} <= '${escSql(dateISO)}'
-      ORDER BY ${dateCol} ASC, ROWID ASC
+      FROM Transaction
+      WHERE ISIN='${escSql(isin)}'
+        AND (TRANDATE < '${escSql(nextDayStr)}' OR SETDATE < '${escSql(nextDayStr)}')
+      ORDER BY ROWID ASC
       LIMIT ${ZCQL_ROW_LIMIT} OFFSET ${off}
     `);
     if (!r || r.length === 0) break;
     for (const row of r) {
-      const rec = row[table] || row.Transaction || row.Bonus || row.Split || row;
-      const rowId = rec.ROWID;
-      if (rowId != null && seenRowIds.has(rowId)) continue;
-      if (rowId != null) seenRowIds.add(rowId);
+      const t = row.Transaction || row;
+      if (seenTxnRowIds.has(t.ROWID)) continue;
+      seenTxnRowIds.add(t.ROWID);
+      out.push(row);
+    }
+    if (r.length < ZCQL_ROW_LIMIT) break;
+    off += ZCQL_ROW_LIMIT;
+  }
+
+  const cutoff = nextDayStr;
+  return out.filter((row) => {
+    const t = row.Transaction || row;
+    const effectiveDate = getEffectiveDate(t);
+    return !effectiveDate || effectiveDate < cutoff;
+  });
+}
+
+async function fetchBonusRowsForIsinAsOnDate(zcql, isin, asOnDateISO) {
+  const nextDayStr = nextDayIso(asOnDateISO);
+  const out = [];
+  const seenBonusRowIds = new Set();
+  let off = 0;
+  while (true) {
+    const r = await zcql.executeZCQLQuery(`
+      SELECT *
+      FROM Bonus
+      WHERE ISIN='${escSql(isin)}' AND ExDate < '${escSql(nextDayStr)}'
+      ORDER BY ROWID ASC
+      LIMIT ${ZCQL_ROW_LIMIT} OFFSET ${off}
+    `);
+    if (!r || r.length === 0) break;
+    for (const row of r) {
+      const b = row.Bonus || row;
+      if (!b || !b.ROWID) continue;
+      if (seenBonusRowIds.has(b.ROWID)) continue;
+      seenBonusRowIds.add(b.ROWID);
+      out.push(row);
+    }
+    if (r.length < ZCQL_ROW_LIMIT) break;
+    off += ZCQL_ROW_LIMIT;
+  }
+  return out;
+}
+
+async function fetchSplitRowsForIsinAsOnDate(zcql, isin, asOnDateISO) {
+  const nextDayStr = nextDayIso(asOnDateISO);
+  const out = [];
+  const seenSplitRowIds = new Set();
+  let off = 0;
+  while (true) {
+    const r = await zcql.executeZCQLQuery(`
+      SELECT *
+      FROM Split
+      WHERE ISIN='${escSql(isin)}' AND Issue_Date < '${escSql(nextDayStr)}'
+      ORDER BY ROWID ASC
+      LIMIT ${ZCQL_ROW_LIMIT} OFFSET ${off}
+    `);
+    if (!r || r.length === 0) break;
+    for (const row of r) {
+      const s = row.Split || row;
+      if (!s || !s.ROWID) continue;
+      if (seenSplitRowIds.has(s.ROWID)) continue;
+      seenSplitRowIds.add(s.ROWID);
       out.push(row);
     }
     if (r.length < ZCQL_ROW_LIMIT) break;
@@ -54,24 +132,17 @@ async function fetchAllDeduped(zcql, table, isin, dateCol, dateISO) {
 }
 
 /**
- * FIFO snapshot (card mode) for one ISIN as of record date — holdings, carried cost (holdingValue), WAP.
+ * FIFO snapshot (card mode) for one ISIN as of record date — same inputs as Analytics holding tab
+ * (effective-date filter, TRANDATE/SETDATE window, bonus/split &lt; next day, ORDER BY ROWID).
  */
 export async function fifoCardForIsinOnRecordDate(zcql, isin, recordDateISO) {
-  const txRows = await fetchAllDeduped(
-    zcql,
-    "Transaction",
-    isin,
-    "SETDATE",
-    recordDateISO,
-  );
-  const bonusRows = await fetchAllDeduped(zcql, "Bonus", isin, "ExDate", recordDateISO);
-  const splitRows = await fetchAllDeduped(
-    zcql,
-    "Split",
-    isin,
-    "Issue_Date",
-    recordDateISO,
-  );
+  if (!recordDateISO || !/^\d{4}-\d{2}-\d{2}$/.test(recordDateISO)) {
+    throw new Error("fifoCardForIsinOnRecordDate: recordDateISO must be yyyy-mm-dd.");
+  }
+
+  const txRows = await fetchTransactionsForIsinAsOnDate(zcql, isin, recordDateISO);
+  const bonusRows = await fetchBonusRowsForIsinAsOnDate(zcql, isin, recordDateISO);
+  const splitRows = await fetchSplitRowsForIsinAsOnDate(zcql, isin, recordDateISO);
 
   const txByAccount = {};
   txRows.forEach((row) => {

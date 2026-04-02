@@ -181,19 +181,18 @@
   max-width: 100%;
 }
 
-/* Old ISIN: width follows placeholder / value (field-sizing + size attr); wrapper caps to row */
+/* Old ISIN: same width behavior as “New ISIN” (merger-new-isin-field, max-width 520px) */
 .merger-select-field.merger-old-isin-field {
-  width: fit-content;
-  max-width: 100%;
+  width: 100%;
+  max-width: 520px;
   min-width: 0;
 }
 
 .merger-text-input.merger-old-isin-input {
-  field-sizing: content;
-  width: auto;
-  max-width: 100%;
-  min-width: 0;
-  align-self: flex-start;
+  width: 100%;
+  max-width: none;
+  box-sizing: border-box;
+  align-self: stretch;
   white-space: nowrap;
   overflow-x: auto;
 }

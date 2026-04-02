@@ -8,12 +8,20 @@ import {
 /** Value for Merger.Tran_Type (transaction-style type code). */
 const MERGER_TRAN_TYPE = "MERGER";
 
+/**
+ * Calendar date for DB (no timezone shift). HTML date inputs send yyyy-mm-dd — must not use
+ * new Date(s).toISOString() or setHours+toISOString (1 Apr → 31 Mar in IST, etc.).
+ */
 function toIsoDate(d) {
-  if (!d) return null;
+  if (d == null || d === "") return null;
+  const s = String(d).trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
   const dt = new Date(d);
   if (Number.isNaN(dt.getTime())) return null;
-  dt.setHours(0, 0, 0, 0);
-  return dt.toISOString().split("T")[0];
+  const y = dt.getUTCFullYear();
+  const m = String(dt.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(dt.getUTCDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
 }
 
 function normalizeBodyOldIsins(oldCompanies) {
@@ -151,7 +159,7 @@ async function computeMergerPreview(zcql, body) {
       recordDateIso: recordISO,
       newIsin,
       oldIsins,
-      note: "mergedQty = floor(holdings * ratio1 / ratio2), same as bonus. COA = FIFO on old ISIN. mergedWAP = COA / mergedQty.",
+      note: "mergedQty = floor(holdings * ratio1 / ratio2), same as bonus. COA = FIFO on old ISIN. mergedWAP = COA / mergedQty. Apply persists TRANDATE/SETDATE = recordDateIso only.",
     },
   };
 }
@@ -184,7 +192,8 @@ export const previewMerger = async (req, res) => {
 
 /**
  * POST /api/merger/apply
- * Body: same as preview + optional effectiveDateIso (defaults to record date).
+ * Body: same as preview (effectiveDateIso on the client is ignored here).
+ * Merger + Merger_Record: TRANDATE and SETDATE both = user-selected record date only (recordDateIso → result.recordISO).
  */
 export const applyMerger = async (req, res) => {
   try {
@@ -192,8 +201,6 @@ export const applyMerger = async (req, res) => {
       return res.status(500).json({ success: false, message: "Catalyst app not initialized" });
     }
 
-    const { effectiveDateIso } = req.body || {};
-    const effectiveISO = toIsoDate(effectiveDateIso);
     const mic = mergeIntoNewCompanyFields(req.body);
     const secName = mic.securityName;
     const newIsin = mic.isin;
@@ -206,7 +213,6 @@ export const applyMerger = async (req, res) => {
     }
 
     const recordISO = result.recordISO;
-    const effISO = effectiveISO || recordISO;
     const resolvedSecName = secName || `Merged ${newIsin}`;
     const rows = result.preview || [];
     const actionable = rows.filter((r) => r.totalNewShares > 0);
@@ -274,7 +280,7 @@ export const applyMerger = async (req, res) => {
           '${escSql(oldIsin)}',
           ${r1},
           ${r2},
-          '${escSql(effISO)}',
+          '${escSql(recordISO)}',
           '${escSql(recordISO)}'
         )
       `);
@@ -283,7 +289,7 @@ export const applyMerger = async (req, res) => {
       return res.status(500).json({
         success: false,
         message:
-          "Merger_Record insert failed. Create table Merger_Record with columns: ISIN, Security_Code, Security_Name, OldISIN, Ratio1, Ratio2, TRANDATE, SETDATE. TRANDATE=effective date, SETDATE=record/ex date.",
+          "Merger_Record insert failed. Create table Merger_Record with columns: ISIN, Security_Code, Security_Name, OldISIN, Ratio1, Ratio2, TRANDATE, SETDATE. TRANDATE and SETDATE both store the merger record date (recordDateIso).",
         detail: e.message,
       });
     }
@@ -323,7 +329,7 @@ export const applyMerger = async (req, res) => {
             '${escSql(oldIsin)}',
             ${avg},
             ${cost},
-            '${escSql(effISO)}',
+            '${escSql(recordISO)}',
             '${escSql(recordISO)}',
             '${escSql(MERGER_TRAN_TYPE)}',
             ${qty},
@@ -340,7 +346,7 @@ export const applyMerger = async (req, res) => {
       return res.status(500).json({
         success: false,
         message:
-          "Merger row insert failed. Create table Merger with columns: ISIN, SecurityCode, Security_Name, WS_Account_code, Holding, OldISIN, WAP, Total_Amount, TRANDATE, SETDATE, Tran_Type, Quantity, HoldingValue. TRANDATE=effective date, SETDATE=record/ex date.",
+          "Merger row insert failed. Create table Merger with columns: ISIN, SecurityCode, Security_Name, WS_Account_code, Holding, OldISIN, WAP, Total_Amount, TRANDATE, SETDATE, Tran_Type, Quantity, HoldingValue. TRANDATE and SETDATE both store the merger record date (recordDateIso).",
         errors,
       });
     }
