@@ -36,15 +36,33 @@ const TempTransaction = () => {
                 }
             );
 
-            const data = await res.json();
+            let data = {};
+            try {
+                const text = await res.text();
+                if (text) {
+                    data = JSON.parse(text);
+                }
+            } catch {
+                data = {};
+            }
 
             if (!res.ok) {
-                throw new Error(data?.message || "Upload failed");
+                throw new Error(
+                    data?.message ||
+                        `Upload failed (${res.status}). Please try again.`
+                );
             }
 
             setUploadMessage("File uploaded successfully.");
         } catch (err) {
-            setUploadError(err.message || "Upload failed");
+            const isNetwork =
+                err instanceof TypeError ||
+                String(err?.message || "").toLowerCase().includes("failed to fetch");
+            setUploadError(
+                isNetwork
+                    ? "Could not reach the upload server."
+                    : err.message || "Upload failed"
+            );
         } finally {
             setUploadLoading(false);
         }
@@ -80,7 +98,17 @@ const TempTransaction = () => {
                     )}
 
                     {uploadError && (
-                        <p style={{ marginTop: '20px', color: '#b91c1c', fontSize: '14px', padding: '10px', backgroundColor: '#fee2e2', borderRadius: '8px' }}>
+                        <p
+                            style={{
+                                marginTop: "20px",
+                                color: "#b91c1c",
+                                fontSize: "14px",
+                                padding: "10px",
+                                backgroundColor: "#fee2e2",
+                                borderRadius: "8px",
+                                whiteSpace: "pre-line",
+                            }}
+                        >
                             {uploadError}
                         </p>
                     )}
