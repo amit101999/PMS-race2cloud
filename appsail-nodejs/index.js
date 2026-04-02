@@ -17,6 +17,7 @@ import BonusRouter from "./router/BonusRouter.js";
 import DividendUploaderRouter from "./router/uploaderRouter/DividendUploaderRouter.js";
 import IsinRouter from "./router/IsinRouter.js";
 import DemergerRouter from "./router/DemergerRouter.js";
+import MergerRouter from "./router/MergerRouter.js";
 
 app.use(cors());
 app.use(Express.json());
@@ -64,6 +65,7 @@ app.use("/api/bonus", BonusRouter);
 app.use("/api/dividend", DividendUploaderRouter);
 app.use("/api/isin", IsinRouter);
 app.use("/api/demerger", DemergerRouter);
+app.use("/api/merger", MergerRouter);
 
 app.put("/update", async (req, res) => {
   console.log("Update started");
