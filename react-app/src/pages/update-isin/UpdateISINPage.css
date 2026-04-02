@@ -75,16 +75,21 @@
 }
 
 .update-isin-suggestions {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: calc(100% + 4px);
+  z-index: 50;
   list-style: none;
-  margin: 6px 0 0 0;
-  padding: 0;
-  max-height: 220px;
+  margin: 0;
+  padding: 6px 0;
+  max-height: 240px;
   overflow-y: auto;
-  border: 1px solid #e8e8e8;
+  border: 1px solid #e5e7eb;
   border-radius: 10px;
-  background: #fff;
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.06);
-  z-index: 2;
+  background: #ffffff;
+  color: #111827;
+  box-shadow: 0 10px 25px rgba(17, 24, 39, 0.12);
 }
 
 .update-isin-suggestions li {
@@ -104,14 +109,15 @@
   gap: 2px;
   padding: 10px 12px;
   border: none;
-  background: transparent;
+  background: #ffffff;
+  color: #111827;
   cursor: pointer;
   text-align: left;
   font: inherit;
 }
 
 .update-isin-suggestion-btn:hover {
-  background: #fdf2f5;
+  background: #fdf2f8;
 }
 
 .update-isin-suggestion-isin {

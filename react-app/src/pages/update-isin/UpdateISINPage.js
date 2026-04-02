@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useEffect, useMemo } from "react";
+import React, { useState, useCallback, useEffect, useMemo, useRef } from "react";
 import MainLayout from "../../layouts/MainLayout";
 import { BASE_URL } from "../../constant";
 import "./UpdateISINPage.css";
@@ -28,6 +28,9 @@ const formatApiError = (err, fallback) => {
 
 const UpdateISINPage = () => {
   const [oldIsin, setOldIsin] = useState("");
+  const [oldIsinFocused, setOldIsinFocused] = useState(false);
+  const oldIsinInputRef = useRef(null);
+  const oldIsinPickingRef = useRef(false);
   const [newIsin, setNewIsin] = useState("");
   /** @type {[SecurityListIsinRow[], React.Dispatch<React.SetStateAction<SecurityListIsinRow[]>>]} */
   const [securityListIsins, setSecurityListIsins] = useState([]);
@@ -83,18 +86,20 @@ const UpdateISINPage = () => {
     ? isinByKey.get(oldIsinTrim.toUpperCase())
     : undefined;
 
+  /** Light-themed list only (no native datalist — OS dark popup). */
   const suggestions = useMemo(() => {
-    if (!oldIsinTrim || resolvedOldRow || !securityListIsins.length) return [];
+    if (!oldIsinFocused || resolvedOldRow || !securityListIsins.length) return [];
     const q = oldIsinTrim.toUpperCase();
+    if (!q) return securityListIsins.slice(0, 30);
     return securityListIsins
       .filter(
         (r) =>
-          r.isin.toUpperCase().includes(q) ||
-          r.securityName.toUpperCase().includes(q) ||
-          r.securityCode.toUpperCase().includes(q)
+          String(r.isin ?? "").toUpperCase().includes(q) ||
+          String(r.securityName ?? "").toUpperCase().includes(q) ||
+          String(r.securityCode ?? "").toUpperCase().includes(q)
       )
-      .slice(0, 12);
-  }, [oldIsinTrim, resolvedOldRow, securityListIsins]);
+      .slice(0, 50);
+  }, [oldIsinFocused, oldIsinTrim, resolvedOldRow, securityListIsins]);
 
   const clearTerminalStateOnEdit = useCallback(() => {
     if (status === "completed" || status === "failure") {
@@ -102,6 +107,17 @@ const UpdateISINPage = () => {
       setBanner(null);
     }
   }, [status]);
+
+  const pickOldIsin = useCallback(
+    (isin) => {
+      oldIsinPickingRef.current = true;
+      setOldIsin(isin);
+      clearTerminalStateOnEdit();
+      setOldIsinFocused(false);
+      oldIsinInputRef.current?.blur();
+    },
+    [clearTerminalStateOnEdit],
+  );
 
   const handleUpdate = async () => {
     setBanner(null);
@@ -206,12 +222,25 @@ const UpdateISINPage = () => {
               <label htmlFor="old-isin">Old ISIN</label>
               <div className="update-isin-combobox">
                 <input
+                  ref={oldIsinInputRef}
                   id="old-isin"
                   type="text"
                   value={oldIsin}
+                  role="combobox"
+                  aria-expanded={oldIsinFocused && suggestions.length > 0}
+                  aria-controls="update-isin-suggest-list"
+                  aria-autocomplete="list"
                   onChange={(e) => {
                     setOldIsin(e.target.value);
                     clearTerminalStateOnEdit();
+                  }}
+                  onFocus={() => setOldIsinFocused(true)}
+                  onBlur={() => {
+                    if (oldIsinPickingRef.current) {
+                      oldIsinPickingRef.current = false;
+                      return;
+                    }
+                    setOldIsinFocused(false);
                   }}
                   placeholder={
                     isinsLoading
@@ -220,7 +249,6 @@ const UpdateISINPage = () => {
                   }
                   disabled={status === "in_progress"}
                   autoComplete="off"
-                  list="old-isin-datalist"
                   aria-describedby="old-isin-resolution"
                   aria-invalid={
                     oldIsinTrim.length >= 10 &&
@@ -229,23 +257,20 @@ const UpdateISINPage = () => {
                     securityListIsins.length > 0
                   }
                 />
-                <datalist id="old-isin-datalist">
-                  {securityListIsins.map((row) => (
-                    <option key={row.isin} value={row.isin}>
-                      {row.securityName || row.securityCode || row.isin}
-                    </option>
-                  ))}
-                </datalist>
                 {suggestions.length > 0 && (
-                  <ul className="update-isin-suggestions" role="listbox">
+                  <ul
+                    id="update-isin-suggest-list"
+                    className="update-isin-suggestions"
+                    role="listbox"
+                  >
                     {suggestions.map((row) => (
                       <li key={row.isin} role="option">
                         <button
                           type="button"
                           className="update-isin-suggestion-btn"
-                          onClick={() => {
-                            setOldIsin(row.isin);
-                            clearTerminalStateOnEdit();
+                          onMouseDown={(e) => {
+                            e.preventDefault();
+                            pickOldIsin(row.isin);
                           }}
                         >
                           <span className="update-isin-suggestion-isin">{row.isin}</span>
