@@ -346,7 +346,7 @@ function DemergerPage() {
               <h3 className="demerger-section-title">Demerger Details</h3>
               <div className="demerger-details-grid">
                 <div className="bonus-field">
-                  <label>Ratio 1 (old)</label>
+                  <label>Ratio 1</label>
                   <input
                     type="number"
                     min="0"
@@ -360,7 +360,7 @@ function DemergerPage() {
                   />
                 </div>
                 <div className="bonus-field">
-                  <label>Ratio 2 (new)</label>
+                  <label>Ratio 2</label>
                   <input
                     type="number"
                     min="0"

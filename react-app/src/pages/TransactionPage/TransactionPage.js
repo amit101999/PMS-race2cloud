@@ -76,11 +76,12 @@ function TransactionPage({ stock, accountCode, asOnDate, onClose }) {
     )
       return "sell";
     if (typeUpper === "BONUS") return "bonus";
+    if (typeUpper === "DEMERGER") return "bonus";
+    if (typeUpper === "MERGER") return "bonus";
     return "";
   };
 
   const formatCurrency = (value) => {
-    console.log("value is :", value);
     if (value === null || value === undefined || value === "") return "-";
     const num = Number(value);
     if (isNaN(num)) return "-";

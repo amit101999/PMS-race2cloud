@@ -1,3 +1,6 @@
+import { fetchDemergerRecordsForAccount } from "../../../../util/analytics/transactionHistory/demergers.js";
+import { fetchMergerRecordsForAccount } from "../../../../util/analytics/transactionHistory/mergers.js";
+
 export const applyCashEffect = (balance, tranType, amount) => {
   if (
     tranType === "CS+" ||
@@ -300,9 +303,61 @@ export const getPaginatedTransactions = async (req, res) => {
       });
     }
 
+    /* ================= FETCH DEMERGER_RECORD ================= */
+    let demergerRows = [];
+    try {
+      const demRaw = await fetchDemergerRecordsForAccount({
+        zcql,
+        accountCode,
+        asOnDate,
+      });
+      demergerRows = (demRaw || []).map((d) => ({
+        rowId: "DMG-" + d.ROWID,
+        date: d.TRANDATE,
+        executionPriority: 2,
+        type: "DEMERGER",
+        securityName: d.Security_Name,
+        securityCode: d.Security_Code,
+        isin: d.ISIN,
+        quantity: Number(d.QTY) || 0,
+        price: Number(d.PRICE) || 0,
+        totalAmount: Number(d.TOTAL_AMOUNT) || 0,
+        stt: 0,
+        holdingAfter: Number(d.HOLDING) || Number(d.QTY) || 0,
+      }));
+    } catch (e) {
+      console.error("Error fetching demerger records", e);
+    }
+
+    /* ================= FETCH MERGER ================= */
+    let mergerRows = [];
+    try {
+      const mrgRaw = await fetchMergerRecordsForAccount({
+        zcql,
+        accountCode,
+        asOnDate,
+      });
+      mergerRows = (mrgRaw || []).map((m) => ({
+        rowId: "MRG-" + m.ROWID,
+        date: m.TRANDATE,
+        executionPriority: 2,
+        type: "MERGER",
+        securityName: m.Security_Name,
+        securityCode: m.SecurityCode,
+        isin: m.ISIN,
+        quantity: Number(m.Quantity) || Number(m.Holding) || 0,
+        price: Number(m.WAP) || 0,
+        totalAmount: Number(m.Total_Amount) || 0,
+        stt: 0,
+        holdingAfter: Number(m.Holding) || Number(m.Quantity) || 0,
+      }));
+    } catch (e) {
+      console.error("Error fetching merger records", e);
+    }
+
     /* ================= MERGE & SORT ================= */
 
-    let allRows = [].concat(transactionRows, dividendRows, bonusRows, splitRows);
+    let allRows = [].concat(transactionRows, dividendRows, bonusRows, splitRows, demergerRows, mergerRows);
     // console.log("[DEBUG] Merged total:", allRows.length, "(Tx:", transactionRows.length, "Div:", dividendRows.length, "Bon:", bonusRows.length, "Spl:", splitRows.length, ")");
 
     allRows.sort((a, b) => {
@@ -336,6 +391,12 @@ export const getPaginatedTransactions = async (req, res) => {
           break;
         }
         case "DIV+":
+          break;
+        case "DEMERGER":
+          runningHoldingByIsin[isin] = Number(row.holdingAfter) || holding;
+          break;
+        case "MERGER":
+          runningHoldingByIsin[isin] = Number(row.holdingAfter) || holding;
           break;
         default:
           // Transaction: buy adds, sell subtracts
