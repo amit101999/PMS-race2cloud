@@ -1,5 +1,3 @@
-/* Demerger — extends SplitPage.css classes (imported in component) */
-
 .demerger-page .split-card {
   align-items: start;
 }
@@ -17,6 +15,25 @@
   color: #111827;
   margin: 0 0 12px;
   letter-spacing: 0.02em;
+}
+
+.demerger-readonly-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 12px 18px;
+  margin-top: 12px;
+}
+
+.demerger-new-company-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 12px 18px;
+}
+
+.demerger-details-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 12px 18px;
 }
 
 .demerger-cost-hint {
@@ -46,10 +63,6 @@
 
 .demerger-actions .bonus-submit {
   min-width: 180px;
-}
-
-.account-code-search {
-  position: relative;
 }
 
 .demerger-select-field {
