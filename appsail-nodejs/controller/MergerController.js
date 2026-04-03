@@ -213,6 +213,7 @@ export const applyMerger = async (req, res) => {
     }
 
     const recordISO = result.recordISO;
+    const effectiveISO = toIsoDate(req.body.effectiveDateIso) || recordISO;
     const resolvedSecName = secName || `Merged ${newIsin}`;
     const rows = result.preview || [];
     const actionable = rows.filter((r) => r.totalNewShares > 0);
@@ -280,8 +281,8 @@ export const applyMerger = async (req, res) => {
           '${escSql(oldIsin)}',
           ${r1},
           ${r2},
-          '${escSql(recordISO)}',
-          '${escSql(recordISO)}'
+          '${escSql(effectiveISO)}',
+          '${escSql(effectiveISO)}'
         )
       `);
     } catch (e) {
@@ -329,8 +330,8 @@ export const applyMerger = async (req, res) => {
             '${escSql(oldIsin)}',
             ${avg},
             ${cost},
-            '${escSql(recordISO)}',
-            '${escSql(recordISO)}',
+            '${escSql(effectiveISO)}',
+            '${escSql(effectiveISO)}',
             '${escSql(MERGER_TRAN_TYPE)}',
             ${qty},
             ${holdingValue}

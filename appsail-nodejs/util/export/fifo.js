@@ -4,7 +4,9 @@ export const runFifoEngine = (
   transactions = [],
   bonuses = [],
   splits = [],
-  card = false
+  card = false,
+  demergers = [],
+  mergers = [],
 ) => {
   const activeIsin =
     transactions[0]?.ISIN ||
@@ -12,6 +14,10 @@ export const runFifoEngine = (
     bonuses[0]?.ISIN ||
     bonuses[0]?.isin ||
     splits[0]?.isin ||
+    demergers[0]?.ISIN ||
+    demergers[0]?.isin ||
+    mergers[0]?.ISIN ||
+    mergers[0]?.isin ||
     null;
 
   let holdings = 0;
@@ -83,6 +89,45 @@ export const runFifoEngine = (
           isin: s.isin,
         },
       })),
+
+    ...demergers
+      .filter((d) => (d.ISIN || d.isin) === activeIsin)
+      .map((d) => {
+        const td = d.TRANDATE || d.trandate;
+        return {
+          type: "DEMERGER",
+          date: normalizeDate(td),
+          data: {
+            qty: d.QTY ?? d.qty,
+            price: d.PRICE ?? d.price,
+            totalAmount:
+              Number(d.TOTAL_AMOUNT ?? d.total_amount ?? d.HOLDING_VALUE ?? 0) ||
+              0,
+            trandate: td,
+            setdate: d.SETDATE || d.setdate || td,
+            isin: d.ISIN || d.isin,
+          },
+        };
+      }),
+
+    ...mergers
+      .filter((m) => (m.ISIN || m.isin) === activeIsin)
+      .map((m) => {
+        const td = m.TRANDATE || m.trandate;
+        return {
+          type: "MERGER",
+          date: normalizeDate(td),
+          data: {
+            qty: Number(m.Quantity ?? m.quantity ?? m.Holding ?? 0) || 0,
+            price: Number(m.WAP ?? m.wap ?? 0) || 0,
+            totalAmount: Number(m.Total_Amount ?? m.total_amount ?? m.HoldingValue ?? 0) || 0,
+            trandate: td,
+            setdate: m.SETDATE || m.setdate || td,
+            isin: m.ISIN || m.isin,
+            oldIsin: m.OldISIN || m.oldIsin || "",
+          },
+        };
+      }),
   ].sort((a, b) => new Date(a.date) - new Date(b.date));
 
   /* ---------------- HELPERS ---------------- */
@@ -288,6 +333,102 @@ export const runFifoEngine = (
       }
 
       holdings = runningHoldings;
+    }
+
+    /* ========== DEMERGER (cost re-bucket: deactivate lots → single lot at allocated cost) ========== */
+    if (e.type === "DEMERGER") {
+      const qty = Math.abs(Number(e.data.qty) || 0);
+      if (!qty) continue;
+
+      let price = Number(e.data.price) || 0;
+      let totalAmount = Number(e.data.totalAmount) || 0;
+      if (!price && totalAmount && qty) price = totalAmount / qty;
+      if (!totalAmount && price && qty) totalAmount = qty * price;
+
+      const activeLots = buyQueue.filter((l) => l.isActive);
+      for (const oldLot of activeLots) {
+        oldLot.isActive = false;
+        const oldRow = output.find((r) => r.lotId === oldLot.lotId && r.isActive);
+        if (oldRow) oldRow.isActive = false;
+      }
+      buyQueue.length = 0;
+
+      const demergerDate = normalizeDate(e.data.trandate);
+      const lotId = ++lotCounter;
+
+      buyQueue.push({
+        lotId,
+        originalQty: qty,
+        qty,
+        price,
+        buyDate: demergerDate,
+        isActive: true,
+      });
+
+      holdings = qty;
+
+      output.push({
+        lotId,
+        trandate: e.data.trandate,
+        tranType: "DEMERGER",
+        qty,
+        price,
+        netAmount: totalAmount,
+        holdings,
+        costOfHoldings: getCostOfHoldings(),
+        averageCostOfHoldings: getWAP(),
+        profitLoss: null,
+        isActive: true,
+        isin: e.data.isin,
+      });
+    }
+
+    /* ========== MERGER (old ISIN lots retired, replaced by new ISIN lot at carried cost) ========== */
+    if (e.type === "MERGER") {
+      const qty = Math.abs(Number(e.data.qty) || 0);
+      if (!qty) continue;
+
+      let price = Number(e.data.price) || 0;
+      let totalAmount = Number(e.data.totalAmount) || 0;
+      if (!price && totalAmount && qty) price = totalAmount / qty;
+      if (!totalAmount && price && qty) totalAmount = qty * price;
+
+      const activeLots = buyQueue.filter((l) => l.isActive);
+      for (const oldLot of activeLots) {
+        oldLot.isActive = false;
+        const oldRow = output.find((r) => r.lotId === oldLot.lotId && r.isActive);
+        if (oldRow) oldRow.isActive = false;
+      }
+      buyQueue.length = 0;
+
+      const mergerDate = normalizeDate(e.data.trandate);
+      const lotId = ++lotCounter;
+
+      buyQueue.push({
+        lotId,
+        originalQty: qty,
+        qty,
+        price,
+        buyDate: mergerDate,
+        isActive: true,
+      });
+
+      holdings = qty;
+
+      output.push({
+        lotId,
+        trandate: e.data.trandate,
+        tranType: "MERGER",
+        qty,
+        price,
+        netAmount: totalAmount,
+        holdings,
+        costOfHoldings: getCostOfHoldings(),
+        averageCostOfHoldings: getWAP(),
+        profitLoss: null,
+        isActive: true,
+        isin: e.data.isin,
+      });
     }
   }
 
