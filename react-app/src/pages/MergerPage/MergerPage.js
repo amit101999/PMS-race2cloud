@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import MainLayout from "../../layouts/MainLayout";
 import { Card } from "../../components/common/CommonComponents";
 import "../SplitPage/SplitPage.css";
@@ -39,6 +39,9 @@ function MergerPage() {
   const [previewLoading, setPreviewLoading] = useState(false);
   const [applyLoading, setApplyLoading] = useState(false);
   const [applySuccess, setApplySuccess] = useState(null);
+
+  const oldIsinInputRef = useRef(null);
+  const oldIsinPickingRef = useRef(false);
 
   const clearStatus = useCallback(() => {
     setFormError(null);
@@ -133,6 +136,32 @@ function MergerPage() {
     oldSecurity && !oldIsinFocused
       ? String(oldSecurity.isin ?? "").trim().toUpperCase()
       : undefined;
+
+  /** Custom list (native datalist uses OS dark popup in many browsers). */
+  const oldIsinSuggestions = useMemo(() => {
+    if (!oldIsinFocused || securities.length === 0) return [];
+    const q = String(oldIsin ?? "").trim().toLowerCase();
+    const cap = 50;
+    if (!q) return securities.slice(0, 30);
+    return securities
+      .filter((s) => {
+        const isin = String(s.isin ?? "").toLowerCase();
+        const name = String(s.securityName ?? "").toLowerCase();
+        return isin.includes(q) || name.includes(q);
+      })
+      .slice(0, cap);
+  }, [oldIsinFocused, oldIsin, securities]);
+
+  const pickOldIsin = useCallback(
+    (isin) => {
+      clearStatus();
+      oldIsinPickingRef.current = true;
+      setOldIsin(String(isin ?? "").trim());
+      setOldIsinFocused(false);
+      oldIsinInputRef.current?.blur();
+    },
+    [clearStatus],
+  );
 
   const validateForm = () => {
     if (!effectiveDate || !recordDate) {
@@ -322,34 +351,63 @@ function MergerPage() {
               <div className="merger-companies-stack">
                 <div className="split-field merger-select-field merger-old-isin-field">
                   <label htmlFor="merger-old-isin"></label>
-                  <input
-                    id="merger-old-isin"
-                    className="merger-text-input merger-old-isin-input"
-                    list={oldIsinFocused ? "merger-old-isin-datalist" : undefined}
-                    autoComplete="off"
-                    placeholder={MERGER_OLD_ISIN_PLACEHOLDER}
-                    title={oldIsinInputTitle}
-                    value={oldIsinInputValue}
-                    onFocus={() => {
-                      clearStatus();
-                      setOldIsinFocused(true);
-                    }}
-                    onBlur={(e) => {
-                      setOldIsin(norm(e.target.value));
-                      setOldIsinFocused(false);
-                    }}
-                    onChange={(e) => {
-                      clearStatus();
-                      setOldIsin(e.target.value);
-                    }}
-                  />
-                  <datalist id="merger-old-isin-datalist">
-                    {securities.map((s) => (
-                      <option key={s.isin} value={s.isin}>
-                        {s.securityName}
-                      </option>
-                    ))}
-                  </datalist>
+                  <div className="merger-old-isin-wrap">
+                    <input
+                      ref={oldIsinInputRef}
+                      id="merger-old-isin"
+                      className="merger-text-input merger-old-isin-input"
+                      autoComplete="off"
+                      placeholder={MERGER_OLD_ISIN_PLACEHOLDER}
+                      title={oldIsinInputTitle}
+                      value={oldIsinInputValue}
+                      aria-expanded={oldIsinFocused && oldIsinSuggestions.length > 0}
+                      aria-controls="merger-old-isin-suggest"
+                      role="combobox"
+                      aria-autocomplete="list"
+                      onFocus={() => {
+                        clearStatus();
+                        setOldIsinFocused(true);
+                      }}
+                      onBlur={(e) => {
+                        if (oldIsinPickingRef.current) {
+                          oldIsinPickingRef.current = false;
+                          return;
+                        }
+                        setOldIsin(norm(e.target.value));
+                        setOldIsinFocused(false);
+                      }}
+                      onChange={(e) => {
+                        clearStatus();
+                        setOldIsin(e.target.value);
+                      }}
+                    />
+                    {oldIsinFocused && oldIsinSuggestions.length > 0 && (
+                      <ul
+                        id="merger-old-isin-suggest"
+                        className="merger-old-isin-suggest"
+                        role="listbox"
+                      >
+                        {oldIsinSuggestions.map((s) => (
+                          <li
+                            key={s.isin}
+                            role="option"
+                            className="merger-old-isin-suggest-item"
+                            onMouseDown={(e) => {
+                              e.preventDefault();
+                              pickOldIsin(s.isin);
+                            }}
+                          >
+                            <span className="merger-old-isin-suggest-code">{s.isin}</span>
+                            {s.securityName ? (
+                              <span className="merger-old-isin-suggest-name">
+                                {s.securityName}
+                              </span>
+                            ) : null}
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
                 </div>
 
                 <h3 className="merger-section-title">Merge Into New Company (New ISIN)</h3>
