@@ -223,7 +223,6 @@ function MergerPage() {
       const res = await fetch(`${BASE_URL}/merger/preview`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        credentials: "include",
         body: JSON.stringify(buildMergerApiBody()),
       });
       const data = await res.json();
@@ -255,7 +254,6 @@ function MergerPage() {
       const res = await fetch(`${BASE_URL}/merger/apply`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        credentials: "include",
         body: JSON.stringify(buildMergerApiBody()),
       });
       const data = await res.json();

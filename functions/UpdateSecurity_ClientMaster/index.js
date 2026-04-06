@@ -284,52 +284,78 @@ async function readObjectAsUtf8(bucket, objectKey) {
 }
 
 async function ensureClientIds(zcql, wsClientId, wsAccountCode) {
-  if (!isValid(wsClientId) || !isValid(wsAccountCode)) return;
+  if (!isValid(wsAccountCode)) return;
+
+  const lookupId = isValid(wsClientId) ? wsClientId : wsAccountCode;
 
   const existingClient = await zcql.executeZCQLQuery(`
     SELECT ROWID FROM clientIds
-    WHERE WS_client_id = '${esc(wsClientId)}'
+    WHERE WS_Account_code = '${esc(wsAccountCode)}'
   `);
 
   if (!existingClient.length) {
-    await zcql.executeZCQLQuery(`
-      INSERT INTO clientIds (WS_client_id, WS_Account_code)
-      VALUES ('${esc(wsClientId)}', '${esc(wsAccountCode)}')
-    `);
+    try {
+      await zcql.executeZCQLQuery(`
+        INSERT INTO clientIds (WS_client_id, WS_Account_code)
+        VALUES ('${esc(lookupId)}', '${esc(wsAccountCode)}')
+      `);
+    } catch (err) {
+      if (String(err?.message || "").includes("Duplicate")) return;
+      throw err;
+    }
   }
 }
 
 async function ensureSecurityList(zcql, securityCode, isin, securityName) {
   if (!isValid(securityCode) && !isValid(isin)) return;
 
-  const existingSecurity = await zcql.executeZCQLQuery(`
-    SELECT ROWID FROM Security_List
-    WHERE Security_Code = '${esc(securityCode || "")}'
-  `);
+  let exists = false;
 
-  if (!existingSecurity.length) {
-    await zcql.executeZCQLQuery(`
-      INSERT INTO Security_List (Security_Code, ISIN, Security_Name)
-      VALUES (
-        '${esc(securityCode || "")}',
-        '${esc(isin || "")}',
-        '${esc(securityName || "")}'
-      )
+  if (isValid(isin)) {
+    const byIsin = await zcql.executeZCQLQuery(`
+      SELECT ROWID FROM Security_List
+      WHERE ISIN = '${esc(isin)}'
     `);
+    if (byIsin.length) exists = true;
+  }
+
+  if (!exists && isValid(securityCode)) {
+    const byCode = await zcql.executeZCQLQuery(`
+      SELECT ROWID FROM Security_List
+      WHERE Security_Code = '${esc(securityCode)}'
+    `);
+    if (byCode.length) exists = true;
+  }
+
+  if (!exists) {
+    const codeToInsert = isValid(securityCode) ? securityCode : (isin || "");
+    try {
+      await zcql.executeZCQLQuery(`
+        INSERT INTO Security_List (Security_Code, ISIN, Security_Name)
+        VALUES (
+          '${esc(codeToInsert)}',
+          '${esc(isin || "")}',
+          '${esc(securityName || "")}'
+        )
+      `);
+    } catch (err) {
+      if (String(err?.message || "").includes("Duplicate")) return;
+      throw err;
+    }
   }
 }
 
 async function processCsvRows(zcql, rows) {
   for (const row of rows) {
     const wsClientId = getCell(row, "WS_client_id", "ws_client_id");
-    const wsAccountCode = getCell(row, "WS_Account_code", "ws_account_code");
+    const wsAccountCode = getCell(row, "WS_Account_code", "ws_account_code", "BROKERACID");
     const securityCode = getCell(
       row,
       "Security_code",
       "Security_Code",
       "security_code",
     );
-    const isin = getCell(row, "ISIN", "isin");
+    const isin = getCell(row, "ISIN", "isin", "SYMBOLCODE");
     const securityName = getCell(
       row,
       "Security_Name",

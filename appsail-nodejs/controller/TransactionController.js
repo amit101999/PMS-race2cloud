@@ -1,4 +1,6 @@
 import { fetchBonusesForStock } from "../util/analytics/transactionHistory/bonuses.js";
+import { fetchDemergerRecordsForStock } from "../util/analytics/transactionHistory/demergers.js";
+import { fetchMergerRecordsForStock } from "../util/analytics/transactionHistory/mergers.js";
 import { runFifoEngine } from "../util/analytics/transactionHistory/fifo.js";
 import { fetchSplitForStock } from "../util/analytics/transactionHistory/Split.js";
 import { fetchStockTransactions } from "../util/analytics/transactionHistory/transactions.js";
@@ -44,7 +46,21 @@ export const getStockTransactionHistory = async (req, res) => {
       asOnDate,
     });
 
-    const result = runFifoEngine(transactions, bonuses, split, false);
+    const demergers = await fetchDemergerRecordsForStock({
+      zcql,
+      accountCode,
+      isin,
+      asOnDate,
+    });
+
+    const mergers = await fetchMergerRecordsForStock({
+      zcql,
+      accountCode,
+      isin,
+      asOnDate,
+    });
+
+    const result = runFifoEngine(transactions, bonuses, split, false, demergers, mergers);
     return res.json(result);
   } catch (err) {
     return res.status(500).json({ error: err.message });

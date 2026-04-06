@@ -4,6 +4,16 @@ const ZCQL_ROW_LIMIT = 270;
 
 const escSql = (s) => String(s ?? "").replace(/'/g, "''");
 
+const isBuyType = (type) => /^BY-|SQB|OPI/i.test(String(type || ""));
+
+const getEffectiveDate = (t) => {
+  const setDate = t.SETDATE || t.setdate;
+  const tradeDate = t.TRANDATE || t.trandate;
+  return isBuyType(t.Tran_Type || t.tranType)
+    ? setDate || tradeDate
+    : tradeDate || setDate;
+};
+
 /* ======================================================
    PREVIEW DEMERGER (FIFO BASED)
    ====================================================== */
@@ -165,10 +175,21 @@ export const previewDemerger = async (req, res) => {
     }
 
     /* ======================================================
-       STEP 5: GROUP DATA BY ACCOUNT
+       STEP 5: EFFECTIVE-DATE FILTER (same as analytics holdings)
+       Buys count at SETDATE, sells at TRANDATE.
+       Drop any row whose effective date >= recordDateISO.
+       ====================================================== */
+    const filteredTxRows = txRows.filter((r) => {
+      const t = r.Transaction || r;
+      const ed = getEffectiveDate(t);
+      return !ed || ed < recordDateISO;
+    });
+
+    /* ======================================================
+       STEP 6: GROUP DATA BY ACCOUNT
        ====================================================== */
     const txByAccount = {};
-    txRows.forEach((r) => {
+    filteredTxRows.forEach((r) => {
       const t = r.Transaction;
       (txByAccount[t.WS_Account_code] ||= []).push(t);
     });
@@ -190,7 +211,7 @@ export const previewDemerger = async (req, res) => {
     });
 
     /* ======================================================
-       STEP 6: DEMERGER PREVIEW PER ACCOUNT
+       STEP 7: DEMERGER PREVIEW PER ACCOUNT
        ====================================================== */
     const preview = [];
 
@@ -207,7 +228,7 @@ export const previewDemerger = async (req, res) => {
       const TOTAL_COST = fifoBefore.holdingValue;
       const beforePrice = fifoBefore.averageCostOfHoldings;
 
-      const Q2 = Math.floor((Q1 * r2) / r1);
+      const Q2 = Math.floor((Q1 * r1) / r2);
       if (Q2 <= 0) continue;
 
       const newCost = TOTAL_COST * (pct / 100);
@@ -473,10 +494,19 @@ export const applyDemerger = async (req, res) => {
     }
 
     /* ======================================================
-       STEP 4: GROUP BY ACCOUNT
+       STEP 4a: EFFECTIVE-DATE FILTER (same as analytics holdings)
+       ====================================================== */
+    const filteredTxRows = txRows.filter((r) => {
+      const t = r.Transaction || r;
+      const ed = getEffectiveDate(t);
+      return !ed || ed < recordDateISO;
+    });
+
+    /* ======================================================
+       STEP 4b: GROUP BY ACCOUNT
        ====================================================== */
     const txByAccount = {};
-    txRows.forEach((r) => {
+    filteredTxRows.forEach((r) => {
       const t = r.Transaction;
       (txByAccount[t.WS_Account_code] ||= []).push(t);
     });
@@ -515,7 +545,7 @@ export const applyDemerger = async (req, res) => {
       const Q1 = fifoBefore.holdings;
       const TOTAL_COST = fifoBefore.holdingValue;
 
-      const Q2 = Math.floor((Q1 * r2) / r1);
+      const Q2 = Math.floor((Q1 * r1) / r2);
       if (Q2 <= 0) continue;
 
       const newCost = TOTAL_COST * (pct / 100);

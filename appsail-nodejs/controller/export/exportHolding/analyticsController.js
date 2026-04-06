@@ -1,4 +1,6 @@
 import { runFifoEngine } from "../../../util/export/fifo.js";
+import { fetchDemergerRecordsForAccount } from "../../../util/analytics/transactionHistory/demergers.js";
+import { fetchMergerRecordsForAccount } from "../../../util/analytics/transactionHistory/mergers.js";
 
 const isBuyType = (type) => /^BY-|SQB|OPI/i.test(String(type || ""));
 
@@ -319,6 +321,28 @@ export const calculateHoldingsSummary = async ({
     }
   }
 
+  /* ================= FETCH DEMERGER_RECORD ================= */
+  const demergerRows = await fetchDemergerRecordsForAccount({
+    zcql,
+    accountCode,
+    asOnDate,
+  });
+
+  for (const d of demergerRows) {
+    if (d.ISIN) uniqueISINs.add(d.ISIN);
+  }
+
+  /* ================= FETCH MERGER ================= */
+  const mergerRows = await fetchMergerRecordsForAccount({
+    zcql,
+    accountCode,
+    asOnDate,
+  });
+
+  for (const m of mergerRows) {
+    if (m.ISIN) uniqueISINs.add(m.ISIN);
+  }
+
   /* ================= FETCH SPLITS ================= */
   const splits = [];
   offset = 0;
@@ -365,6 +389,8 @@ export const calculateHoldingsSummary = async ({
   const txByISIN = {};
   const bonusByISIN = {};
   const splitByISIN = {};
+  const demergerByISIN = {};
+  const mergerByISIN = {};
   const holdingsMap = {};
 
   for (const t of transactions) {
@@ -393,6 +419,32 @@ export const calculateHoldingsSummary = async ({
     if (!s.isin) continue;
     if (!splitByISIN[s.isin]) splitByISIN[s.isin] = [];
     splitByISIN[s.isin].push(s);
+  }
+
+  for (const d of demergerRows) {
+    if (!d.ISIN) continue;
+    if (!demergerByISIN[d.ISIN]) demergerByISIN[d.ISIN] = [];
+    demergerByISIN[d.ISIN].push(d);
+    if (!holdingsMap[d.ISIN]) {
+      holdingsMap[d.ISIN] = {
+        stockName: d.Security_Name,
+        securityCode: d.Security_Code,
+        isin: d.ISIN,
+      };
+    }
+  }
+
+  for (const m of mergerRows) {
+    if (!m.ISIN) continue;
+    if (!mergerByISIN[m.ISIN]) mergerByISIN[m.ISIN] = [];
+    mergerByISIN[m.ISIN].push(m);
+    if (!holdingsMap[m.ISIN]) {
+      holdingsMap[m.ISIN] = {
+        stockName: m.Security_Name,
+        securityCode: m.SecurityCode,
+        isin: m.ISIN,
+      };
+    }
   }
 
   /* ================= FETCH BHAV PRICES ================= */
@@ -430,14 +482,24 @@ export const calculateHoldingsSummary = async ({
 
   /* ================= FINAL FIFO ================= */
 
+  const mergedAwayIsins = new Set();
+  for (const m of mergerRows) {
+    const oldIsin = m.OldISIN || m.oldIsin || "";
+    if (oldIsin) mergedAwayIsins.add(oldIsin);
+  }
+
   const result = [];
 
   for (const key of Object.keys(holdingsMap)) {
+    if (mergedAwayIsins.has(key)) continue;
+
     const fifo = runFifoEngine(
-      txByISIN[key],
+      txByISIN[key] || [],
       bonusByISIN[key] || [],
       splitByISIN[key] || [],
-      true
+      true,
+      demergerByISIN[key] || [],
+      mergerByISIN[key] || [],
     );
 
     if (!fifo || fifo.holdings <= 0) continue;

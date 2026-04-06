@@ -7,75 +7,35 @@ const TABLE_NAME = "Transaction";
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 /**
- * Headers must appear in this exact order. Name match is case-insensitive (trimmed).
- * All wrong, missing, or extra columns are collected and returned together.
+ * CSV header (UPPERCASE key) → Transaction table column name.
+ * Only mapped columns are kept; extra CSV columns are dropped before upload.
  */
-const REQUIRED_TRANSACTION_HEADERS = [
-  "WS_client_id",
-  "WS_Account_code",
-  "TRANDATE",
-  "SETDATE",
-  "Tran_Type",
-  "Tran_Desc",
-  "Security_Type",
-  "Security_Type_Description",
-  "DETAILTYPENAME",
-  "ISIN",
-  "Security_code",
-  "Security_Name",
-  "EXCHG",
-  "BROKERCODE",
-  "Depositoy_Registrar",
-  "DPID_AMC",
-  "Dp_Client_id_Folio",
-  "BANKCODE",
-  "BANKACID",
-  "QTY",
-  "RATE",
-  "BROKERAGE",
-  "SERVICETAX",
-  "NETRATE",
-  "Net_Amount",
-  "STT",
-  "TRFDATE",
-  "TRFRATE",
-  "TRFAMT",
-  "TOTAL_TRXNFEE",
-  "TOTAL_TRXNFEE_STAX",
-  "Txn_Ref_No",
-  "DESCMEMO",
-  "CHEQUENO",
-  "CHEQUEDTL",
-  "PORTFOLIOID",
-  "DELIVERYDATE",
-  "PAYMENTDATE",
-  "ACCRUEDINTEREST",
-  "ISSUER",
-  "ISSUERNAME",
-  "TDSAMOUNT",
-  "STAMPDUTY",
-  "TPMSGAIN",
-  "RMID",
-  "RMNAME",
-  "ADVISORID",
-  "ADVISORNAME",
-  "BRANCHID",
-  "BRANCHNAME",
-  "GROUPID",
-  "GROUPNAME",
-  "OWNERID",
-  "OWNERNAME",
-  "WEALTHADVISOR_NAME",
-  "SCHEMEID",
-  "SCHEMENAME",
-  "executionPriority",
-];
+const HEADER_MAP = {
+  "BROKER CODE":      "BROKERCODE",
+  "BROKERACID":       "WS_Account_code",
+  "SYMBOLCODE":       "ISIN",
+  "EXCHG":            "EXCHG",
+  "TRANSTYPE":        "Tran_Type",
+  "DATEPUR_ACQUI":    "TRANDATE",
+  "SETDATE":          "SETDATE",
+  "QUANTITY":         "QTY",
+  "RATE":             "RATE",
+  "NET RATE":         "NETRATE",
+  "NET AMOUNT":       "Net_Amount",
+  "BROKERAGEPERSHARE":"BROKERAGE",
+  "SERVICETAX":       "SERVICETAX",
+  "TRANEXPENSE":      "STT",
+  "ACCRUEDINTEREST":  "ACCRUEDINTEREST",
+  "DESCRIPTION":      "Tran_Desc",
+  "CHEQUE NUMBER":    "CHEQUENO",
+  "CHQDETAIL":        "CHEQUEDTL",
+};
 
 /** Must be yyyy-mm-dd on every sample row (non-empty). */
-const REQUIRED_DATE_COLUMNS = ["TRANDATE", "SETDATE"];
+const REQUIRED_DATE_COLUMNS = ["DATEPUR_ACQUI", "SETDATE"];
 
 /** If non-empty, value must be yyyy-mm-dd. */
-const OPTIONAL_DATE_COLUMNS = ["TRFDATE", "DELIVERYDATE", "PAYMENTDATE"];
+const OPTIONAL_DATE_COLUMNS = ["CashSetdate"];
 
 function stripBom(text) {
   if (text.charCodeAt(0) === 0xfeff) {
@@ -106,53 +66,39 @@ function isValidYyyyMmDd(value) {
   );
 }
 
-function normalizeHeaderKey(k) {
-  return String(k).trim().toUpperCase();
-}
-
 /**
- * @returns {Array<{ type: 'wrongOrMissing' | 'extra', uploaded: string, expected: string | null, position: number }>}
+ * Rewrites a CSV buffer: renames mapped headers to DB column names,
+ * drops columns that have no mapping, returns a new Buffer.
  */
-function collectAllHeaderMismatches(fileHeaders) {
-  const required = REQUIRED_TRANSACTION_HEADERS;
-  const mismatches = [];
+function rewriteCsvHeaders(fileBuffer) {
+  const text = stripBom(fileBuffer.toString("utf8"));
+  const lines = text.split(/\r?\n/);
+  if (!lines.length) return fileBuffer;
 
-  for (let i = 0; i < required.length; i++) {
-    const expected = required[i];
-    const raw = i < fileHeaders.length ? fileHeaders[i] : "";
-    const uploaded = String(raw ?? "").trim();
-    if (normalizeHeaderKey(uploaded) !== normalizeHeaderKey(expected)) {
-      mismatches.push({
-        type: "wrongOrMissing",
-        uploaded: uploaded === "" ? "(missing)" : uploaded,
-        expected,
-        position: i + 1,
-      });
+  const originalHeaders = lines[0].split(",");
+  const keepIndices = [];
+  const newHeaders = [];
+
+  for (let i = 0; i < originalHeaders.length; i++) {
+    const raw = originalHeaders[i].trim();
+    const mapped = HEADER_MAP[raw.toUpperCase()];
+    if (mapped) {
+      keepIndices.push(i);
+      newHeaders.push(mapped);
     }
   }
 
-  for (let i = required.length; i < fileHeaders.length; i++) {
-    const uploaded = String(fileHeaders[i] ?? "").trim() || "(empty)";
-    mismatches.push({
-      type: "extra",
-      uploaded,
-      expected: null,
-      position: i + 1,
-    });
+  const newLines = [newHeaders.join(",")];
+
+  for (let r = 1; r < lines.length; r++) {
+    const line = lines[r];
+    if (!line.trim()) continue;
+    const cells = line.split(",");
+    const kept = keepIndices.map((idx) => (idx < cells.length ? cells[idx] : ""));
+    newLines.push(kept.join(","));
   }
 
-  return mismatches;
-}
-
-function buildHeaderMismatchMessage(mismatches) {
-  const templateCount = REQUIRED_TRANSACTION_HEADERS.length;
-  const lines = mismatches.map((m) => {
-    if (m.type === "extra") {
-      return `Column ${m.position}: Unexpected header '${m.uploaded}' — the template has exactly ${templateCount} columns in order. Remove extra columns.`;
-    }
-    return `Column ${m.position}: Header '${m.uploaded}' in your file does not match the expected header '${m.expected}'. Please rename it to '${m.expected}'.`;
-  });
-  return `One or more headers do not match the template. Fix the issues below and re-upload the file.\n${lines.join("\n")}`;
+  return Buffer.from(newLines.join("\n"), "utf8");
 }
 
 const SAMPLE_DATA_ROW_COUNT = 5;
@@ -203,10 +149,11 @@ function parseTempTransactionSampleRows(fileBuffer) {
 
 /**
  * POST /api/transaction-uploader/upload-temp-file
- * 1. Validates the uploaded CSV file.
- * 2. Ensures CSV headers match the template in order; validates date columns on sample rows.
- * 3. Streams the file to Stratus under temp-files/temp-transactions/.
- * 4. Triggers a Catalyst Bulk Write Job to insert into the Transaction table.
+ * 1. Validates the CSV parses and has at least one data row.
+ * 2. Validates date columns on sample rows (DATEPUR_ACQUI, SETDATE; optional CashSetdate).
+ * 3. Rewrites CSV: renames mapped headers to DB column names, drops unmapped columns.
+ * 4. Uploads rewritten CSV to Stratus under temp-files/temp-transactions/.
+ * 5. Triggers a Catalyst Bulk Write Job to insert into the Transaction table.
  */
 export const uploadTempTransaction = async (req, res) => {
   try {
@@ -258,16 +205,6 @@ export const uploadTempTransaction = async (req, res) => {
       });
     }
 
-    const headerKeys = Object.keys(sampleRows[0] || {});
-    const headerMismatches = collectAllHeaderMismatches(headerKeys);
-    if (headerMismatches.length > 0) {
-      return res.status(400).json({
-        success: false,
-        message: buildHeaderMismatchMessage(headerMismatches),
-        mismatches: headerMismatches,
-      });
-    }
-
     for (let i = 0; i < sampleRows.length; i++) {
       const rowNumber = i + 2;
       const invalidDateFields = [];
@@ -296,22 +233,20 @@ export const uploadTempTransaction = async (req, res) => {
       }
     }
 
-    /* ─── 2. UPLOAD TO STRATUS (only after dates validated above) ─── */
-    const bucket = catalystApp.stratus().bucket(BUCKET_NAME);
+    /* ─── 2. REWRITE CSV HEADERS & UPLOAD TO STRATUS ─────────────── */
+    const rewrittenCsv = rewriteCsvHeaders(file.data);
 
-    // Unique key so parallel uploads never collide
+    const bucket = catalystApp.stratus().bucket(BUCKET_NAME);
     const objectKey = `temp-files/temp-transactions/TxnUpload-${Date.now()}-${file.name}`;
 
     const passThrough = new PassThrough();
-
-    // Start the upload before piping data so the stream is ready
     const uploadPromise = bucket.putObject(objectKey, passThrough, {
       overwrite: true,
       contentType: "text/csv",
     });
 
-    passThrough.end(file.data);   // Push the file buffer into the stream
-    await uploadPromise;           // Wait until Stratus confirms the upload
+    passThrough.end(rewrittenCsv);
+    await uploadPromise;
 
     /* ─── 3. TRIGGER BULK WRITE JOB → Transaction TABLE ──────────── */
     const bulkJob = await catalystApp
@@ -324,7 +259,7 @@ export const uploadTempTransaction = async (req, res) => {
           object_key: objectKey,
         },
         {
-          operation: "insert",   // Use "upsert" if deduplication is needed
+          operation: "insert",
         }
       );
 
