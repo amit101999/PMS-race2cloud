@@ -7,31 +7,60 @@ const TABLE_NAME = "Transaction";
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 /**
- * CSV header (UPPERCASE key) → Transaction table column name.
- * Only mapped columns are kept; extra CSV columns are dropped before upload.
+ * Official row-1 headers: exact count, order, spelling, and case.
+ * Validation compares the physical first line to this list (comma- or tab-separated).
+ */
+const EXPECTED_HEADERS_IN_ORDER = [
+  "Broker Code",
+  "BROKERACID",
+  "SYMBOLCODE",
+  "EXCHG",
+  "TRANSTYPE",
+  "DATEPUR_ACQUI",
+  "SETDATE",
+  "QUANTITY",
+  "RATE",
+  "BROKERAGEPERSHARE",
+  "SERVICETAX",
+  "SETDATEFLAG",
+  "MKTRATE",
+  "CASHSYMBOLCODE",
+  "TRANEXPENSE",
+  "ACCRUEDINTEREST",
+  "BLOCKID",
+  "TRANSREF",
+  "Description",
+  "Cheque number",
+  "CHQDETAIL",
+  "BankRef",
+  "CashSetdate",
+];
+
+/**
+ * Source header (must match EXPECTED_HEADERS_IN_ORDER exactly) → Transaction column for bulk CSV.
+ * Unlisted columns (e.g. SETDATEFLAG) are dropped from the uploaded file.
  */
 const HEADER_MAP = {
-  "BROKER CODE":      "BROKERCODE",
-  "BROKERACID":       "WS_Account_code",
-  "SYMBOLCODE":       "ISIN",
-  "EXCHG":            "EXCHG",
-  "TRANSTYPE":        "Tran_Type",
-  "DATEPUR_ACQUI":    "TRANDATE",
-  "SETDATE":          "SETDATE",
-  "QUANTITY":         "QTY",
-  "RATE":             "RATE",
-  "NET RATE":         "NETRATE",
-  "NET AMOUNT":       "Net_Amount",
-  "BROKERAGEPERSHARE":"BROKERAGE",
-  "SERVICETAX":       "SERVICETAX",
-  "TRANEXPENSE":      "STT",
-  "ACCRUEDINTEREST":  "ACCRUEDINTEREST",
-  "DESCRIPTION":      "Tran_Desc",
-  "CHEQUE NUMBER":    "CHEQUENO",
-  "CHQDETAIL":        "CHEQUEDTL",
+  "Broker Code": "BROKERCODE",
+  BROKERACID: "WS_Account_code",
+  SYMBOLCODE: "ISIN",
+  EXCHG: "EXCHG",
+  TRANSTYPE: "Tran_Type",
+  DATEPUR_ACQUI: "TRANDATE",
+  SETDATE: "SETDATE",
+  QUANTITY: "QTY",
+  RATE: "RATE",
+  BROKERAGEPERSHARE: "BROKERAGE",
+  SERVICETAX: "SERVICETAX",
+  MKTRATE: "NETRATE",
+  TRANEXPENSE: "STT",
+  [EXPECTED_HEADERS_IN_ORDER[15]]: "ACCRUEDINTEREST",
+  Description: "Tran_Desc",
+  "Cheque number": "CHEQUENO",
+  CHQDETAIL: "CHEQUEDTL",
 };
 
-/** Must be yyyy-mm-dd on every sample row (non-empty). */
+/** Must be yyyy-mm-dd when the cell is not blank / null / 0-like. */
 const REQUIRED_DATE_COLUMNS = ["DATEPUR_ACQUI", "SETDATE"];
 
 /** If non-empty, value must be yyyy-mm-dd. */
@@ -45,13 +74,73 @@ function stripBom(text) {
 }
 
 function getCell(row, columnName) {
-  const key = Object.keys(row).find(
-    (k) => k.trim().toUpperCase() === columnName.toUpperCase()
-  );
+  const key = Object.keys(row).find((k) => k.trim() === columnName);
   if (!key) return undefined;
   const v = row[key];
   if (v == null) return "";
   return String(v).trim();
+}
+
+function getFirstLineText(fileBuffer) {
+  const text = stripBom(fileBuffer.toString("utf8"));
+  const nl = text.search(/\r?\n/);
+  return nl === -1 ? text : text.slice(0, nl);
+}
+
+/** Tab if the header line contains tabs; otherwise comma. */
+function detectSeparator(firstLine) {
+  return (firstLine.match(/\t/g) || []).length > 0 ? "\t" : ",";
+}
+
+function splitHeaderCells(firstLine, separator) {
+  return firstLine.split(separator).map((c) => c.trim());
+}
+
+/**
+ * Row 1 must match EXPECTED_HEADERS_IN_ORDER exactly: same count, same order, same spelling/case.
+ */
+function validateExpectedHeaderOrder(fileBuffer) {
+  const firstLine = getFirstLineText(fileBuffer);
+  const separator = detectSeparator(firstLine);
+  const cells = splitHeaderCells(firstLine, separator);
+  const expected = EXPECTED_HEADERS_IN_ORDER;
+
+  if (cells.length !== expected.length) {
+    return {
+      code: "WRONG_COLUMN_ORDER",
+      kind: "COUNT",
+      message: `Column order / count is wrong. Row 1 must have exactly ${expected.length} columns in the official template order; your file has ${cells.length}. Do not add, remove, or reorder columns.`,
+      expectedCount: expected.length,
+      actualCount: cells.length,
+      expectedHeaders: [...expected],
+      hint: "Restore the header row to match the template: same positions left-to-right.",
+    };
+  }
+
+  const mismatches = [];
+  for (let i = 0; i < cells.length; i++) {
+    if (cells[i] !== expected[i]) {
+      mismatches.push({
+        columnIndex: i + 1,
+        expected: expected[i],
+        actual: cells[i],
+      });
+    }
+  }
+
+  if (mismatches.length > 0) {
+    return {
+      code: "WRONG_COLUMN_ORDER",
+      kind: "ORDER_OR_NAME",
+      message:
+        "Column order is wrong (or a header name/spelling does not match the template). Row 1 headers must appear in the exact same order as the official list — shifting any column left or right will fail.",
+      mismatches,
+      expectedHeaders: [...expected],
+      hint: `Check column position(s): ${mismatches.map((m) => m.columnIndex).join(", ")}. Expected vs actual is listed below.`,
+    };
+  }
+
+  return null;
 }
 
 function isValidYyyyMmDd(value) {
@@ -66,6 +155,16 @@ function isValidYyyyMmDd(value) {
   );
 }
 
+/** Missing date in CSV: empty, numeric 0, or common null tokens (case-insensitive). */
+function isAbsentDateValue(value) {
+  if (value === undefined) return true;
+  const s = String(value).trim();
+  if (s === "") return true;
+  if (s === "0") return true;
+  const lower = s.toLowerCase();
+  return lower === "null" || lower === "na" || lower === "n/a" || s === "-";
+}
+
 /**
  * Rewrites a CSV buffer: renames mapped headers to DB column names,
  * drops columns that have no mapping, returns a new Buffer.
@@ -75,33 +174,39 @@ function rewriteCsvHeaders(fileBuffer) {
   const lines = text.split(/\r?\n/);
   if (!lines.length) return fileBuffer;
 
-  const originalHeaders = lines[0].split(",");
+  const firstLine = lines[0] ?? "";
+  const separator = detectSeparator(firstLine);
+  const splitLine = (line) => line.split(separator).map((c) => c.trim());
+
+  const originalHeaders = splitLine(lines[0]);
   const keepIndices = [];
   const newHeaders = [];
 
   for (let i = 0; i < originalHeaders.length; i++) {
-    const raw = originalHeaders[i].trim();
-    const mapped = HEADER_MAP[raw.toUpperCase()];
+    const raw = originalHeaders[i];
+    const mapped = HEADER_MAP[raw];
     if (mapped) {
       keepIndices.push(i);
       newHeaders.push(mapped);
     }
   }
 
-  const newLines = [newHeaders.join(",")];
+  const outSep = ",";
+  const newLines = [newHeaders.join(outSep)];
 
   for (let r = 1; r < lines.length; r++) {
     const line = lines[r];
     if (!line.trim()) continue;
-    const cells = line.split(",");
+    const cells = splitLine(line);
     const kept = keepIndices.map((idx) => (idx < cells.length ? cells[idx] : ""));
-    newLines.push(kept.join(","));
+    newLines.push(kept.join(outSep));
   }
 
   return Buffer.from(newLines.join("\n"), "utf8");
 }
 
-const SAMPLE_DATA_ROW_COUNT = 5;
+/** First N data rows parsed for date-format checks before upload. */
+const SAMPLE_DATA_ROW_COUNT = 3;
 
 /**
  * Parses the first SAMPLE_DATA_ROW_COUNT data rows from the CSV buffer.
@@ -109,9 +214,11 @@ const SAMPLE_DATA_ROW_COUNT = 5;
 function parseTempTransactionSampleRows(fileBuffer) {
   return new Promise((resolve, reject) => {
     const text = stripBom(fileBuffer.toString("utf8"));
+    const firstLine = getFirstLineText(fileBuffer);
+    const separator = detectSeparator(firstLine);
     const rows = [];
     const source = Readable.from(text);
-    const parser = csv();
+    const parser = csv({ separator });
     let settled = false;
 
     const settle = (err, result) => {
@@ -149,11 +256,12 @@ function parseTempTransactionSampleRows(fileBuffer) {
 
 /**
  * POST /api/transaction-uploader/upload-temp-file
- * 1. Validates the CSV parses and has at least one data row.
- * 2. Validates date columns on sample rows (DATEPUR_ACQUI, SETDATE; optional CashSetdate).
- * 3. Rewrites CSV: renames mapped headers to DB column names, drops unmapped columns.
- * 4. Uploads rewritten CSV to Stratus under temp-files/temp-transactions/.
- * 5. Triggers a Catalyst Bulk Write Job to insert into the Transaction table.
+ * 1. Validates row 1 matches EXPECTED_HEADERS_IN_ORDER (count + order + exact names).
+ * 2. Validates the CSV parses and has at least one data row.
+ * 3. Validates date columns on the first 3 data rows (blank / 0 / null allowed when empty).
+ * 4. Rewrites CSV: renames mapped headers to DB column names, drops unmapped columns.
+ * 5. Uploads rewritten CSV to Stratus under temp-files/temp-transactions/.
+ * 6. Triggers a Catalyst Bulk Write Job to insert into the Transaction table.
  */
 export const uploadTempTransaction = async (req, res) => {
   try {
@@ -182,6 +290,14 @@ export const uploadTempTransaction = async (req, res) => {
       });
     }
 
+    const orderErr = validateExpectedHeaderOrder(file.data);
+    if (orderErr) {
+      return res.status(400).json({
+        success: false,
+        ...orderErr,
+      });
+    }
+
     /* ─── 1b. PARSE CSV + DATE CHECK (before Stratus — must pass to continue) ─ */
     let sampleRows;
     try {
@@ -206,19 +322,19 @@ export const uploadTempTransaction = async (req, res) => {
     }
 
     for (let i = 0; i < sampleRows.length; i++) {
-      const rowNumber = i + 2;
+      const fileLineNumber = i + 2;
       const invalidDateFields = [];
 
       for (const col of REQUIRED_DATE_COLUMNS) {
         const v = getCell(sampleRows[i], col);
-        if (!isValidYyyyMmDd(v)) {
+        if (!isAbsentDateValue(v) && !isValidYyyyMmDd(v)) {
           invalidDateFields.push(col);
         }
       }
 
       for (const col of OPTIONAL_DATE_COLUMNS) {
         const v = getCell(sampleRows[i], col);
-        if (v !== "" && !isValidYyyyMmDd(v)) {
+        if (!isAbsentDateValue(v) && !isValidYyyyMmDd(v)) {
           invalidDateFields.push(col);
         }
       }
@@ -226,9 +342,14 @@ export const uploadTempTransaction = async (req, res) => {
       if (invalidDateFields.length > 0) {
         return res.status(400).json({
           success: false,
-          message: `Invalid date format (use yyyy-mm-dd) in data row ${rowNumber} for: ${invalidDateFields.join(", ")}.`,
+          code: "INVALID_DATE_FORMAT",
+          message: `Date format is invalid. Parsed the first ${SAMPLE_DATA_ROW_COUNT} data rows: problem in data row ${i + 1} of ${SAMPLE_DATA_ROW_COUNT} (CSV line ${fileLineNumber}). Columns must be yyyy-mm-dd: ${invalidDateFields.join(", ")}.`,
           fields: invalidDateFields,
-          row: rowNumber,
+          row: fileLineNumber,
+          dataRowIndex: i + 1,
+          headerNamesToFix: invalidDateFields,
+          sampleRowsValidated: SAMPLE_DATA_ROW_COUNT,
+          hint: "Use yyyy-mm-dd only (example: 2025-04-06). Empty dates: leave blank, 0, or null. Fix the file and re-upload — nothing was imported.",
         });
       }
     }
