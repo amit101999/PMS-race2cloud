@@ -482,9 +482,17 @@ export const calculateHoldingsSummary = async ({
 
   /* ================= FINAL FIFO ================= */
 
+  const mergedAwayIsins = new Set();
+  for (const m of mergerRows) {
+    const oldIsin = m.OldISIN || m.oldIsin || "";
+    if (oldIsin) mergedAwayIsins.add(oldIsin);
+  }
+
   const result = [];
 
   for (const key of Object.keys(holdingsMap)) {
+    if (mergedAwayIsins.has(key)) continue;
+
     const fifo = runFifoEngine(
       txByISIN[key] || [],
       bonusByISIN[key] || [],

@@ -308,6 +308,90 @@ exports.calculateHoldingsSummary = async ({
     }
   }
 
+  /* ================= FETCH DEMERGER_RECORD ================= */
+  const demergerRows = [];
+  {
+    let dateCondition = "";
+    if (asOnDate && /^\d{4}-\d{2}-\d{2}$/.test(asOnDate)) {
+      const nd = new Date(asOnDate);
+      nd.setDate(nd.getDate() + 1);
+      const nds = nd.toISOString().split("T")[0];
+      dateCondition = ` AND (TRANDATE < '${nds}' OR SETDATE < '${nds}')`;
+    }
+    const seenDem = new Set();
+    let dOff = 0;
+    while (true) {
+      try {
+        const batch = await zcql.executeZCQLQuery(`
+          SELECT *
+          FROM Demerger_Record
+          WHERE WS_Account_code = '${accountCode}'
+          ${dateCondition}
+          ORDER BY TRANDATE ASC, ROWID ASC
+          LIMIT ${batchLimit} OFFSET ${dOff}
+        `);
+        if (!batch || !batch.length) break;
+        for (const row of batch) {
+          const d = row.Demerger_Record || row;
+          const rid = d.ROWID;
+          if (rid != null && seenDem.has(rid)) continue;
+          if (rid != null) seenDem.add(rid);
+          if (String(d.Tran_Type || d.tran_type || "").toUpperCase() === "DEMERGER") {
+            demergerRows.push(d);
+            if (d.ISIN) uniqueISINs.add(d.ISIN);
+          }
+        }
+        if (batch.length < batchLimit) break;
+        dOff += batchLimit;
+      } catch (err) {
+        console.error(`Error fetching demerger records for ${accountCode} at offset ${dOff}:`, err);
+        break;
+      }
+    }
+  }
+
+  /* ================= FETCH MERGER ================= */
+  const mergerRows = [];
+  {
+    let dateCondition = "";
+    if (asOnDate && /^\d{4}-\d{2}-\d{2}$/.test(asOnDate)) {
+      const nd = new Date(asOnDate);
+      nd.setDate(nd.getDate() + 1);
+      const nds = nd.toISOString().split("T")[0];
+      dateCondition = ` AND (TRANDATE < '${nds}' OR SETDATE < '${nds}')`;
+    }
+    const seenMer = new Set();
+    let mOff = 0;
+    while (true) {
+      try {
+        const batch = await zcql.executeZCQLQuery(`
+          SELECT *
+          FROM Merger
+          WHERE WS_Account_code = '${accountCode}'
+          ${dateCondition}
+          ORDER BY TRANDATE ASC, ROWID ASC
+          LIMIT ${batchLimit} OFFSET ${mOff}
+        `);
+        if (!batch || !batch.length) break;
+        for (const row of batch) {
+          const m = row.Merger || row;
+          const rid = m.ROWID;
+          if (rid != null && seenMer.has(rid)) continue;
+          if (rid != null) seenMer.add(rid);
+          if (String(m.Tran_Type || m.tran_type || "").toUpperCase() === "MERGER") {
+            mergerRows.push(m);
+            if (m.ISIN) uniqueISINs.add(m.ISIN);
+          }
+        }
+        if (batch.length < batchLimit) break;
+        mOff += batchLimit;
+      } catch (err) {
+        console.error(`Error fetching merger records for ${accountCode} at offset ${mOff}:`, err);
+        break;
+      }
+    }
+  }
+
   /* ================= FETCH SPLITS ================= */
   const splits = [];
   offset = 0;
@@ -354,6 +438,8 @@ exports.calculateHoldingsSummary = async ({
   const txByISIN = {};
   const bonusByISIN = {};
   const splitByISIN = {};
+  const demergerByISIN = {};
+  const mergerByISIN = {};
   const holdingsMap = {};
 
   for (const t of transactions) {
@@ -382,6 +468,32 @@ exports.calculateHoldingsSummary = async ({
     if (!s.isin) continue;
     if (!splitByISIN[s.isin]) splitByISIN[s.isin] = [];
     splitByISIN[s.isin].push(s);
+  }
+
+  for (const d of demergerRows) {
+    if (!d.ISIN) continue;
+    if (!demergerByISIN[d.ISIN]) demergerByISIN[d.ISIN] = [];
+    demergerByISIN[d.ISIN].push(d);
+    if (!holdingsMap[d.ISIN]) {
+      holdingsMap[d.ISIN] = {
+        stockName: d.Security_Name,
+        securityCode: d.Security_Code,
+        isin: d.ISIN,
+      };
+    }
+  }
+
+  for (const m of mergerRows) {
+    if (!m.ISIN) continue;
+    if (!mergerByISIN[m.ISIN]) mergerByISIN[m.ISIN] = [];
+    mergerByISIN[m.ISIN].push(m);
+    if (!holdingsMap[m.ISIN]) {
+      holdingsMap[m.ISIN] = {
+        stockName: m.Security_Name,
+        securityCode: m.SecurityCode,
+        isin: m.ISIN,
+      };
+    }
   }
 
   /* ================= FETCH BHAV PRICES ================= */
@@ -420,14 +532,24 @@ exports.calculateHoldingsSummary = async ({
 
   /* ================= FINAL FIFO ================= */
 
+  const mergedAwayIsins = new Set();
+  for (const m of mergerRows) {
+    const oldIsin = m.OldISIN || m.oldIsin || "";
+    if (oldIsin) mergedAwayIsins.add(oldIsin);
+  }
+
   const result = [];
 
   for (const key of Object.keys(holdingsMap)) {
+    if (mergedAwayIsins.has(key)) continue;
+
     const fifo = runFifoEngine(
-      txByISIN[key],
+      txByISIN[key] || [],
       bonusByISIN[key] || [],
       splitByISIN[key] || [],
-      true
+      true,
+      demergerByISIN[key] || [],
+      mergerByISIN[key] || [],
     );
 
     if (!fifo || fifo.holdings <= 0) continue;
