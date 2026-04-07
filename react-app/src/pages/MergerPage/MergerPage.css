@@ -1,5 +1,18 @@
 /* Merger — extends SplitPage.css classes (imported in component) */
 
+.merger-preview-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.merger-preview-header-row h3 {
+  margin: 0;
+}
+
 .merger-page .split-card {
   align-items: start;
 }
@@ -70,7 +83,7 @@
 }
 
 /* "Merge Into New Company": three fields in one row */
-.merger-companies-stack > h3.merger-section-title {
+.merger-companies-stack>h3.merger-section-title {
   margin-top: 16px;
   margin-bottom: 6px;
 }

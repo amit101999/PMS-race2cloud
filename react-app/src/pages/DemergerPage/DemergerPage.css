@@ -1,3 +1,16 @@
+.demerger-preview-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.demerger-preview-header-row h3 {
+  margin: 0;
+}
+
 .demerger-page .split-card {
   align-items: start;
 }

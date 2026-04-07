@@ -6,6 +6,14 @@ import "../BonusPage/BonusPage.css";
 import "./DemergerPage.css";
 import { BASE_URL } from "../../constant";
 
+function escapeCsvCell(value) {
+  const s = value === null || value === undefined ? "" : String(value);
+  if (/[",\r\n]/.test(s)) {
+    return `"${s.replace(/"/g, '""')}"`;
+  }
+  return s;
+}
+
 function DemergerPage() {
   const [effectiveDate, setEffectiveDate] = useState("");
   const [recordDate, setRecordDate] = useState("");
@@ -217,6 +225,69 @@ function DemergerPage() {
       setApplying(false);
     }
   };
+
+  const handleExportDemergerCsv = useCallback(() => {
+    if (!previewData.length) return;
+    const headers = [
+      "Account Code",
+      "Old ISIN",
+      "Old Qty",
+      "Old Before Price",
+      "Old After Price",
+      "New ISIN",
+      "New Qty",
+      "New Price",
+      "Effective Date",
+      "Record Date",
+      "Ratio 1",
+      "Ratio 2",
+      "Allocation to new (%)",
+    ];
+    const lines = [headers.map(escapeCsvCell).join(",")];
+    for (const row of previewData) {
+      lines.push(
+        [
+          row.accountCode,
+          row.oldIsin,
+          row.oldQty,
+          row.oldBeforePrice,
+          row.oldNewPrice,
+          row.newIsin,
+          row.newQty,
+          row.newPrice,
+          effectiveDate,
+          recordDate,
+          ratio1,
+          ratio2,
+          costSplitPercent,
+        ]
+          .map(escapeCsvCell)
+          .join(","),
+      );
+    }
+    const csv = lines.join("\r\n");
+    const safeDate = (recordDate || "nodate").replace(/[^\d-]/g, "") || "nodate";
+    const safeNewIsin = (newIsin || "demerger").replace(/[^A-Za-z0-9_-]/g, "") || "demerger";
+    const filename = `demerger-preview_${safeDate}_${safeNewIsin}.csv`;
+    const blob = new Blob(["\ufeff", csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    a.rel = "noopener";
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }, [
+    previewData,
+    effectiveDate,
+    recordDate,
+    ratio1,
+    ratio2,
+    costSplitPercent,
+    newIsin,
+  ]);
 
   return (
     <MainLayout title="Demerger">
@@ -444,12 +515,26 @@ function DemergerPage() {
       {/* Preview table */}
       {step === "preview" && (
         <div className="bonus-preview-wrapper full-width">
-          <h3>Demerger Impact Preview</h3>
-
           {previewData.length === 0 ? (
-            <div className="alert info">No accounts affected</div>
+            <>
+              <h3>Demerger Impact Preview</h3>
+              <div className="alert info">No accounts affected</div>
+            </>
           ) : (
             <>
+              <div className="demerger-preview-header-row">
+                <h3>Demerger Impact Preview</h3>
+                <div className="bonus-preview-actions">
+                  <button
+                    type="button"
+                    className="bonus-submit"
+                    onClick={handleExportDemergerCsv}
+                  >
+                    Export CSV
+                  </button>
+                </div>
+              </div>
+
               <div className="bonus-preview-table-wrapper">
                 <table className="bonus-preview-table">
                   <thead>

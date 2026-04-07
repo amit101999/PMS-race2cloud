@@ -19,6 +19,14 @@ function normalizeSecurityRow(raw) {
   };
 }
 
+function escapeCsvCell(value) {
+  const s = value === null || value === undefined ? "" : String(value);
+  if (/[",\r\n]/.test(s)) {
+    return `"${s.replace(/"/g, '""')}"`;
+  }
+  return s;
+}
+
 function MergerPage() {
   const [effectiveDate, setEffectiveDate] = useState("");
   const [recordDate, setRecordDate] = useState("");
@@ -272,6 +280,74 @@ function MergerPage() {
 
   const fmtNum = (n) => (Number.isFinite(Number(n)) ? Number(n).toFixed(2) : "—");
 
+  const handleExportMergerCsv = useCallback(() => {
+    if (!previewRows.length) return;
+    const o = norm(oldIsin);
+    const headers = [
+      "Account Code",
+      "Old ISIN",
+      "New ISIN",
+      "Old Qty",
+      "Ratio 1",
+      "Ratio 2",
+      "New Qty",
+      "Holding Value",
+      "Merged WAP",
+      "Effective Date",
+      "Record Date",
+    ];
+    const lines = [headers.map(escapeCsvCell).join(",")];
+    for (const row of previewRows) {
+      const oldIsinVal = row.oldIsin ?? (o || "");
+      const newIsinVal = row.newIsin || newIsinTrimmed;
+      const oldQty = row.holdingsOnRecordDate ?? row.holdingsOldIsin1 ?? "";
+      const r1 = row.ratio1 ?? ratio1;
+      const r2 = row.ratio2 ?? ratio2;
+      const newQty = row.totalNewShares ?? "";
+      const hv = row.totalCarriedCost ?? "";
+      const wap = row.mergedWAP ?? "";
+      lines.push(
+        [
+          row.accountCode,
+          oldIsinVal,
+          newIsinVal,
+          oldQty,
+          r1,
+          r2,
+          newQty,
+          hv,
+          wap,
+          effectiveDate,
+          recordDate,
+        ]
+          .map(escapeCsvCell)
+          .join(","),
+      );
+    }
+    const csv = lines.join("\r\n");
+    const safeDate = (recordDate || "nodate").replace(/[^\d-]/g, "") || "nodate";
+    const safeIsin = (newIsinTrimmed || "merger").replace(/[^A-Za-z0-9_-]/g, "") || "merger";
+    const filename = `merger-preview_${safeDate}_${safeIsin}.csv`;
+    const blob = new Blob(["\ufeff", csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    a.rel = "noopener";
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }, [
+    previewRows,
+    oldIsin,
+    newIsinTrimmed,
+    ratio1,
+    ratio2,
+    effectiveDate,
+    recordDate,
+  ]);
+
   return (
     <MainLayout title="Merger">
       <Card style={{ marginTop: 4 }}>
@@ -482,7 +558,18 @@ function MergerPage() {
 
           {previewRows.length > 0 && (
             <div className="bonus-preview-wrapper full-width" style={{ marginTop: 16 }}>
-              <h3>Merger preview</h3>
+              <div className="merger-preview-header-row">
+                <h3>Merger preview</h3>
+                <div className="bonus-preview-actions">
+                  <button
+                    type="button"
+                    className="bonus-submit"
+                    onClick={handleExportMergerCsv}
+                  >
+                    Export CSV
+                  </button>
+                </div>
+              </div>
 
               <div className="bonus-preview-table-wrapper merger-preview-table-scroll">
                 <table className="bonus-preview-table merger-preview-detail-table">
