@@ -166,28 +166,18 @@
   margin-top: 6px;
 }
 
-.merger-actions {
+/* Primary action: single Fetch button at end of form (same placement as Demerger) */
+.merger-page .split-card.merger-split-card > .bonus-submit {
   grid-column: 1 / -1;
-  display: flex;
-  justify-content: flex-end;
-  gap: 12px;
-  margin-top: 12px;
-  padding-top: 8px;
-}
-
-.merger-actions-row {
-  flex-wrap: wrap;
-  justify-content: flex-start;
+  /* justify-self: start; */
+  margin-top: 4px;
+  min-width: 180px;
 }
 
 .merger-legs-cell {
   font-size: 12px;
   max-width: 420px;
   word-break: break-word;
-}
-
-.merger-actions .bonus-submit {
-  min-width: 180px;
 }
 
 .merger-select-field {

@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import MainLayout from "../../layouts/MainLayout";
 import { Card } from "../../components/common/CommonComponents";
 import "../SplitPage/SplitPage.css";
+import "../BonusPage/BonusPage.css";
 import "./MergerPage.css";
 import { BASE_URL } from "../../constant";
 
@@ -27,6 +28,14 @@ function escapeCsvCell(value) {
   return s;
 }
 
+/** WAP on old ISIN: holding value ÷ old qty (matches backend FIFO COA / holdings). */
+function mergerOldWapFromRow(row) {
+  const q = Number(row?.holdingsOnRecordDate ?? row?.holdingsOldIsin1);
+  const cost = Number(row?.totalCarriedCost);
+  if (!Number.isFinite(q) || q <= 0 || !Number.isFinite(cost)) return null;
+  return cost / q;
+}
+
 function MergerPage() {
   const [effectiveDate, setEffectiveDate] = useState("");
   const [recordDate, setRecordDate] = useState("");
@@ -47,6 +56,15 @@ function MergerPage() {
   const [previewLoading, setPreviewLoading] = useState(false);
   const [applyLoading, setApplyLoading] = useState(false);
   const [applySuccess, setApplySuccess] = useState(null);
+
+  const PAGE_SIZE = 10;
+  const [page, setPage] = useState(1);
+  useEffect(() => setPage(1), [previewRows]);
+  const totalPages = Math.max(1, Math.ceil(previewRows.length / PAGE_SIZE));
+  const paginatedPreview = previewRows.slice(
+    (page - 1) * PAGE_SIZE,
+    page * PAGE_SIZE,
+  );
 
   const oldIsinInputRef = useRef(null);
   const oldIsinPickingRef = useRef(false);
@@ -288,11 +306,12 @@ function MergerPage() {
       "Old ISIN",
       "New ISIN",
       "Old Qty",
+      "Old WAP",
       "Ratio 1",
       "Ratio 2",
       "New Qty",
+      "New WAP",
       "Holding Value",
-      "Merged WAP",
       "Effective Date",
       "Record Date",
     ];
@@ -301,22 +320,24 @@ function MergerPage() {
       const oldIsinVal = row.oldIsin ?? (o || "");
       const newIsinVal = row.newIsin || newIsinTrimmed;
       const oldQty = row.holdingsOnRecordDate ?? row.holdingsOldIsin1 ?? "";
+      const oldWapVal = mergerOldWapFromRow(row);
       const r1 = row.ratio1 ?? ratio1;
       const r2 = row.ratio2 ?? ratio2;
       const newQty = row.totalNewShares ?? "";
+      const newWapVal = row.mergedWAP;
       const hv = row.totalCarriedCost ?? "";
-      const wap = row.mergedWAP ?? "";
       lines.push(
         [
           row.accountCode,
           oldIsinVal,
           newIsinVal,
           oldQty,
+          oldWapVal === null ? "" : oldWapVal,
           r1,
           r2,
           newQty,
+          newWapVal ?? "",
           hv,
-          wap,
           effectiveDate,
           recordDate,
         ]
@@ -536,75 +557,105 @@ function MergerPage() {
               </div>
             </div>
 
-            <div className="merger-actions merger-actions-row">
+            <button
+              type="button"
+              className="bonus-submit"
+              disabled={previewLoading || validateForm() !== null}
+              onClick={handleFetchPreview}
+            >
+              {previewLoading ? "Loading..." : "Fetch Affected Account"}
+            </button>
+          </div>
+        </div>
+      </Card>
+
+      {previewRows.length > 0 && (
+        <div className="bonus-preview-wrapper full-width">
+          <div className="merger-preview-header-row">
+            <h3>Merger preview</h3>
+            <div className="bonus-preview-actions">
               <button
                 type="button"
                 className="bonus-submit"
-                disabled={previewLoading}
-                onClick={handleFetchPreview}
+                onClick={handleExportMergerCsv}
               >
-                {previewLoading ? "Loading preview…" : "Fetch preview"}
-              </button>
-              <button
-                type="button"
-                className="bonus-submit"
-                disabled={applyLoading || !previewRows.length}
-                onClick={handleApply}
-              >
-                {applyLoading ? "Applying…" : "Apply merger"}
+                Export CSV
               </button>
             </div>
           </div>
 
-          {previewRows.length > 0 && (
-            <div className="bonus-preview-wrapper full-width" style={{ marginTop: 16 }}>
-              <div className="merger-preview-header-row">
-                <h3>Merger preview</h3>
-                <div className="bonus-preview-actions">
-                  <button
-                    type="button"
-                    className="bonus-submit"
-                    onClick={handleExportMergerCsv}
-                  >
-                    Export CSV
-                  </button>
-                </div>
-              </div>
-
-              <div className="bonus-preview-table-wrapper merger-preview-table-scroll">
-                <table className="bonus-preview-table merger-preview-detail-table">
-                  <thead>
-                    <tr>
-                      <th>Account code</th>
-                      <th>Old ISIN</th>
-                      <th>New ISIN</th>
-                      <th>Old Qty</th>
-                      <th>Ratio 1</th>
-                      <th>Ratio 2</th>
-                      <th>New Qty</th>
-                      <th>Holding Value</th>
+          <div className="bonus-preview-table-wrapper merger-preview-table-scroll">
+            <table className="bonus-preview-table merger-preview-detail-table">
+              <thead>
+                <tr>
+                  <th>Account code</th>
+                  <th>Old ISIN</th>
+                  <th>New ISIN</th>
+                  <th>Old Qty</th>
+                  <th>Old WAP</th>
+                  <th>Ratio 1</th>
+                  <th>Ratio 2</th>
+                  <th>New Qty</th>
+                  <th>New WAP</th>
+                  <th>Holding Value</th>
+                </tr>
+              </thead>
+              <tbody>
+                {paginatedPreview.map((row) => {
+                  const oldWap = mergerOldWapFromRow(row);
+                  return (
+                    <tr key={row.accountCode}>
+                      <td className="merger-account-cell">{row.accountCode}</td>
+                      <td>{row.oldIsin ?? (norm(oldIsin) || "—")}</td>
+                      <td>{row.newIsin || newIsinTrimmed}</td>
+                      <td>{row.holdingsOnRecordDate ?? row.holdingsOldIsin1 ?? "—"}</td>
+                      <td>{oldWap === null ? "—" : fmtNum(oldWap)}</td>
+                      <td>{row.ratio1 ?? ratio1}</td>
+                      <td>{row.ratio2 ?? ratio2}</td>
+                      <td>{row.totalNewShares}</td>
+                      <td>{fmtNum(row.mergedWAP)}</td>
+                      <td>{fmtNum(row.totalCarriedCost)}</td>
                     </tr>
-                  </thead>
-                  <tbody>
-                    {previewRows.map((row) => (
-                      <tr key={row.accountCode}>
-                        <td className="merger-account-cell">{row.accountCode}</td>
-                        <td>{row.oldIsin ?? (norm(oldIsin) || "—")}</td>
-                        <td>{row.newIsin || newIsinTrimmed}</td>
-                        <td>{row.holdingsOnRecordDate ?? row.holdingsOldIsin1 ?? "—"}</td>
-                        <td>{row.ratio1 ?? ratio1}</td>
-                        <td>{row.ratio2 ?? ratio2}</td>
-                        <td>{row.totalNewShares}</td>
-                        <td>{fmtNum(row.totalCarriedCost)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+
+          {totalPages > 1 && (
+            <div className="pagination">
+              <button
+                type="button"
+                disabled={page === 1}
+                onClick={() => setPage(page - 1)}
+              >
+                Prev
+              </button>
+              <span>
+                Page {page} of {totalPages}
+              </span>
+              <button
+                type="button"
+                disabled={page === totalPages}
+                onClick={() => setPage(page + 1)}
+              >
+                Next
+              </button>
             </div>
           )}
+
+          <div className="bonus-preview-actions">
+            <button
+              type="button"
+              className="bonus-submit"
+              disabled={applyLoading}
+              onClick={handleApply}
+            >
+              {applyLoading ? "Applying merger..." : "Confirm & Apply Merger"}
+            </button>
+          </div>
         </div>
-      </Card>
+      )}
     </MainLayout>
   );
 }
