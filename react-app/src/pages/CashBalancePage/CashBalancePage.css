@@ -1,0 +1,341 @@
+/* ===========================
+   CASH BALANCE PAGE
+   =========================== */
+
+.cash-balance-page .filters-card {
+  background: #ffffff;
+  border-radius: 14px;
+  padding: 24px;
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr 1fr;
+  gap: 16px 18px;
+  align-items: end;
+}
+
+@media (max-width: 1024px) {
+  .cash-balance-page .filters-card {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+@media (max-width: 600px) {
+  .cash-balance-page .filters-card {
+    grid-template-columns: 1fr;
+  }
+}
+
+.cash-filter-field {
+  display: flex;
+  flex-direction: column;
+}
+
+.cash-filter-field label {
+  font-size: 13px;
+  font-weight: 600;
+  color: #374151;
+  margin-bottom: 6px;
+}
+
+.cash-filter-field input,
+.cash-filter-field select {
+  height: 44px;
+  padding: 10px 14px;
+  border-radius: 10px;
+  border: 1px solid #e5e7eb;
+  font-size: 14px;
+  outline: none;
+  background: #fff;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.cash-filter-field input:focus,
+.cash-filter-field select:focus {
+  border-color: #c2185b;
+}
+
+/* account code dropdown */
+.cash-account-wrapper {
+  position: relative;
+}
+
+.cash-account-dropdown {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  max-height: 220px;
+  overflow-y: auto;
+  z-index: 100;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
+}
+
+.cash-account-dropdown li {
+  padding: 10px 14px;
+  cursor: pointer;
+  font-size: 14px;
+  color: #374151;
+  border-left: 3px solid transparent;
+  transition: all 0.15s ease;
+}
+
+.cash-account-dropdown li:hover {
+  background: #fce7f3;
+  border-left-color: #c2185b;
+  color: #8b1538;
+  font-weight: 500;
+}
+
+/* ===========================
+   SUMMARY STRIP
+   =========================== */
+
+.cash-summary-strip {
+  display: flex;
+  gap: 20px;
+  flex-wrap: wrap;
+  margin-top: 20px;
+}
+
+.cash-summary-card {
+  flex: 1;
+  min-width: 200px;
+  background: linear-gradient(135deg, #c2185b, #8b1538);
+  color: #fff;
+  border-radius: 14px;
+  padding: 20px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.cash-summary-card .label {
+  font-size: 12px;
+  font-weight: 600;
+  opacity: 0.85;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.cash-summary-card .value {
+  font-size: 22px;
+  font-weight: 700;
+}
+
+/* ===========================
+   TABLE SECTION
+   =========================== */
+
+.cash-table-section {
+  margin-top: 20px;
+}
+
+.cash-table-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.cash-table-header h3 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: #111827;
+}
+
+.cash-row-count {
+  font-size: 13px;
+  color: #6b7280;
+  font-weight: 500;
+}
+
+.cash-table-wrapper {
+  border-radius: 14px;
+  overflow: hidden;
+  border: 1px solid #e5e7eb;
+  background: #ffffff;
+}
+
+.cash-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+.cash-table thead th {
+  text-align: left;
+  vertical-align: middle;
+  padding: 14px 16px;
+  background: #f9fafb;
+  color: #374151;
+  font-weight: 600;
+  border-bottom: 1px solid #e5e7eb;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.cash-table tbody tr {
+  background: #ffffff;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.cash-table tbody tr + tr {
+  border-top: 1px solid #e5e7eb;
+}
+
+.cash-table td {
+  text-align: left;
+  vertical-align: middle;
+  padding: 14px 16px;
+  color: #374151;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.cash-table tbody tr:nth-child(even) {
+  background: #f9fafb;
+}
+
+.cash-table tbody tr:hover {
+  background: #fce7f3;
+}
+
+.cash-credit {
+  color: #166534;
+  font-weight: 600;
+}
+
+.cash-debit {
+  color: #b91c1c;
+  font-weight: 600;
+}
+
+.cash-balance-positive {
+  color: #166534;
+  font-weight: 700;
+}
+
+.cash-balance-negative {
+  color: #b91c1c;
+  font-weight: 700;
+}
+
+/* ===========================
+   PAGINATION
+   =========================== */
+
+.cash-pagination {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 14px;
+  margin-top: 18px;
+}
+
+.cash-pagination button {
+  padding: 6px 14px;
+  border-radius: 8px;
+  border: 1px solid #e5e7eb;
+  background: #ffffff;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.cash-pagination button:hover:not(:disabled) {
+  background: #f3f4f6;
+}
+
+.cash-pagination button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.cash-pagination span {
+  font-size: 13px;
+  font-weight: 500;
+  color: #374151;
+}
+
+/* ===========================
+   EXPORT BUTTON
+   =========================== */
+
+.cash-export-bar {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 16px;
+}
+
+.cash-export-btn {
+  background: linear-gradient(135deg, #c2185b, #8b1538);
+  color: white;
+  padding: 10px 22px;
+  border-radius: 10px;
+  border: none;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: transform 0.1s ease, box-shadow 0.1s ease;
+}
+
+.cash-export-btn:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 14px rgba(194, 24, 91, 0.35);
+}
+
+.cash-export-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
+/* ===========================
+   LOADING & EMPTY
+   =========================== */
+
+.cash-loading {
+  text-align: center;
+  padding: 40px 0;
+  color: #6b7280;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.cash-empty {
+  text-align: center;
+  padding: 40px 0;
+  color: #9ca3af;
+  font-size: 14px;
+}
+
+.cash-fetch-btn {
+  background: linear-gradient(135deg, #c2185b, #8b1538);
+  color: white;
+  padding: 10px 22px;
+  border-radius: 10px;
+  border: none;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  height: 44px;
+  transition: transform 0.1s ease, box-shadow 0.1s ease;
+}
+
+.cash-fetch-btn:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 14px rgba(194, 24, 91, 0.35);
+}
+
+.cash-fetch-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}

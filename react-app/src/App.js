@@ -12,6 +12,7 @@ import DemergerPage from "./pages/DemergerPage/DemergerPage";
 import MergerPage from "./pages/MergerPage/MergerPage";
 import TempTransaction from "./pages/TempTransactionUpload/TempTransaction";
 import UpdateISINPage from "./pages/update-isin/UpdateISINPage";
+import CashBalancePage from "./pages/CashBalancePage/CashBalancePage";
 
 function App() {
   return (
@@ -28,6 +29,7 @@ function App() {
         {/* <Route path="/transaction-upload" element={<TransactionUploadPage />} /> */}
         <Route path="/temp-transaction" element={<TempTransaction />} />
         <Route path="/updateISIN" element={<UpdateISINPage />} />
+        <Route path="/cash-balance" element={<CashBalancePage />} />
         <Route path="/reports" element={<ReportsPage />} />
       </Routes>
     </HashRouter>

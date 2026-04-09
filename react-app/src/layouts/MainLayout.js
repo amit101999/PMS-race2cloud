@@ -41,6 +41,9 @@ function MainLayout({ title, rightContent, children }) {
     if (location.pathname === "/updateISIN") {
       return "updateISIN";
     }
+    if (location.pathname === "/cash-balance") {
+      return "cash-balance";
+    }
     if (location.pathname === "/reports") {
       return "reports";
     }
@@ -64,6 +67,7 @@ function MainLayout({ title, rightContent, children }) {
     // { key: "transaction-upload", label: "Transaction Upload" },
     { key: "temp-transaction", label: "Transaction Upload" },
     { key: "updateISIN", label: "Update ISIN" },
+    { key: "cash-balance", label: "Cash Balance" },
     { key: "reports", label: "Reports" },
   ];
 
