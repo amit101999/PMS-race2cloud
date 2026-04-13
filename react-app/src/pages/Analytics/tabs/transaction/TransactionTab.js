@@ -264,14 +264,12 @@ const TransactionTab = ({ accountCode, asOnDate }) => {
                 <th className="num">Quantity</th>
                 <th className="num">Price</th>
                 <th className="num">Total Amount</th>
-                <th className="num">STT</th>
-                <th>Cash Balance</th>
               </tr>
             </thead>
             <tbody>
               {data.length === 0 ? (
                 <tr>
-                  <td colSpan={9} className="empty-cell">
+                  <td colSpan={7} className="empty-cell">
                     No transactions found
                   </td>
                 </tr>
@@ -285,8 +283,6 @@ const TransactionTab = ({ accountCode, asOnDate }) => {
                     <td className="num">{formatQuantity(t.quantity)}</td>
                     <td className="num">{formatNumber(t.price)}</td>
                     <td className="num">{formatNumber(t.totalAmount)}</td>
-                    <td className="num">{formatNumber(t.stt)}</td>
-                    <td className="num">{formatNumber(t.cashBalance)}</td>
                   </tr>
                 ))
               )}

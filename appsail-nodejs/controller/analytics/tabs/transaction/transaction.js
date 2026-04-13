@@ -1,5 +1,6 @@
-import { fetchDemergerRecordsForAccount } from "../../../../util/analytics/transactionHistory/demergers.js";
-import { fetchMergerRecordsForAccount } from "../../../../util/analytics/transactionHistory/mergers.js";
+// Re-enable merger/demerger in transaction list: uncomment imports below + blocks ~307–361 + switch cases ~400–407.
+// import { fetchDemergerRecordsForAccount } from "../../../../util/analytics/transactionHistory/demergers.js";
+// import { fetchMergerRecordsForAccount } from "../../../../util/analytics/transactionHistory/mergers.js";
 
 export const applyCashEffect = (balance, tranType, amount) => {
   if (
@@ -303,8 +304,9 @@ export const getPaginatedTransactions = async (req, res) => {
       });
     }
 
-    /* ================= FETCH DEMERGER_RECORD ================= */
+    /* ================= FETCH DEMERGER_RECORD (disabled) ================= */
     let demergerRows = [];
+    /*
     try {
       const demRaw = await fetchDemergerRecordsForAccount({
         zcql,
@@ -328,9 +330,11 @@ export const getPaginatedTransactions = async (req, res) => {
     } catch (e) {
       console.error("Error fetching demerger records", e);
     }
+    */
 
-    /* ================= FETCH MERGER ================= */
+    /* ================= FETCH MERGER (disabled) ================= */
     let mergerRows = [];
+    /*
     try {
       const mrgRaw = await fetchMergerRecordsForAccount({
         zcql,
@@ -354,6 +358,7 @@ export const getPaginatedTransactions = async (req, res) => {
     } catch (e) {
       console.error("Error fetching merger records", e);
     }
+    */
 
     /* ================= MERGE & SORT ================= */
 
@@ -392,12 +397,14 @@ export const getPaginatedTransactions = async (req, res) => {
         }
         case "DIV+":
           break;
+        /* Re-enable with demerger/merger fetch above
         case "DEMERGER":
           runningHoldingByIsin[isin] = Number(row.holdingAfter) || holding;
           break;
         case "MERGER":
           runningHoldingByIsin[isin] = Number(row.holdingAfter) || holding;
           break;
+        */
         default:
           // Transaction: buy adds, sell subtracts
           const qty = Math.abs(Number(row.quantity) || 0);
