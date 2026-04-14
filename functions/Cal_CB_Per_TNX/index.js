@@ -1,24 +1,50 @@
 /**
- * Cal_CB_Per_TNX: Passbook-style cash balance from Transaction + Dividend tables.
+ * Cal_CB_Per_TNX: Passbook-style cash balance from Transaction + Dividend_Record.
  * Inflows use SETDATE, outflows use TRANDATE. Writes to Cash_Balance_Per_Transaction.
  *
- * Job params:
- *   accountCodes  – array of account codes to process
- *   startDate     – yyyy-mm-dd (optional, defaults to all-time)
- *   endDate       – yyyy-mm-dd (optional, defaults to today)
- *
- * @param {import("./types/job").JobRequest} jobRequest
- * @param {import("./types/job").Context} context
+ * Processes all accounts in CLIENT_IDS from 2020-01-01 through 2026-12-31 in 6-month chunks.
+ * Empty chunks are skipped (continue); all chunks through GLOBAL_END are visited.
+ * Balance and sequence carry forward across chunks.
  */
 
 const catalyst = require("zcatalyst-sdk-node");
 
 const BATCH_SIZE = 300;
+const CLIENT_IDS = [
+"AYAN020","AYAN043","AYAN044","AYAN025","AYAN013","AYAN038","AYAN049","AYAN037","AYAN047","AYAN024",
+];
+const GLOBAL_START = "2020-01-01";
+/** Fixed inclusive end date for all runs (process every half-year up to this date). */
+const GLOBAL_END = "2026-12-31";
+const CHUNK_MONTHS = 6;
 
-const CASH_ADD = ["CS+", "SL+", "CSI", "IN1", "IN+", "DIO", "DI1", "OI1", "DIS", "SQS"];
-const CASH_SUBTRACT = ["BY-", "CS-", "MGF", "E22", "E01", "CUS", "E23", "MGE", "E10", "PRF", "NF-", "SQB"];
+const CASH_ADD = ["CS+", "SL+", "CSI", "IN1", "IN+", "DIO", "DI0", "DI1", "OI1", "DIS", "SQS"];
+const CASH_SUBTRACT = ["BY-", "CS-", "MGF", "E22", "E01", "CUS", "E23", "MGE", "E10", "PRF", "NF-", "SQB", "TDO", "TDI"];
 
 const esc = (s) => String(s ?? "").replace(/'/g, "''");
+
+function generateDateChunks(startISO, endISO, months) {
+  const chunks = [];
+  let cursor = new Date(startISO + "T00:00:00Z");
+  const end = new Date(endISO + "T00:00:00Z");
+
+  while (cursor <= end) {
+    const chunkStart = cursor.toISOString().split("T")[0];
+    const next = new Date(cursor);
+    next.setUTCMonth(next.getUTCMonth() + months);
+    next.setUTCDate(next.getUTCDate() - 1);
+    const chunkEnd = next > end
+      ? end.toISOString().split("T")[0]
+      : next.toISOString().split("T")[0];
+
+    chunks.push({ start: chunkStart, end: chunkEnd });
+
+    const nextStart = new Date(next);
+    nextStart.setUTCDate(nextStart.getUTCDate() + 1);
+    cursor = nextStart;
+  }
+  return chunks;
+}
 
 async function fetchBatched(zcql, baseQuery, mapper, rowKey = "Transaction") {
   const rows = [];
@@ -37,34 +63,37 @@ async function fetchBatched(zcql, baseQuery, mapper, rowKey = "Transaction") {
   return rows;
 }
 
-async function processAccount(zcql, accountCode, startDate, endDate) {
-  console.log(`Processing account ${accountCode} from ${startDate} to ${endDate}`);
-
+function fetchChunkEvents(zcql, accountCode, startDate, endDate) {
   const inflowTypesList = CASH_ADD.map((t) => `'${esc(t)}'`).join(", ");
   const outflowTypesList = CASH_SUBTRACT.map((t) => `'${esc(t)}'`).join(", ");
 
-  const dateFilterInflow = startDate && endDate
-    ? `AND SETDATE >= '${startDate}' AND SETDATE <= '${endDate}'`
-    : startDate ? `AND SETDATE >= '${startDate}'`
-    : endDate ? `AND SETDATE <= '${endDate}'`
-    : "";
-
-  const dateFilterOutflow = startDate && endDate
-    ? `AND TRANDATE >= '${startDate}' AND TRANDATE <= '${endDate}'`
-    : startDate ? `AND TRANDATE >= '${startDate}'`
-    : endDate ? `AND TRANDATE <= '${endDate}'`
-    : "";
-
-  /* ================= FETCH INFLOWS (by SETDATE) ================= */
-  const inflowQueryBase = `
+  const inflowQuery = `
     SELECT ROWID, TRANDATE, SETDATE, executionPriority, Tran_Type, Security_Name, Net_Amount, QTY, WS_client_id, NETRATE, ISIN, STT
     FROM Transaction
     WHERE WS_Account_code = '${esc(accountCode)}'
       AND Tran_Type IN (${inflowTypesList})
-      ${dateFilterInflow}
+      AND SETDATE >= '${startDate}' AND SETDATE <= '${endDate}'
     ORDER BY SETDATE ASC, executionPriority ASC, ROWID ASC
   `;
-  const inflowRows = await fetchBatched(zcql, inflowQueryBase, (t) => ({
+
+  const outflowQuery = `
+    SELECT ROWID, TRANDATE, SETDATE, executionPriority, Tran_Type, Security_Name, Net_Amount, QTY, WS_client_id, NETRATE, ISIN, STT
+    FROM Transaction
+    WHERE WS_Account_code = '${esc(accountCode)}'
+      AND Tran_Type IN (${outflowTypesList})
+      AND TRANDATE >= '${startDate}' AND TRANDATE <= '${endDate}'
+    ORDER BY TRANDATE ASC, executionPriority ASC, ROWID ASC
+  `;
+
+  const dividendQuery = `
+    SELECT ROWID, ISIN, Security_Code, WS_Account_code, Holding, Rate, Dividend_Amount, PaymentDate
+    FROM Dividend_Record
+    WHERE WS_Account_code = '${esc(accountCode)}'
+      AND PaymentDate >= '${startDate}' AND PaymentDate <= '${endDate}'
+    ORDER BY PaymentDate ASC, ROWID ASC
+  `;
+
+  const mapInflow = (t) => ({
     rowId: t.ROWID,
     trandate: t.TRANDATE || t.Setdate || "",
     setdate: t.SETDATE || t.Setdate || t.TRANDATE || "",
@@ -79,18 +108,9 @@ async function processAccount(zcql, accountCode, startDate, endDate) {
     price: Number(t.NETRATE) || 0,
     isin: String(t.ISIN ?? "").trim() || "",
     stt: Number(t.STT || t.Stt) || 0,
-  }));
+  });
 
-  /* ================= FETCH OUTFLOWS (by TRANDATE) ================= */
-  const outflowQueryBase = `
-    SELECT ROWID, TRANDATE, SETDATE, executionPriority, Tran_Type, Security_Name, Net_Amount, QTY, WS_client_id, NETRATE, ISIN, STT
-    FROM Transaction
-    WHERE WS_Account_code = '${esc(accountCode)}'
-      AND Tran_Type IN (${outflowTypesList})
-      ${dateFilterOutflow}
-    ORDER BY TRANDATE ASC, executionPriority ASC, ROWID ASC
-  `;
-  const outflowRows = await fetchBatched(zcql, outflowQueryBase, (t) => ({
+  const mapOutflow = (t) => ({
     rowId: t.ROWID,
     trandate: t.TRANDATE || t.Setdate || "",
     setdate: t.SETDATE || t.Setdate || t.TRANDATE || "",
@@ -105,168 +125,30 @@ async function processAccount(zcql, accountCode, startDate, endDate) {
     price: Number(t.NETRATE) || 0,
     isin: String(t.ISIN ?? "").trim() || "",
     stt: Number(t.STT || t.Stt) || 0,
-  }));
-
-  /* ================= FETCH DIVIDENDS ================= */
-  const uniqueISINs = new Set();
-  for (const row of [...inflowRows, ...outflowRows]) {
-    if (row.isin) uniqueISINs.add(row.isin);
-  }
-
-  const dividendRows = [];
-  if (uniqueISINs.size > 0) {
-    const isinList = [...uniqueISINs].map((i) => `'${esc(i)}'`).join(", ");
-
-    const dateFilterDividend = startDate && endDate
-      ? `AND PaymentDate >= '${startDate}' AND PaymentDate <= '${endDate}'`
-      : startDate ? `AND PaymentDate >= '${startDate}'`
-      : endDate ? `AND PaymentDate <= '${endDate}'`
-      : "";
-
-    const dividendQueryBase = `
-      SELECT ROWID, SecurityCode, Security_Name, ISIN, Rate, ExDate, PaymentDate, Dividend_Type
-      FROM Dividend
-      WHERE ISIN IN (${isinList})
-        ${dateFilterDividend}
-      ORDER BY PaymentDate ASC, ROWID ASC
-    `;
-    const rawDividends = await fetchBatched(zcql, dividendQueryBase, (d) => ({
-      rowId: d.ROWID,
-      securityName: d.Security_Name || "",
-      rate: Number(d.Rate) || 0,
-      exDate: (d.ExDate || "").toString().slice(0, 10),
-      paymentDate: (d.PaymentDate || "").toString().slice(0, 10),
-      isin: String(d.ISIN ?? "").trim() || "",
-      dividendType: d.Dividend_Type || "",
-    }), "Dividend");
-
-    for (const div of rawDividends) {
-      if (!div.rate || !div.isin || !div.exDate || !div.paymentDate) continue;
-
-      const holdingQuery = `
-        SELECT HOLDINGS
-        FROM Daily_Holding_Quantity
-        WHERE WS_Account_code = '${esc(accountCode)}'
-          AND ISIN = '${esc(div.isin)}'
-          AND TRANDATE <= '${div.exDate}'
-        ORDER BY TRANDATE DESC
-        LIMIT 1
-      `;
-      const holdingResult = await zcql.executeZCQLQuery(holdingQuery);
-      const holdingRow = holdingResult?.[0]?.Daily_Holding_Quantity || holdingResult?.[0];
-      const holdings = Number(holdingRow?.HOLDINGS) || 0;
-
-      if (holdings <= 0) continue;
-
-      const totalAmount = Math.round(holdings * div.rate * 100) / 100;
-
-      dividendRows.push({
-        rowId: div.rowId,
-        trandate: div.paymentDate,
-        setdate: div.paymentDate,
-        executionPriority: 550,
-        type: "DIVIDEND",
-        securityName: div.securityName,
-        netAmount: totalAmount,
-        impactDate: div.paymentDate,
-        isInflow: true,
-        qty: holdings,
-        clientCode: "",
-        price: div.rate,
-        isin: div.isin,
-        stt: 0,
-      });
-    }
-  }
-
-  /* ================= MERGE & SORT ================= */
-  const allEvents = [...inflowRows, ...outflowRows, ...dividendRows];
-  allEvents.sort((a, b) => {
-    const dA = new Date(a.impactDate).getTime();
-    const dB = new Date(b.impactDate).getTime();
-    if (dA !== dB) return dA - dB;
-    if (a.isInflow !== b.isInflow) return a.isInflow ? -1 : 1;
-    if (a.executionPriority !== b.executionPriority) return a.executionPriority - b.executionPriority;
-    return String(a.rowId).localeCompare(String(b.rowId));
   });
 
-  /* ================= COMPUTE RUNNING BALANCE ================= */
-  let startingBalance = 0;
-  const firstImpactDate = allEvents.length ? allEvents[0].impactDate : null;
-  if (firstImpactDate) {
-    const firstDayCsPlus = allEvents.find((e) => e.impactDate === firstImpactDate && e.type === "CS+");
-    if (firstDayCsPlus) startingBalance = firstDayCsPlus.netAmount;
-  }
+  const mapDividend = (d) => ({
+    rowId: d.ROWID,
+    trandate: (d.PaymentDate || "").toString().slice(0, 10),
+    setdate: (d.PaymentDate || "").toString().slice(0, 10),
+    executionPriority: 550,
+    type: "DIVIDEND",
+    securityName: String(d.Security_Code ?? "").trim() || "",
+    netAmount: Number(d.Dividend_Amount) || 0,
+    impactDate: (d.PaymentDate || "").toString().slice(0, 10),
+    isInflow: true,
+    qty: Number(d.Holding) || 0,
+    clientCode: "",
+    price: Number(d.Rate) || 0,
+    isin: String(d.ISIN ?? "").trim() || "",
+    stt: 0,
+  });
 
-  let balance = startingBalance;
-  const passbookRows = [];
-  let usedOpeningCsPlus = false;
-
-  for (const row of allEvents) {
-    const { impactDate, trandate, setdate, type, securityName, netAmount, isInflow, qty, clientCode, price, isin, stt } = row;
-    let debit = 0;
-    let credit = 0;
-
-    if (firstImpactDate && impactDate === firstImpactDate && type === "CS+" && !usedOpeningCsPlus) {
-      usedOpeningCsPlus = true;
-      credit = netAmount;
-      balance = startingBalance;
-    } else if (isInflow) {
-      credit = netAmount;
-      balance += netAmount;
-    } else {
-      debit = netAmount;
-      balance -= netAmount;
-    }
-
-    passbookRows.push({
-      date: impactDate,
-      trandate,
-      setdate,
-      transactionType: type,
-      qty: qty ?? 0,
-      debit: debit || null,
-      credit: credit || null,
-      balance,
-      securityName,
-      totalAmount: netAmount,
-      clientCode: clientCode ?? "",
-      price: price ?? 0,
-      isin: isin ?? "",
-      stt: stt ?? 0,
-    });
-  }
-
-  /* ================= INSERT INTO DB ================= */
-  const tableName = "Cash_Balance_Per_Transaction";
-  let sequence = 1;
-  for (const row of passbookRows) {
-    const txDate = String(row.trandate).slice(0, 10);
-    const setDateStr = String(row.setdate).slice(0, 10);
-    const insertQuery = `
-      INSERT INTO ${tableName} (Account_Code, Client_Code, Transaction_Date, Settlement_Date, Transaction_Type, Price, Cash_Balance, Holding, Security_Name, ISIN, Quantity, Total_Amount, STT, Sequence)
-      VALUES (
-        '${esc(accountCode)}',
-        '${esc(row.clientCode)}',
-        '${txDate}',
-        '${setDateStr}',
-        '${esc(row.transactionType)}',
-        ${Number(row.price)},
-        ${Number(row.balance)},
-        0,
-        '${esc(row.securityName)}',
-        '${esc(row.isin)}',
-        ${Math.round(Number(row.qty ?? 0) || 0)},
-        ${Number(row.totalAmount)},
-        ${Number(row.stt ?? 0)},
-        ${sequence}
-      )
-    `;
-    await zcql.executeZCQLQuery(insertQuery);
-    sequence += 1;
-  }
-
-  console.log(`Account ${accountCode}: inserted ${passbookRows.length} row(s), final balance: ${balance.toFixed(2)}`);
+  return Promise.all([
+    fetchBatched(zcql, inflowQuery, mapInflow, "Transaction"),
+    fetchBatched(zcql, outflowQuery, mapOutflow, "Transaction"),
+    fetchBatched(zcql, dividendQuery, mapDividend, "Dividend_Record"),
+  ]);
 }
 
 module.exports = async (jobRequest, context) => {
@@ -274,35 +156,93 @@ module.exports = async (jobRequest, context) => {
   const zcql = catalystApp.zcql();
 
   try {
-    const params = jobRequest.getAllJobParams();
+    const chunks = generateDateChunks(GLOBAL_START, GLOBAL_END, CHUNK_MONTHS);
+    console.log(`Cal_CB_Per_TNX: ${CLIENT_IDS.length} account(s), ${chunks.length} chunk(s) from ${GLOBAL_START} to ${GLOBAL_END}`);
 
-    let accountCodes = params.accountCodes || params.accountCode || [];
-    if (typeof accountCodes === "string") {
-      try { accountCodes = JSON.parse(accountCodes); } catch (_) { accountCodes = [accountCodes]; }
-    }
-    if (!Array.isArray(accountCodes)) accountCodes = [accountCodes];
-    accountCodes = accountCodes.filter(Boolean);
+    for (let ai = 0; ai < CLIENT_IDS.length; ai++) {
+      const accountCode = CLIENT_IDS[ai];
+      console.log(`\n===== Account ${ai + 1}/${CLIENT_IDS.length}: ${accountCode} =====`);
 
-    const startDate = params.startDate || null;
-    const endDate = params.endDate || new Date().toISOString().split("T")[0];
+      let balance = 0;
+      let sequence = 1;
+      let isFirstChunk = true;
+      let usedOpeningCsPlus = false;
+      let totalInserted = 0;
 
-    if (!accountCodes.length) {
-      console.error("No account codes provided");
-      context.closeWithFailure();
-      return;
-    }
+      for (let ci = 0; ci < chunks.length; ci++) {
+        const { start, end } = chunks[ci];
+        console.log(`  Chunk ${ci + 1}/${chunks.length}: ${start} → ${end}`);
 
-    console.log(`Cal_CB_Per_TNX: ${accountCodes.length} account(s), range ${startDate || "all"} to ${endDate}`);
+        const [inflowRows, outflowRows, dividendRows] = await fetchChunkEvents(zcql, accountCode, start, end);
 
-    for (const acc of accountCodes) {
-      try {
-        await processAccount(zcql, acc, startDate, endDate);
-      } catch (accErr) {
-        console.error(`Failed for account ${acc}:`, accErr);
+        const allEvents = [...inflowRows, ...outflowRows, ...dividendRows];
+        if (allEvents.length === 0) {
+          console.log(`  Chunk ${ci + 1}: 0 events — skipping`);
+          continue;
+        }
+
+        allEvents.sort((a, b) => {
+          const dA = new Date(a.impactDate).getTime();
+          const dB = new Date(b.impactDate).getTime();
+          if (dA !== dB) return dA - dB;
+          if (a.isInflow !== b.isInflow) return a.isInflow ? -1 : 1;
+          if (a.executionPriority !== b.executionPriority) return a.executionPriority - b.executionPriority;
+          return String(a.rowId).localeCompare(String(b.rowId));
+        });
+
+        if (isFirstChunk) {
+          const firstImpactDate = allEvents[0].impactDate;
+          const firstDayCsPlus = allEvents.find((e) => e.impactDate === firstImpactDate && e.type === "CS+");
+          if (firstDayCsPlus) {
+            balance = firstDayCsPlus.netAmount;
+          }
+          isFirstChunk = false;
+        }
+
+        for (const row of allEvents) {
+          const { trandate, setdate, type, securityName, netAmount, isInflow, qty, price, isin, stt } = row;
+
+          if (!usedOpeningCsPlus && type === "CS+") {
+            usedOpeningCsPlus = true;
+            balance = netAmount;
+          } else if (isInflow) {
+            balance += netAmount;
+          } else {
+            balance -= netAmount;
+          }
+
+          const txDate = String(trandate).slice(0, 10);
+          const setDateStr = String(setdate).slice(0, 10);
+
+          await zcql.executeZCQLQuery(`
+            INSERT INTO Cash_Balance_Per_Transaction
+            (Account_Code, Transaction_Type, Transaction_Date, Settlement_Date, Price, Cash_Balance, Security_Name, ISIN, Quantity, Total_Amount, STT, Sequence)
+            VALUES (
+              '${esc(accountCode)}',
+              '${esc(type)}',
+              '${txDate}',
+              '${setDateStr}',
+              ${Number(price)},
+              ${Number(balance)},
+              '${esc(securityName)}',
+              '${esc(isin)}',
+              ${Math.round(Number(qty ?? 0) || 0)},
+              ${Number(netAmount)},
+              ${Number(stt ?? 0)},
+              ${sequence}
+            )
+          `);
+          sequence++;
+        }
+
+        totalInserted += allEvents.length;
+        console.log(`  Chunk ${ci + 1}: ${allEvents.length} event(s), balance=${balance.toFixed(2)}, seq=${sequence - 1}`);
       }
+
+      console.log(`Account ${accountCode} done: ${totalInserted} row(s), final balance=${balance.toFixed(2)}`);
     }
 
-    console.log("Cal_CB_Per_TNX completed");
+    console.log(`\nCal_CB_Per_TNX completed for all ${CLIENT_IDS.length} accounts.`);
     context.closeWithSuccess();
   } catch (error) {
     console.error("Cal_CB_Per_TNX failed:", error);

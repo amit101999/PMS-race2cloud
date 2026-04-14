@@ -291,6 +291,8 @@ export const getAllSecuritiesISINs = async (req, res) => {
         return dt.toISOString().split("T")[0];
       };
 
+      const esc = (s) => String(s ?? "").replace(/'/g, "''");
+
       const recordDateISO = normalizeDate(recordDate);
       const exDateISO = (exDate && String(exDate).trim())
         ? normalizeDate(exDate)
@@ -314,6 +316,7 @@ export const getAllSecuritiesISINs = async (req, res) => {
         });
       }
   
+      /* ====== INSERT DIVIDEND MASTER ====== */
       await zcql.executeZCQLQuery(`
         INSERT INTO Dividend
         (
@@ -329,21 +332,147 @@ export const getAllSecuritiesISINs = async (req, res) => {
         )
         VALUES
         (
-          '${securityCode}',
-          '${securityName}',
-          '${isin}',
+          '${esc(securityCode)}',
+          '${esc(securityName)}',
+          '${esc(isin)}',
           ${rate},
           '${exDateISO}',
           '${recordDateISO}',
           '${paymentDateISO}',
-          '${dividendType || "Final"}',
+          '${esc(dividendType || "Final")}',
           'Draft'
         )
       `);
-  
+
+      /* ====== COMPUTE PER-ACCOUNT ALLOCATIONS (same FIFO as preview) ====== */
+      const accountSet = new Set();
+      let holdOffset = 0;
+      while (true) {
+        const batch = await zcql.executeZCQLQuery(`
+          SELECT WS_Account_code FROM Transaction
+          WHERE ISIN='${esc(isin)}'
+          LIMIT ${ZCQL_ROW_LIMIT} OFFSET ${holdOffset}
+        `);
+        if (!batch || batch.length === 0) break;
+        batch.forEach((r) => accountSet.add(r.Transaction.WS_Account_code));
+        if (batch.length < ZCQL_ROW_LIMIT) break;
+        holdOffset += ZCQL_ROW_LIMIT;
+      }
+
+      const eligibleAccounts = Array.from(accountSet);
+
+      if (eligibleAccounts.length) {
+        const txRows = [];
+        const seenTxnRowIds = new Set();
+        let txOffset = 0;
+        while (true) {
+          const batch = await zcql.executeZCQLQuery(`
+            SELECT * FROM Transaction
+            WHERE ISIN='${esc(isin)}' AND SETDATE <= '${recordDateISO}'
+            ORDER BY SETDATE ASC, ROWID ASC
+            LIMIT ${ZCQL_ROW_LIMIT} OFFSET ${txOffset}
+          `);
+          if (!batch || batch.length === 0) break;
+          for (const row of batch) {
+            const t = row.Transaction || row;
+            if (t.ROWID != null && seenTxnRowIds.has(t.ROWID)) continue;
+            if (t.ROWID != null) seenTxnRowIds.add(t.ROWID);
+            txRows.push(row);
+          }
+          if (batch.length < ZCQL_ROW_LIMIT) break;
+          txOffset += ZCQL_ROW_LIMIT;
+        }
+
+        const bonusRows = [];
+        let bonusOffset = 0;
+        while (true) {
+          const batch = await zcql.executeZCQLQuery(`
+            SELECT * FROM Bonus
+            WHERE ISIN='${esc(isin)}' AND ExDate <= '${recordDateISO}'
+            ORDER BY ExDate ASC, ROWID ASC
+            LIMIT ${ZCQL_ROW_LIMIT} OFFSET ${bonusOffset}
+          `);
+          if (!batch || batch.length === 0) break;
+          bonusRows.push(...batch);
+          if (batch.length < ZCQL_ROW_LIMIT) break;
+          bonusOffset += ZCQL_ROW_LIMIT;
+        }
+
+        const splitRows = [];
+        let splitOffset = 0;
+        while (true) {
+          const batch = await zcql.executeZCQLQuery(`
+            SELECT * FROM Split
+            WHERE ISIN='${esc(isin)}' AND Issue_Date <= '${recordDateISO}'
+            ORDER BY Issue_Date ASC, ROWID ASC
+            LIMIT ${ZCQL_ROW_LIMIT} OFFSET ${splitOffset}
+          `);
+          if (!batch || batch.length === 0) break;
+          splitRows.push(...batch);
+          if (batch.length < ZCQL_ROW_LIMIT) break;
+          splitOffset += ZCQL_ROW_LIMIT;
+        }
+
+        const txByAccount = {};
+        txRows.forEach((r) => {
+          const t = r.Transaction;
+          (txByAccount[t.WS_Account_code] ||= []).push(t);
+        });
+        const bonusByAccount = {};
+        bonusRows.forEach((r) => {
+          const b = r.Bonus;
+          (bonusByAccount[b.WS_Account_code] ||= []).push(b);
+        });
+        const splits = splitRows.map((r) => {
+          const s = r.Split;
+          return {
+            issueDate: s.Issue_Date,
+            ratio1: Number(s.Ratio1) || 0,
+            ratio2: Number(s.Ratio2) || 0,
+            isin: s.ISIN,
+          };
+        });
+
+        /* ====== INSERT INTO Dividend_Record PER ACCOUNT ====== */
+        let insertedCount = 0;
+        for (const accountCode of eligibleAccounts) {
+          const transactions = txByAccount[accountCode] || [];
+          if (!transactions.length) continue;
+
+          const bonuses = bonusByAccount[accountCode] || [];
+          const fifo = runFifoEngine(transactions, bonuses, splits, true);
+          if (!fifo || fifo.holdings <= 0) continue;
+
+          const holding = fifo.holdings;
+          const dividendAmount = Math.round(holding * rate * 100) / 100;
+
+          try {
+            await zcql.executeZCQLQuery(`
+              INSERT INTO Dividend_Record
+              (ISIN, RecordDate, WS_Account_code, Holding, Rate, Dividend_Amount, PaymentDate, Security_Code, Status)
+              VALUES (
+                '${esc(isin)}',
+                '${recordDateISO}',
+                '${esc(accountCode)}',
+                ${holding},
+                ${rate},
+                ${dividendAmount},
+                '${paymentDateISO}',
+                '${esc(securityCode)}',
+                'Draft'
+              )
+            `);
+            insertedCount++;
+          } catch (insertErr) {
+            console.error(`Dividend_Record insert failed for ${accountCode}:`, insertErr.message);
+          }
+        }
+        console.log(`Dividend_Record: inserted ${insertedCount} row(s) for ISIN ${isin}`);
+      }
+
       return res.json({
         success: true,
-        message: "Dividend master created successfully"
+        message: "Dividend master and per-account records created successfully"
       });
   
     } catch (error) {
