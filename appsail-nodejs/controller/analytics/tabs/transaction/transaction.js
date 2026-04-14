@@ -117,7 +117,7 @@ export const getPaginatedTransactions = async (req, res) => {
     // const tranQuery = "SELECT ROWID, SETDATE, executionPriority, Tran_Type, Security_Name, Security_code, ISIN, QTY, NETRATE, Net_Amount, STT FROM Transaction WHERE " + tranParts.join(" AND ") + " ORDER BY SETDATE ASC, executionPriority ASC, ROWID ASC";
     // const tranQuery = "SELECT ROWID, TRANDATE, executionPriority, Tran_Type, Security_Name, Security_code, ISIN, QTY, NETRATE, Net_Amount, STT FROM Transaction WHERE " + tranParts.join(" AND ") + " ORDER BY TRANDATE ASC, executionPriority ASC, ROWID ASC";
     const BATCH_SIZE = 300;  // or 270 to match other controllers; stay within ZCQL limit
-    const tranQuery = "SELECT ROWID, TRANDATE, executionPriority, Tran_Type, Security_Name, Security_code, ISIN, QTY, NETRATE, Net_Amount, STT FROM Transaction WHERE " + tranParts.join(" AND ") + " ORDER BY TRANDATE ASC, executionPriority ASC, ROWID ASC";
+    const tranQuery = "SELECT ROWID, TRANDATE, SETDATE, executionPriority, Tran_Type, Security_Name, Security_code, ISIN, QTY, NETRATE, Net_Amount, STT FROM Transaction WHERE " + tranParts.join(" AND ") + " ORDER BY TRANDATE ASC, executionPriority ASC, ROWID ASC";
 
     let transactionRaw = [];
     let txnOffset = 0;
@@ -137,10 +137,14 @@ export const getPaginatedTransactions = async (req, res) => {
 
     const transactionRows = (transactionRaw || []).map(row => {
       const t = row.Transaction || row;
+      const trandate = t.TRANDATE || t.Trandate || null;
+      const setdate = t.SETDATE || t.Setdate || null;
       return {
         rowId: "TX-" + t.ROWID,
-        // date: t.SETDATE || t.Setdate || null,
-        date: t.TRANDATE || t.Setdate || null,
+        // `date` = TRANDATE for sort + cursor pagination only (not a separate “Date” column in UI)
+        date: trandate,
+        trandate,
+        setdate,
         executionPriority: Number(t.executionPriority || 0) || 0,
         type: t.Tran_Type,
         securityName: t.Security_Name,
@@ -202,9 +206,12 @@ export const getPaginatedTransactions = async (req, res) => {
 
       dividendRows = (dividendRaw || []).map(row => {
         const d = row.Dividend || row;
+        const ev = d.ExDate || null;
         return {
           rowId: "DIV-" + d.ROWID,
-          date: d.ExDate,
+          date: ev,
+          trandate: ev,
+          setdate: ev,
           executionPriority: 4,
           type: "DIV+",
           securityName: d.Security_Name,
@@ -244,9 +251,12 @@ export const getPaginatedTransactions = async (req, res) => {
 
       bonusRows = (bonusRaw || []).map(row => {
         const b = row.Bonus || row;
+        const ev = b.ExDate || null;
         return {
           rowId: "BON-" + b.ROWID,
-          date: b.ExDate,
+          date: ev,
+          trandate: ev,
+          setdate: ev,
           executionPriority: 1,
           type: "BONUS",
           securityName: b.SecurityName,
@@ -285,9 +295,12 @@ export const getPaginatedTransactions = async (req, res) => {
         const s = row.Split || row;
         const r1 = Number(s.Ratio1) || 1;
         const r2 = Number(s.Ratio2) || 1;
+        const ev = s.Issue_Date || null;
         return {
           rowId: "SPL-" + s.ROWID,
-          date: s.Issue_Date,
+          date: ev,
+          trandate: ev,
+          setdate: ev,
           executionPriority: 1,
           type: "SPLIT",
           securityName: s.Security_Name,
