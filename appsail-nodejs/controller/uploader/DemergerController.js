@@ -4,16 +4,6 @@ const ZCQL_ROW_LIMIT = 270;
 
 const escSql = (s) => String(s ?? "").replace(/'/g, "''");
 
-const isBuyType = (type) => /^BY-|SQB|OPI/i.test(String(type || ""));
-
-const getEffectiveDate = (t) => {
-  const setDate = t.SETDATE || t.setdate;
-  const tradeDate = t.TRANDATE || t.trandate;
-  return isBuyType(t.Tran_Type || t.tranType)
-    ? setDate || tradeDate
-    : tradeDate || setDate;
-};
-
 /* ======================================================
    PREVIEW DEMERGER (FIFO BASED)
    ====================================================== */
@@ -87,8 +77,8 @@ export const previewDemerger = async (req, res) => {
     }
 
     /* ======================================================
-       STEP 2: FETCH TRANSACTIONS FOR OLD ISIN (< recordDate)
-       Same date logic as analytics holdings page
+       STEP 2: FETCH TRANSACTIONS FOR OLD ISIN (<= recordDate)
+       Same inclusive date logic as Bonus, Split, Dividend
        ====================================================== */
     const txRows = [];
     const seenTxnRowIds = new Set();
@@ -99,7 +89,7 @@ export const previewDemerger = async (req, res) => {
         SELECT *
         FROM Transaction
         WHERE ISIN='${escSql(oldIsin)}'
-        AND (TRANDATE < '${recordDateISO}' OR SETDATE < '${recordDateISO}')
+        AND SETDATE <= '${recordDateISO}'
         ORDER BY SETDATE ASC, ROWID ASC
         LIMIT ${ZCQL_ROW_LIMIT} OFFSET ${txOffset}
       `);
@@ -117,7 +107,7 @@ export const previewDemerger = async (req, res) => {
     }
 
     /* ======================================================
-       STEP 3: FETCH BONUSES FOR OLD ISIN (< recordDate)
+       STEP 3: FETCH BONUSES FOR OLD ISIN (<= recordDate)
        ====================================================== */
     const bonusRows = [];
     const seenBonusRowIds = new Set();
@@ -128,7 +118,7 @@ export const previewDemerger = async (req, res) => {
         SELECT *
         FROM Bonus
         WHERE ISIN='${escSql(oldIsin)}'
-        AND ExDate < '${recordDateISO}'
+        AND ExDate <= '${recordDateISO}'
         ORDER BY ExDate ASC, ROWID ASC
         LIMIT ${ZCQL_ROW_LIMIT} OFFSET ${bonusOffset}
       `);
@@ -146,7 +136,7 @@ export const previewDemerger = async (req, res) => {
     }
 
     /* ======================================================
-       STEP 4: FETCH SPLITS FOR OLD ISIN (< recordDate)
+       STEP 4: FETCH SPLITS FOR OLD ISIN (<= recordDate)
        ====================================================== */
     const splitRows = [];
     const seenSplitRowIds = new Set();
@@ -157,7 +147,7 @@ export const previewDemerger = async (req, res) => {
         SELECT *
         FROM Split
         WHERE ISIN='${escSql(oldIsin)}'
-        AND Issue_Date < '${recordDateISO}'
+        AND Issue_Date <= '${recordDateISO}'
         ORDER BY Issue_Date ASC, ROWID ASC
         LIMIT ${ZCQL_ROW_LIMIT} OFFSET ${splitOffset}
       `);
@@ -175,21 +165,10 @@ export const previewDemerger = async (req, res) => {
     }
 
     /* ======================================================
-       STEP 5: EFFECTIVE-DATE FILTER (same as analytics holdings)
-       Buys count at SETDATE, sells at TRANDATE.
-       Drop any row whose effective date >= recordDateISO.
-       ====================================================== */
-    const filteredTxRows = txRows.filter((r) => {
-      const t = r.Transaction || r;
-      const ed = getEffectiveDate(t);
-      return !ed || ed < recordDateISO;
-    });
-
-    /* ======================================================
-       STEP 6: GROUP DATA BY ACCOUNT
+       STEP 5: GROUP DATA BY ACCOUNT
        ====================================================== */
     const txByAccount = {};
-    filteredTxRows.forEach((r) => {
+    txRows.forEach((r) => {
       const t = r.Transaction;
       (txByAccount[t.WS_Account_code] ||= []).push(t);
     });
@@ -211,7 +190,7 @@ export const previewDemerger = async (req, res) => {
     });
 
     /* ======================================================
-       STEP 7: DEMERGER PREVIEW PER ACCOUNT
+       STEP 6: DEMERGER PREVIEW PER ACCOUNT
        ====================================================== */
     const preview = [];
 
@@ -413,7 +392,7 @@ export const applyDemerger = async (req, res) => {
 
     /* ======================================================
        STEP 3: LOAD TRANSACTION + BONUS + SPLIT FOR OLD ISIN
-       Same date logic as analytics: (TRANDATE < recordDate OR SETDATE < recordDate)
+       Same inclusive date logic as Bonus, Split, Dividend
        ====================================================== */
     const txRows = [];
     const seenTxnRowIds = new Set();
@@ -424,7 +403,7 @@ export const applyDemerger = async (req, res) => {
         SELECT *
         FROM Transaction
         WHERE ISIN='${escSql(oldIsin)}'
-        AND (TRANDATE < '${recordDateISO}' OR SETDATE < '${recordDateISO}')
+        AND SETDATE <= '${recordDateISO}'
         ORDER BY SETDATE ASC, ROWID ASC
         LIMIT ${ZCQL_ROW_LIMIT} OFFSET ${txOffset}
       `);
@@ -450,7 +429,7 @@ export const applyDemerger = async (req, res) => {
         SELECT *
         FROM Bonus
         WHERE ISIN='${escSql(oldIsin)}'
-        AND ExDate < '${recordDateISO}'
+        AND ExDate <= '${recordDateISO}'
         ORDER BY ExDate ASC, ROWID ASC
         LIMIT ${ZCQL_ROW_LIMIT} OFFSET ${bonusOffset}
       `);
@@ -476,7 +455,7 @@ export const applyDemerger = async (req, res) => {
         SELECT *
         FROM Split
         WHERE ISIN='${escSql(oldIsin)}'
-        AND Issue_Date < '${recordDateISO}'
+        AND Issue_Date <= '${recordDateISO}'
         ORDER BY Issue_Date ASC, ROWID ASC
         LIMIT ${ZCQL_ROW_LIMIT} OFFSET ${splitOffset}
       `);
@@ -494,19 +473,10 @@ export const applyDemerger = async (req, res) => {
     }
 
     /* ======================================================
-       STEP 4a: EFFECTIVE-DATE FILTER (same as analytics holdings)
-       ====================================================== */
-    const filteredTxRows = txRows.filter((r) => {
-      const t = r.Transaction || r;
-      const ed = getEffectiveDate(t);
-      return !ed || ed < recordDateISO;
-    });
-
-    /* ======================================================
-       STEP 4b: GROUP BY ACCOUNT
+       STEP 4: GROUP BY ACCOUNT
        ====================================================== */
     const txByAccount = {};
-    filteredTxRows.forEach((r) => {
+    txRows.forEach((r) => {
       const t = r.Transaction;
       (txByAccount[t.WS_Account_code] ||= []).push(t);
     });
