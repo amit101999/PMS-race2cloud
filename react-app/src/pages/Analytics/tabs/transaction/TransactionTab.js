@@ -257,7 +257,8 @@ const TransactionTab = ({ accountCode, asOnDate }) => {
           <table className="transaction-table">
             <thead>
               <tr>
-                <th>Date</th>
+                <th>TRANDATE</th>
+                <th>SETDATE</th>
                 <th>Type</th>
                 <th>Security Name</th>
                 <th>ISIN</th>
@@ -269,14 +270,15 @@ const TransactionTab = ({ accountCode, asOnDate }) => {
             <tbody>
               {data.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="empty-cell">
+                  <td colSpan={8} className="empty-cell">
                     No transactions found
                   </td>
                 </tr>
               ) : (
                 data.map((t) => (
                   <tr key={t.rowId}>
-                    <td>{t.date || "-"}</td>
+                    <td>{t.trandate ?? t.date ?? "-"}</td>
+                    <td>{t.setdate ?? "-"}</td>
                     <td>{t.type || "-"}</td>
                     <td>{t.securityName || "-"}</td>
                     <td>{t.isin || "-"}</td>
@@ -306,7 +308,7 @@ const TransactionTab = ({ accountCode, asOnDate }) => {
           </span>
           <button
             type="button"
-            className="pagination-btn pagination-next"
+            className="pagination-btn pa gination-next"
             onClick={goNext}
             disabled={!hasNext || loadingMore}
           >
