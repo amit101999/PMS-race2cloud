@@ -27,19 +27,33 @@ const formatApiError = (err, fallback) => {
 };
 
 const UpdateISINPage = () => {
+  /** --- Update Script (top card): Old + New ISIN, Update button --- */
   const [oldIsin, setOldIsin] = useState("");
   const [oldIsinFocused, setOldIsinFocused] = useState(false);
   const oldIsinInputRef = useRef(null);
   const oldIsinPickingRef = useRef(false);
-  const [newIsin, setNewIsin] = useState("");
+  const [scriptNewIsin, setScriptNewIsin] = useState("");
+  /** @type {[UpdateStatus, React.Dispatch<React.SetStateAction<UpdateStatus>>]} */
+  const [scriptStatus, setScriptStatus] = useState("idle");
+  /** @type {[BannerState, React.Dispatch<React.SetStateAction<BannerState>>]} */
+  const [scriptBanner, setScriptBanner] = useState(null);
+
+  /** --- New ISIN panel (bottom card): list-driven NEW ISIN + code + name, Apply --- */
+  const [panelNewIsin, setPanelNewIsin] = useState("");
+  const [panelNewIsinFocused, setPanelNewIsinFocused] = useState(false);
+  const panelNewIsinInputRef = useRef(null);
+  const panelNewIsinPickingRef = useRef(false);
+  const [newSecurityCode, setNewSecurityCode] = useState("");
+  const [newSecurityName, setNewSecurityName] = useState("");
+  /** @type {[UpdateStatus, React.Dispatch<React.SetStateAction<UpdateStatus>>]} */
+  const [applyStatus, setApplyStatus] = useState("idle");
+  /** @type {[BannerState, React.Dispatch<React.SetStateAction<BannerState>>]} */
+  const [applyBanner, setApplyBanner] = useState(null);
+
   /** @type {[SecurityListIsinRow[], React.Dispatch<React.SetStateAction<SecurityListIsinRow[]>>]} */
   const [securityListIsins, setSecurityListIsins] = useState([]);
   const [isinsLoading, setIsinsLoading] = useState(true);
   const [isinsLoadError, setIsinsLoadError] = useState(null);
-  /** @type {[UpdateStatus, React.Dispatch<React.SetStateAction<UpdateStatus>>]} */
-  const [status, setStatus] = useState("idle");
-  /** @type {[BannerState, React.Dispatch<React.SetStateAction<BannerState>>]} */
-  const [banner, setBanner] = useState(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -86,7 +100,12 @@ const UpdateISINPage = () => {
     ? isinByKey.get(oldIsinTrim.toUpperCase())
     : undefined;
 
-  /** Light-themed list only (no native datalist — OS dark popup). */
+  const panelNewIsinTrim = panelNewIsin.trim();
+  const resolvedPanelNewRow = panelNewIsinTrim
+    ? isinByKey.get(panelNewIsinTrim.toUpperCase())
+    : undefined;
+
+  /** Top card: Old ISIN suggestions */
   const suggestions = useMemo(() => {
     if (!oldIsinFocused || resolvedOldRow || !securityListIsins.length) return [];
     const q = oldIsinTrim.toUpperCase();
@@ -101,41 +120,75 @@ const UpdateISINPage = () => {
       .slice(0, 50);
   }, [oldIsinFocused, oldIsinTrim, resolvedOldRow, securityListIsins]);
 
-  const clearTerminalStateOnEdit = useCallback(() => {
-    if (status === "completed" || status === "failure") {
-      setStatus("idle");
-      setBanner(null);
+  /** Bottom card: NEW ISIN suggestions from Security List */
+  const panelNewSuggestions = useMemo(() => {
+    if (!panelNewIsinFocused || resolvedPanelNewRow || !securityListIsins.length) return [];
+    const q = panelNewIsinTrim.toUpperCase();
+    if (!q) return securityListIsins.slice(0, 30);
+    return securityListIsins
+      .filter(
+        (r) =>
+          String(r.isin ?? "").toUpperCase().includes(q) ||
+          String(r.securityName ?? "").toUpperCase().includes(q) ||
+          String(r.securityCode ?? "").toUpperCase().includes(q)
+      )
+      .slice(0, 50);
+  }, [panelNewIsinFocused, panelNewIsinTrim, resolvedPanelNewRow, securityListIsins]);
+
+  const clearScriptTerminalStateOnEdit = useCallback(() => {
+    if (scriptStatus === "completed" || scriptStatus === "failure") {
+      setScriptStatus("idle");
+      setScriptBanner(null);
     }
-  }, [status]);
+  }, [scriptStatus]);
+
+  const clearApplyTerminalStateOnEdit = useCallback(() => {
+    if (applyStatus === "completed" || applyStatus === "failure") {
+      setApplyStatus("idle");
+      setApplyBanner(null);
+    }
+  }, [applyStatus]);
 
   const pickOldIsin = useCallback(
     (isin) => {
       oldIsinPickingRef.current = true;
       setOldIsin(isin);
-      clearTerminalStateOnEdit();
+      clearScriptTerminalStateOnEdit();
       setOldIsinFocused(false);
       oldIsinInputRef.current?.blur();
     },
-    [clearTerminalStateOnEdit],
+    [clearScriptTerminalStateOnEdit],
   );
 
+  const pickPanelNewIsin = useCallback(
+    (isin) => {
+      panelNewIsinPickingRef.current = true;
+      setPanelNewIsin(isin);
+      clearApplyTerminalStateOnEdit();
+      setPanelNewIsinFocused(false);
+      panelNewIsinInputRef.current?.blur();
+    },
+    [clearApplyTerminalStateOnEdit],
+  );
+
+  /** Original “Update Script” behaviour: POST old + new from this card only. */
   const handleUpdate = async () => {
-    setBanner(null);
+    setScriptBanner(null);
 
     const oldTrim = oldIsin.trim();
-    const newTrim = newIsin.trim();
+    const newTrim = scriptNewIsin.trim();
 
     if (!oldTrim || !newTrim) {
-      setStatus("failure");
-      setBanner({
+      setScriptStatus("failure");
+      setScriptBanner({
         kind: "error",
         text: "Old ISIN and New ISIN are required.",
       });
       return;
     }
     if (oldTrim === newTrim) {
-      setStatus("failure");
-      setBanner({
+      setScriptStatus("failure");
+      setScriptBanner({
         kind: "error",
         text: "Old ISIN and New ISIN must be different.",
       });
@@ -143,15 +196,15 @@ const UpdateISINPage = () => {
     }
 
     if (securityListIsins.length > 0 && !isinByKey.get(oldTrim.toUpperCase())) {
-      setStatus("failure");
-      setBanner({
+      setScriptStatus("failure");
+      setScriptBanner({
         kind: "error",
         text: "Old ISIN must match Security List. Type the full ISIN or pick a suggestion.",
       });
       return;
     }
 
-    setStatus("in_progress");
+    setScriptStatus("in_progress");
 
     try {
       const res = await fetch(`${ISIN_API_BASE}/isin/update`, {
@@ -169,43 +222,147 @@ const UpdateISINPage = () => {
       const jobId = data?.jobId ?? data?.job_id;
       console.log("UpdateISIN job submitted, jobId:", jobId);
 
-      // Job is queued — Catalyst executes it within seconds.
-      // We mark as completed immediately so the UI unblocks.
-      setStatus("completed");
-      setBanner({
+      setScriptStatus("completed");
+      setScriptBanner({
         kind: "success",
         text: "ISIN update queued successfully. The database will be updated shortly.",
       });
     } catch (err) {
-      setStatus("failure");
-      setBanner({
+      setScriptStatus("failure");
+      setScriptBanner({
         kind: "error",
         text: formatApiError(err, "Update failed."),
       });
     }
   };
 
-  const showStatusRow =
-    status === "in_progress" ||
-    status === "completed" ||
-    status === "failure";
+  /** Bottom panel: uses Old ISIN from top + list-matched NEW ISIN + manual code/name (same API for now). */
+  const handleApply = async () => {
+    setApplyBanner(null);
 
-  const statusLabel =
-    status === "in_progress"
+    const oldTrim = oldIsin.trim();
+    const newTrim = panelNewIsin.trim();
+    const codeTrim = newSecurityCode.trim();
+    const nameTrim = newSecurityName.trim();
+
+    if (!oldTrim || !newTrim) {
+      setApplyStatus("failure");
+      setApplyBanner({
+        kind: "error",
+        text: "Old ISIN (above) and NEW ISIN are required to apply.",
+      });
+      return;
+    }
+    if (!codeTrim || !nameTrim) {
+      setApplyStatus("failure");
+      setApplyBanner({
+        kind: "error",
+        text: "NEW Security Code and NEW Security Name are required.",
+      });
+      return;
+    }
+    if (oldTrim === newTrim) {
+      setApplyStatus("failure");
+      setApplyBanner({
+        kind: "error",
+        text: "Old ISIN and NEW ISIN must be different.",
+      });
+      return;
+    }
+
+    if (isinsLoading) {
+      setApplyStatus("failure");
+      setApplyBanner({
+        kind: "error",
+        text: "Please wait until the Security List finishes loading.",
+      });
+      return;
+    }
+
+    if (securityListIsins.length > 0 && !isinByKey.get(oldTrim.toUpperCase())) {
+      setApplyStatus("failure");
+      setApplyBanner({
+        kind: "error",
+        text: "Old ISIN must match Security List (use the Update Script section above).",
+      });
+      return;
+    }
+
+    if (securityListIsins.length > 0 && !isinByKey.get(newTrim.toUpperCase())) {
+      setApplyStatus("failure");
+      setApplyBanner({
+        kind: "error",
+        text: "NEW ISIN must match Security List. Type the full ISIN or pick a suggestion.",
+      });
+      return;
+    }
+
+    setApplyStatus("in_progress");
+
+    try {
+      const res = await fetch(`${ISIN_API_BASE}/isin/update`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ oldIsin: oldTrim, newIsin: newTrim }),
+      });
+      const data = await res.json().catch(() => ({}));
+
+      if (!res.ok) {
+        throw new Error(data?.message || `Request failed (${res.status})`);
+      }
+
+      const jobId = data?.jobId ?? data?.job_id;
+      console.log("Apply ISIN job submitted, jobId:", jobId);
+
+      setApplyStatus("completed");
+      setApplyBanner({
+        kind: "success",
+        text: "Apply queued successfully. The database will be updated shortly.",
+      });
+    } catch (err) {
+      setApplyStatus("failure");
+      setApplyBanner({
+        kind: "error",
+        text: formatApiError(err, "Apply failed."),
+      });
+    }
+  };
+
+  const scriptBusy = scriptStatus === "in_progress";
+  const applyBusy = applyStatus === "in_progress";
+
+  const showScriptStatus =
+    scriptStatus === "in_progress" ||
+    scriptStatus === "completed" ||
+    scriptStatus === "failure";
+  const scriptStatusLabel =
+    scriptStatus === "in_progress"
       ? "In progress"
-      : status === "completed"
+      : scriptStatus === "completed"
         ? "Completed"
-        : status === "failure"
+        : scriptStatus === "failure"
           ? "Failed"
           : "";
 
-  const showBanner = Boolean(banner?.text);
+  const showApplyStatus =
+    applyStatus === "in_progress" ||
+    applyStatus === "completed" ||
+    applyStatus === "failure";
+  const applyStatusLabel =
+    applyStatus === "in_progress"
+      ? "In progress"
+      : applyStatus === "completed"
+        ? "Completed"
+        : applyStatus === "failure"
+          ? "Failed"
+          : "";
 
   return (
     <MainLayout title="Update ISIN">
       <div className="update-isin-container">
         <div className="update-isin-card">
-          <h3>Update ISIN</h3>
+          <h3>Update Script</h3>
           <p className="update-isin-hint">
             Type the current ISIN (Security List). The security name appears when it matches.
             Then enter the new ISIN and run update.
@@ -232,7 +389,7 @@ const UpdateISINPage = () => {
                   aria-autocomplete="list"
                   onChange={(e) => {
                     setOldIsin(e.target.value);
-                    clearTerminalStateOnEdit();
+                    clearScriptTerminalStateOnEdit();
                   }}
                   onFocus={() => setOldIsinFocused(true)}
                   onBlur={() => {
@@ -243,11 +400,9 @@ const UpdateISINPage = () => {
                     setOldIsinFocused(false);
                   }}
                   placeholder={
-                    isinsLoading
-                      ? "Loading Security List…"
-                      : "e.g. INE000A01020"
+                    isinsLoading ? "Loading Security List…" : "e.g. INE000A01020"
                   }
-                  disabled={status === "in_progress"}
+                  disabled={scriptBusy}
                   autoComplete="off"
                   aria-describedby="old-isin-resolution"
                   aria-invalid={
@@ -291,9 +446,7 @@ const UpdateISINPage = () => {
                 aria-live="polite"
               >
                 {isinsLoading && !oldIsinTrim ? (
-                  <span className="update-isin-resolution-muted">
-                    Loading securities…
-                  </span>
+                  <span className="update-isin-resolution-muted">Loading securities…</span>
                 ) : null}
                 {resolvedOldRow ? (
                   <div className="update-isin-resolution-match">
@@ -319,17 +472,17 @@ const UpdateISINPage = () => {
               </div>
             </div>
             <div className="update-isin-field">
-              <label htmlFor="new-isin">New ISIN</label>
+              <label htmlFor="script-new-isin">New ISIN</label>
               <input
-                id="new-isin"
+                id="script-new-isin"
                 type="text"
-                value={newIsin}
+                value={scriptNewIsin}
                 onChange={(e) => {
-                  setNewIsin(e.target.value);
-                  clearTerminalStateOnEdit();
+                  setScriptNewIsin(e.target.value);
+                  clearScriptTerminalStateOnEdit();
                 }}
                 placeholder="e.g. INE000A01021"
-                disabled={status === "in_progress"}
+                disabled={scriptBusy}
                 autoComplete="off"
               />
             </div>
@@ -340,37 +493,210 @@ const UpdateISINPage = () => {
               type="button"
               className="update-isin-button"
               onClick={handleUpdate}
-              disabled={status === "in_progress"}
+              disabled={scriptBusy}
             >
-              {status === "in_progress" ? "Updating…" : "Update"}
+              {scriptBusy ? "Updating…" : "Update"}
             </button>
           </div>
 
-          {showStatusRow && (
-            <div
-              className="update-isin-status-row"
-              role="status"
-              aria-live="polite"
-            >
+          {showScriptStatus && (
+            <div className="update-isin-status-row" role="status" aria-live="polite">
               <span className="update-isin-status-inner">
                 <span className="update-isin-status-label">Status</span>
                 <span
-                  className={`update-isin-status-value update-isin-status--${status}`}
+                  className={`update-isin-status-value update-isin-status--${scriptStatus}`}
                 >
-                  {statusLabel}
+                  {scriptStatusLabel}
                 </span>
               </span>
             </div>
           )}
 
-          {showBanner && banner && (
+          {Boolean(scriptBanner?.text) && scriptBanner && (
             <p
-              className={`update-isin-message ${banner.kind === "error"
+              className={`update-isin-message ${scriptBanner.kind === "error"
                 ? "update-isin-message--error"
                 : "update-isin-message--success"
                 }`}
             >
-              {banner.text}
+              {scriptBanner.text}
+            </p>
+          )}
+        </div>
+
+        <div className="update-isin-card update-isin-card--stack">
+          <h3>New ISIN</h3>
+          <p className="update-isin-hint">
+            Pick NEW ISIN from the Security List, enter NEW Security Code and NEW Security Name,
+            then Apply. Uses the Old ISIN from Update Script above.
+          </p>
+
+          <div className="update-isin-apply-row">
+            <div className="update-isin-field update-isin-field--apply-isin">
+              <label htmlFor="panel-new-isin">NEW ISIN</label>
+              <div className="update-isin-combobox">
+                <input
+                  ref={panelNewIsinInputRef}
+                  id="panel-new-isin"
+                  type="text"
+                  value={panelNewIsin}
+                  role="combobox"
+                  aria-expanded={panelNewIsinFocused && panelNewSuggestions.length > 0}
+                  aria-controls="update-isin-panel-new-suggest-list"
+                  aria-autocomplete="list"
+                  onChange={(e) => {
+                    setPanelNewIsin(e.target.value);
+                    clearApplyTerminalStateOnEdit();
+                  }}
+                  onFocus={() => setPanelNewIsinFocused(true)}
+                  onBlur={() => {
+                    if (panelNewIsinPickingRef.current) {
+                      panelNewIsinPickingRef.current = false;
+                      return;
+                    }
+                    setPanelNewIsinFocused(false);
+                  }}
+                  placeholder={
+                    isinsLoading
+                      ? "Loading Security List…"
+                      : "NEW ISIN (fetch from Security List)"
+                  }
+                  disabled={applyBusy}
+                  autoComplete="off"
+                  aria-describedby="panel-new-isin-resolution"
+                  aria-invalid={
+                    panelNewIsinTrim.length >= 10 &&
+                    !resolvedPanelNewRow &&
+                    !isinsLoading &&
+                    securityListIsins.length > 0
+                  }
+                />
+                {panelNewSuggestions.length > 0 && (
+                  <ul
+                    id="update-isin-panel-new-suggest-list"
+                    className="update-isin-suggestions"
+                    role="listbox"
+                  >
+                    {panelNewSuggestions.map((row) => (
+                      <li key={`panel-${row.isin}`} role="option">
+                        <button
+                          type="button"
+                          className="update-isin-suggestion-btn"
+                          onMouseDown={(e) => {
+                            e.preventDefault();
+                            pickPanelNewIsin(row.isin);
+                          }}
+                        >
+                          <span className="update-isin-suggestion-isin">{row.isin}</span>
+                          {row.securityName ? (
+                            <span className="update-isin-suggestion-name">
+                              {row.securityName}
+                            </span>
+                          ) : null}
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            </div>
+
+            <div className="update-isin-field update-isin-field--apply-code">
+              <label htmlFor="new-security-code">NEW Security Code</label>
+              <input
+                id="new-security-code"
+                type="text"
+                value={newSecurityCode}
+                onChange={(e) => {
+                  setNewSecurityCode(e.target.value);
+                  clearApplyTerminalStateOnEdit();
+                }}
+                placeholder="NEW Security Code"
+                disabled={applyBusy}
+                autoComplete="off"
+              />
+            </div>
+
+            <div className="update-isin-field update-isin-field--apply-name">
+              <label htmlFor="new-security-name">NEW Security Name</label>
+              <input
+                id="new-security-name"
+                type="text"
+                value={newSecurityName}
+                onChange={(e) => {
+                  setNewSecurityName(e.target.value);
+                  clearApplyTerminalStateOnEdit();
+                }}
+                placeholder="NEW Security Name"
+                disabled={applyBusy}
+                autoComplete="off"
+              />
+            </div>
+
+            <div className="update-isin-apply-row__btn">
+              <button
+                type="button"
+                className="update-isin-button"
+                onClick={handleApply}
+                disabled={applyBusy}
+              >
+                {applyBusy ? "Applying…" : "Apply"}
+              </button>
+            </div>
+          </div>
+
+          <div
+            id="panel-new-isin-resolution"
+            className="update-isin-resolution update-isin-resolution--panel-new"
+            aria-live="polite"
+          >
+            {isinsLoading && !panelNewIsinTrim ? (
+              <span className="update-isin-resolution-muted">Loading securities…</span>
+            ) : null}
+            {resolvedPanelNewRow ? (
+              <div className="update-isin-resolution-match">
+                <span className="update-isin-resolution-label">Security name</span>
+                <span className="update-isin-resolution-value">
+                  {resolvedPanelNewRow.securityName || "—"}
+                </span>
+                {resolvedPanelNewRow.securityCode ? (
+                  <span className="update-isin-resolution-meta">
+                    Code: {resolvedPanelNewRow.securityCode}
+                  </span>
+                ) : null}
+              </div>
+            ) : null}
+            {panelNewIsinTrim &&
+            !isinsLoading &&
+            !resolvedPanelNewRow &&
+            panelNewSuggestions.length === 0 ? (
+              <span className="update-isin-resolution-warn" role="status">
+                No exact match in Security List for this ISIN.
+              </span>
+            ) : null}
+          </div>
+
+          {showApplyStatus && (
+            <div className="update-isin-status-row" role="status" aria-live="polite">
+              <span className="update-isin-status-inner">
+                <span className="update-isin-status-label">Status</span>
+                <span
+                  className={`update-isin-status-value update-isin-status--${applyStatus}`}
+                >
+                  {applyStatusLabel}
+                </span>
+              </span>
+            </div>
+          )}
+
+          {Boolean(applyBanner?.text) && applyBanner && (
+            <p
+              className={`update-isin-message ${applyBanner.kind === "error"
+                ? "update-isin-message--error"
+                : "update-isin-message--success"
+                }`}
+            >
+              {applyBanner.text}
             </p>
           )}
         </div>
