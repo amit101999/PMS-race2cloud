@@ -2,6 +2,12 @@
   padding: 20px;
   background-color: #ffffff;
   min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  max-width: 960px;
+  margin-left: auto;
+  margin-right: auto;
 }
 
 .update-isin-card {
@@ -10,9 +16,89 @@
   padding: 40px;
   box-shadow: 0 4px 20px rgba(0, 0, 0, 0.05);
   border: 1px solid #f0f0f0;
-  max-width: 720px;
-  margin-left: auto;
-  margin-right: auto;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.update-isin-card--stack {
+  margin-top: 0;
+}
+
+.update-isin-stack-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  margin-bottom: 8px;
+}
+
+/* New ISIN card: one row — ISIN + code + name + Apply */
+.update-isin-apply-row {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: nowrap;
+  align-items: flex-end;
+  gap: 12px;
+  margin-bottom: 4px;
+}
+
+.update-isin-apply-row .update-isin-field {
+  margin-bottom: 0;
+  min-width: 0;
+}
+
+.update-isin-field--apply-isin {
+  flex: 1.35 1 0;
+}
+
+.update-isin-field--apply-code,
+.update-isin-field--apply-name {
+  flex: 1 1 0;
+}
+
+.update-isin-apply-row__btn {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+}
+
+/* Align button with inputs (label + gap above each field) */
+.update-isin-apply-row__btn .update-isin-button {
+  margin-top: 29px;
+  white-space: nowrap;
+}
+
+.update-isin-resolution--panel-new {
+  margin-top: 10px;
+  margin-bottom: 8px;
+}
+
+@media (max-width: 900px) {
+  .update-isin-apply-row {
+    flex-wrap: wrap;
+  }
+
+  .update-isin-field--apply-isin,
+  .update-isin-field--apply-code,
+  .update-isin-field--apply-name {
+    flex: 1 1 calc(50% - 6px);
+    min-width: 140px;
+  }
+
+  .update-isin-apply-row__btn {
+    flex: 1 1 100%;
+    align-items: stretch;
+  }
+
+  .update-isin-apply-row__btn .update-isin-button {
+    margin-top: 12px;
+    width: 100%;
+  }
+}
+
+.update-isin-status-wrap {
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .update-isin-card h3 {
@@ -253,12 +339,16 @@
 }
 
 .update-isin-message {
-  margin: 16px 0 0 0;
+  margin: 0;
   font-size: 14px;
   padding: 12px 14px;
   border-radius: 10px;
   line-height: 1.5;
   text-align: center;
+}
+
+.update-isin-message--page {
+  max-width: none;
 }
 
 .update-isin-message--info {
