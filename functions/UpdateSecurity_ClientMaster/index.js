@@ -1,5 +1,7 @@
 "use strict";
 
+const { Readable } = require("stream");
+const csv = require("csv-parser");
 const catalyst = require("zcatalyst-sdk-node");
 
 const esc = (v) => String(v ?? "").replace(/'/g, "''");
@@ -137,30 +139,30 @@ function extractBucketAndKeys(raw) {
   for (const seed of seeds) {
     if (!seed || typeof seed !== "object") continue;
     for (const r of payloadRoots(seed)) {
-    const bucket =
-      r.bucket_details?.bucket_name ??
-      r.bucket_details?.bucketName ??
-      r.bucket_name ??
-      r.bucketName ??
-      null;
+      const bucket =
+        r.bucket_details?.bucket_name ??
+        r.bucket_details?.bucketName ??
+        r.bucket_name ??
+        r.bucketName ??
+        null;
 
-    const list = normalizeObjectList(
-      r.object_details ??
-        r.objectDetails ??
-        r.objects ??
-        r.object_list ??
-        r.objectList,
-    );
+      const list = normalizeObjectList(
+        r.object_details ??
+          r.objectDetails ??
+          r.objects ??
+          r.object_list ??
+          r.objectList,
+      );
 
-    const keys = [];
-    for (const o of list) {
-      const k = objectKeyFromEntry(o);
-      if (k) keys.push(k);
-    }
+      const keys = [];
+      for (const o of list) {
+        const k = objectKeyFromEntry(o);
+        if (k) keys.push(k);
+      }
 
-    if (bucket && keys.length) {
-      return [{ bucket: String(bucket), keys }];
-    }
+      if (bucket && keys.length) {
+        return [{ bucket: String(bucket), keys }];
+      }
     }
   }
 
@@ -179,58 +181,7 @@ function summarizePayloadForLog(raw) {
   }
 }
 
-function parseCsvRow(line) {
-  const out = [];
-  let cur = "";
-  let inQuotes = false;
-  for (let i = 0; i < line.length; i++) {
-    const c = line[i];
-    if (inQuotes) {
-      if (c === '"') {
-        if (line[i + 1] === '"') {
-          cur += '"';
-          i++;
-        } else {
-          inQuotes = false;
-        }
-      } else {
-        cur += c;
-      }
-    } else if (c === '"') {
-      inQuotes = true;
-    } else if (c === ",") {
-      out.push(cur);
-      cur = "";
-    } else {
-      cur += c;
-    }
-  }
-  out.push(cur);
-  return out;
-}
-
-function csvTextToRows(text) {
-  const lines = text.split(/\r?\n/);
-  const nonEmpty = [];
-  for (const line of lines) {
-    if (line.length > 0) nonEmpty.push(line);
-  }
-  if (nonEmpty.length < 2) return [];
-  const headers = parseCsvRow(nonEmpty[0]).map((h) => h.trim());
-  const rows = [];
-  for (let i = 1; i < nonEmpty.length; i++) {
-    const cells = parseCsvRow(nonEmpty[i]);
-    const row = {};
-    for (let j = 0; j < headers.length; j++) {
-      const h = headers[j];
-      row[h] =
-        cells[j] !== undefined ? String(cells[j]).trim() : "";
-    }
-    rows.push(row);
-  }
-  return rows;
-}
-
+/** Case-insensitive header lookup on csv-parser row objects. */
 function getCell(row, ...candidates) {
   const keys = Object.keys(row);
   for (const name of candidates) {
@@ -239,7 +190,8 @@ function getCell(row, ...candidates) {
       row[name] !== undefined &&
       String(row[name]).trim() !== ""
     ) {
-      return String(row[name]).trim();
+      const s = String(row[name]).trim();
+      if (s.toLowerCase() !== "null") return s;
     }
     const lower = name.toLowerCase();
     for (const k of keys) {
@@ -247,7 +199,8 @@ function getCell(row, ...candidates) {
         k.toLowerCase() === lower &&
         String(row[k]).trim() !== ""
       ) {
-        return String(row[k]).trim();
+        const s = String(row[k]).trim();
+        if (s.toLowerCase() !== "null") return s;
       }
     }
   }
@@ -264,23 +217,146 @@ function rawToUtf8(raw) {
   return String(raw);
 }
 
-function streamToString(stream) {
-  return new Promise((resolve, reject) => {
-    const chunks = [];
-    stream.on("data", (c) => chunks.push(c));
-    stream.on("end", () =>
-      resolve(Buffer.concat(chunks).toString("utf8")),
-    );
-    stream.on("error", reject);
+function createCsvParser() {
+  return csv({
+    skipEmptyLines: true,
+    mapHeaders: ({ header }) =>
+      String(header ?? "").replace(/^\uFEFF/, "").trim(),
   });
 }
 
-async function readObjectAsUtf8(bucket, objectKey) {
+/**
+ * Stream CSV via csv-parser (handles quoted commas/newlines). Accumulate unique
+ * clientIds + Security_List keys in Maps, then flush with ensure*.
+ */
+async function processCsvObjectForMasters(bucket, objectKey, zcql) {
+  const clients = new Map();
+  const securities = new Map();
+  let dataRowCount = 0;
+
+  const mergeRow = (row) => {
+    /*
+     * Upload columns (Stratus transaction CSV) → masters:
+     * - clientIds: WS_client_id ← Broker Code | WS_client_id ; WS_Account_code ← BROKERACID
+     * - Security_List: ISIN ← SYMBOLCODE ; Security_Code ← SYMBOLCODE (else CASHSYMBOLCODE) ;
+     *   Security_Name ← Description | Security_Name
+     */
+    const wsClientId = getCell(
+      row,
+      "Broker Code",
+      "broker code",
+      "brokercode",
+      "WS_client_id",
+      "ws_client_id",
+    );
+    const wsAccountCode = getCell(
+      row,
+      "BROKERACID",
+      "brokeracid",
+      "WS_Account_code",
+      "ws_account_code",
+    );
+    const isin = getCell(row, "SYMBOLCODE", "symbolcode", "ISIN", "isin");
+    const securityCode = getCell(
+      row,
+      "SYMBOLCODE",
+      "symbolcode",
+      "CASHSYMBOLCODE",
+      "cashsymbolcode",
+      "Security_Code",
+      "security_code",
+    );
+    const securityName = getCell(
+      row,
+      "Description",
+      "description",
+      "Security_Name",
+      "security_name",
+    );
+
+    if (isValid(wsAccountCode)) {
+      const lookupId = isValid(wsClientId) ? wsClientId : wsAccountCode;
+      const cur = clients.get(wsAccountCode);
+      if (!cur) {
+        clients.set(wsAccountCode, {
+          wsClientId: lookupId,
+          wsAccountCode,
+        });
+      } else if (
+        cur.wsClientId === wsAccountCode &&
+        isValid(wsClientId) &&
+        wsClientId !== wsAccountCode
+      ) {
+        cur.wsClientId = wsClientId;
+      }
+    }
+
+    if (!isValid(securityCode) && !isValid(isin)) return;
+
+    const secKey = isValid(isin) ? `i:${isin}` : `c:${securityCode}`;
+    const prev = securities.get(secKey);
+    if (!prev) {
+      securities.set(secKey, {
+        securityCode: isValid(securityCode) ? securityCode : "",
+        isin: isValid(isin) ? isin : "",
+        securityName: isValid(securityName) ? securityName : "",
+      });
+    } else {
+      if (
+        securityName &&
+        (!prev.securityName ||
+          securityName.length > (prev.securityName || "").length)
+      ) {
+        prev.securityName = securityName;
+      }
+      if (isValid(securityCode) && !isValid(prev.securityCode)) {
+        prev.securityCode = securityCode;
+      }
+      if (isValid(isin) && !isValid(prev.isin)) prev.isin = isin;
+    }
+  };
+
   const raw = await bucket.getObject(objectKey);
+  let inputStream;
   if (raw != null && typeof raw === "object" && typeof raw.pipe === "function") {
-    return streamToString(raw);
+    inputStream = raw;
+  } else if (Buffer.isBuffer(raw)) {
+    inputStream = Readable.from(raw);
+  } else {
+    inputStream = Readable.from([rawToUtf8(raw)], { encoding: "utf8" });
   }
-  return rawToUtf8(raw);
+
+  await new Promise((resolve, reject) => {
+    const parser = createCsvParser();
+    inputStream
+      .pipe(parser)
+      .on("data", (row) => {
+        dataRowCount++;
+        mergeRow(row);
+      })
+      .on("end", resolve)
+      .on("error", reject);
+  });
+
+  if (dataRowCount === 0) {
+    console.warn(
+      "[UpdateSecurity_ClientMaster] No data rows in CSV (or empty file):",
+      objectKey,
+    );
+  }
+
+  console.log(
+    "[UpdateSecurity_ClientMaster] Parsed",
+    objectKey,
+    `dataRows=${dataRowCount} uniqueClients=${clients.size} uniqueSecurities=${securities.size}`,
+  );
+
+  for (const c of clients.values()) {
+    await ensureClientIds(zcql, c.wsClientId, c.wsAccountCode);
+  }
+  for (const s of securities.values()) {
+    await ensureSecurityList(zcql, s.securityCode, s.isin, s.securityName);
+  }
 }
 
 async function ensureClientIds(zcql, wsClientId, wsAccountCode) {
@@ -345,28 +421,6 @@ async function ensureSecurityList(zcql, securityCode, isin, securityName) {
   }
 }
 
-async function processCsvRows(zcql, rows) {
-  for (const row of rows) {
-    const wsClientId = getCell(row, "WS_client_id", "ws_client_id");
-    const wsAccountCode = getCell(row, "WS_Account_code", "ws_account_code", "BROKERACID");
-    const securityCode = getCell(
-      row,
-      "Security_code",
-      "Security_Code",
-      "security_code",
-    );
-    const isin = getCell(row, "ISIN", "isin", "SYMBOLCODE");
-    const securityName = getCell(
-      row,
-      "Security_Name",
-      "security_name",
-    );
-
-    await ensureClientIds(zcql, wsClientId, wsAccountCode);
-    await ensureSecurityList(zcql, securityCode, isin, securityName);
-  }
-}
-
 module.exports = async (event, context) => {
   try {
     const raw = parseRawEvent(event);
@@ -408,17 +462,7 @@ module.exports = async (event, context) => {
           objectKey,
         );
 
-        const text = await readObjectAsUtf8(stratusBucket, objectKey);
-        const rows = csvTextToRows(text);
-        if (!rows.length) {
-          console.warn(
-            "[UpdateSecurity_ClientMaster] No data rows in CSV:",
-            objectKey,
-          );
-          continue;
-        }
-
-        await processCsvRows(zcql, rows);
+        await processCsvObjectForMasters(stratusBucket, objectKey, zcql);
       }
     }
 
