@@ -11,7 +11,7 @@ const catalyst = require("zcatalyst-sdk-node");
 
 const BATCH_SIZE = 300;
 const CLIENT_IDS = [
-"AYAN020","AYAN043","AYAN044","AYAN025","AYAN013","AYAN038","AYAN049","AYAN037","AYAN047","AYAN024",
+"AYAN051","AYAN053","AYAN012","AYAN048","NROAYAN09","203NREAYAN","202NREAYAN","AYAN055","AYAN031","AYAN056",
 ];
 const GLOBAL_START = "2020-01-01";
 /** Fixed inclusive end date for all runs (process every half-year up to this date). */
