@@ -25,7 +25,8 @@
       "ExportSplitAccountHolding",
       "ExportBonusAccountholding",
       "UpdateISIN",
-      "ExportCashBalSingleClient"
+      "ExportCashBalSingleClient",
+      "ExportCashBalance"
     ],
     "ignore": [],
     "source": "functions"

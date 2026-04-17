@@ -11,68 +11,135 @@ const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
  * Validation compares the physical first line to this list (comma- or tab-separated).
  */
 const EXPECTED_HEADERS_IN_ORDER = [
-  "Broker Code",
-  "BROKERACID",
-  "SYMBOLCODE",
-  "EXCHG",
-  "TRANSTYPE",
-  "DATEPUR_ACQUI",
+  "WS CLIENT ID",
+  "WS ACCOUNT CODE",
+  "CLIENT NAME",
+  "TRANDATE",
   "SETDATE",
-  "QUANTITY",
-  "Security Name",
-  "Security Code",
+  "TRANTYPE",
+  "TRAN DESC",
+  "SECURITY TYPE",
+  "SECURITY TYPE DESCRIPTION",
+  "DETAILTYPENAME",
+  "ISIN",
+  "SECURITY CODE",
+  "SECURITY NAME",
+  "EXCHG",
+  "BROKERCODE",
+  "DEPOSITOY/REGISTRAR",
+  "DPID/AMC",
+  "DP CLIENT ID/FOLIO",
+  "BANKCODE",
+  "BANKACID",
+  "QTY",
   "RATE",
-  "NET RATE",
-  "NET AMOUNT",
-  "BROKERAGEPERSHARE",
+  "BROKERAGE",
   "SERVICETAX",
-  "SETDATEFLAG",
-  "MKTRATE",
-  "CASHSYMBOLCODE",
-  "TRANEXPENSE",
+  "NETRATE",
+  "NET AMOUNT",
+  "STT",
+  "TRFDATE",
+  "TRFRATE",
+  "TRF AMOUNT",
+  "TOTAL_TRXNFEE",
+  "TOTAL_TRXNFEE_STAX",
+  "TXN_REF_NO",
+  "DESCMEMO",
+  "CHEQUENO",
+  "CHEQUEDTL",
+  "PORTFOLIOID",
+  "DELIVERYDATE",
+  "PAYMENTDATE",
   "ACCRUEDINTEREST",
-  "BLOCKID",
-  "TRANSREF",
-  "Description",
-  "Cheque number",
-  "CHQDETAIL",
-  "BankRef",
-  "CashSetdate",
+  "ISSUER",
+  "ISSUERNAME",
+  "TDSAMOUNT",
+  "STAMPDUTY",
+  "TPMSGAIN",
+  "RMID",
+  "RMNAME",
+  "ADVISORID",
+  "ADVISORNAME",
+  "BRANCHID",
+  "BRANCHNAME",
+  "GROUPID",
+  "GROUPNAME",
+  "OWNERID",
+  "OWNERNAME",
+  "WEALTHADVISOR_NAME",
+  "SCHEMEID",
+  "SCHEMENAME",
 ];
 
 /**
- * Source header (must match EXPECTED_HEADERS_IN_ORDER exactly) → Transaction column for bulk CSV.
- * Unlisted columns (e.g. SETDATEFLAG) are dropped from the uploaded file.
+ * Row-1 template header (exact match to EXPECTED_HEADERS_IN_ORDER) → Transaction column for bulk CSV.
+ * Template columns with no entry are omitted from the Stratus file (e.g. "CLIENT NAME" is not in Transaction).
  */
 const HEADER_MAP = {
-  "Broker Code": "BROKERCODE",
-  BROKERACID: "WS_Account_code",
-  SYMBOLCODE: "ISIN",
-  EXCHG: "EXCHG",
-  TRANSTYPE: "Tran_Type",
-  DATEPUR_ACQUI: "TRANDATE",
+  "WS CLIENT ID": "WS_client_id",
+  "WS ACCOUNT CODE": "WS_Account_code",
+  TRANDATE: "TRANDATE",
   SETDATE: "SETDATE",
-  QUANTITY: "QTY",
-  "Security Name": "Security_Name",
-  "Security Code": "Security_code",
+  TRANTYPE: "Tran_Type",
+  "TRAN DESC": "Tran_Desc",
+  "SECURITY TYPE": "Security_Type",
+  "SECURITY TYPE DESCRIPTION": "Security_Type_Description",
+  DETAILTYPENAME: "DETAILTYPENAME",
+  ISIN: "ISIN",
+  "SECURITY CODE": "Security_code",
+  "SECURITY NAME": "Security_Name",
+  EXCHG: "EXCHG",
+  BROKERCODE: "BROKERCODE",
+  "DEPOSITOY/REGISTRAR": "Depositoy_Registrar",
+  "DPID/AMC": "DPID_AMC",
+  "DP CLIENT ID/FOLIO": "Dp_Client_id_Folio",
+  BANKCODE: "BANKCODE",
+  BANKACID: "BANKACID",
+  QTY: "QTY",
   RATE: "RATE",
-  "NET RATE": "NETRATE",
-  "NET AMOUNT": "Net_Amount",
-  BROKERAGEPERSHARE: "BROKERAGE",
+  BROKERAGE: "BROKERAGE",
   SERVICETAX: "SERVICETAX",
-  MKTRATE: "MKTRATE",
-  TRANEXPENSE: "STT",
+  NETRATE: "NETRATE",
+  "NET AMOUNT": "Net_Amount",
+  STT: "STT",
+  TRFDATE: "TRFDATE",
+  TRFRATE: "TRFRATE",
+  "TRF AMOUNT": "TRFAMT",
+  TOTAL_TRXNFEE: "TOTAL_TRXNFEE",
+  TOTAL_TRXNFEE_STAX: "TOTAL_TRXNFEE_STAX",
+  TXN_REF_NO: "Txn_Ref_No",
+  DESCMEMO: "DESCMEMO",
+  CHEQUENO: "CHEQUENO",
+  CHEQUEDTL: "CHEQUEDTL",
+  PORTFOLIOID: "PORTFOLIOID",
+  DELIVERYDATE: "DELIVERYDATE",
+  PAYMENTDATE: "PAYMENTDATE",
   ACCRUEDINTEREST: "ACCRUEDINTEREST",
-  Description: "Tran_Desc",
-  "Cheque number": "CHEQUENO",
-  CHQDETAIL: "CHEQUEDTL",
+  ISSUER: "ISSUER",
+  ISSUERNAME: "ISSUERNAME",
+  TDSAMOUNT: "TDSAMOUNT",
+  STAMPDUTY: "STAMPDUTY",
+  TPMSGAIN: "TPMSGAIN",
+  RMID: "RMID",
+  RMNAME: "RMNAME",
+  ADVISORID: "ADVISORID",
+  ADVISORNAME: "ADVISORNAME",
+  BRANCHID: "BRANCHID",
+  BRANCHNAME: "BRANCHNAME",
+  GROUPID: "GROUPID",
+  GROUPNAME: "GROUPNAME",
+  OWNERID: "OWNERID",
+  OWNERNAME: "OWNERNAME",
+  WEALTHADVISOR_NAME: "WEALTHADVISOR_NAME",
+  SCHEMEID: "SCHEMEID",
+  SCHEMENAME: "SCHEMENAME",
 };
 
 /** Must be yyyy-mm-dd when the cell is not blank / null / 0-like. */
-const REQUIRED_DATE_COLUMNS = ["DATEPUR_ACQUI", "SETDATE"];
+const REQUIRED_DATE_COLUMNS = ["TRANDATE", "SETDATE"];
 
 /** If non-empty, value must be yyyy-mm-dd. */
-const OPTIONAL_DATE_COLUMNS = ["CashSetdate"];
+const OPTIONAL_DATE_COLUMNS = ["TRFDATE", "DELIVERYDATE", "PAYMENTDATE"];
 
 function stripBom(text) {
   if (text.charCodeAt(0) === 0xfeff) {
@@ -174,10 +241,10 @@ function isAbsentDateValue(value) {
 }
 
 /**
- * Rewrites a CSV buffer: renames mapped headers to DB column names,
- * drops columns that have no mapping, returns a new Buffer.
+ * Rewrites CSV for bulk insert: maps template headers (HEADER_MAP) to Transaction column names,
+ * trims cells, outputs comma-separated rows. Unmapped template columns are dropped.
  */
-function rewriteCsvHeaders(fileBuffer) {
+function normalizeCsvForBulkUpload(fileBuffer) {
   const text = stripBom(fileBuffer.toString("utf8"));
   const lines = text.split(/\r?\n/);
   if (!lines.length) return fileBuffer;
@@ -267,7 +334,7 @@ function parseTempTransactionSampleRows(fileBuffer) {
  * 1. Validates row 1 matches EXPECTED_HEADERS_IN_ORDER (count + order + exact names).
  * 2. Validates the CSV parses and has at least one data row.
  * 3. Validates date columns on the first 3 data rows (blank / 0 / null allowed when empty).
- * 4. Rewrites CSV: renames mapped headers to DB column names, drops unmapped columns.
+ * 4. Rewrites CSV: maps template headers to Transaction columns (HEADER_MAP), tab → comma, trim cells.
  * 5. Uploads rewritten CSV to Stratus under temp-files/temp-transactions/.
  * 6. Triggers a Catalyst Bulk Write Job to insert into the Transaction table.
  */
@@ -362,8 +429,8 @@ export const uploadTempTransaction = async (req, res) => {
       }
     }
 
-    /* ─── 2. REWRITE CSV HEADERS & UPLOAD TO STRATUS ─────────────── */
-    const rewrittenCsv = rewriteCsvHeaders(file.data);
+    /* ─── 2. NORMALIZE CSV & UPLOAD TO STRATUS ───────────────────── */
+    const rewrittenCsv = normalizeCsvForBulkUpload(file.data);
 
     const bucket = catalystApp.stratus().bucket(BUCKET_NAME);
     const objectKey = `temp-files/temp-transactions/TxnUpload-${Date.now()}-${file.name}`;

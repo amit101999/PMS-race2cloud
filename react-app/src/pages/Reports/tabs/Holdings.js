@@ -2,6 +2,14 @@ import React, { useEffect, useRef, useState, useMemo } from "react";
 import { useAccountCodes } from "../../../hooks/GetAllCodes.js";
 import { BASE_URL } from "../../../constant.js";
 
+/** Local wall time as yyyy-mm-dd HH:mm:ss (not locale-specific). */
+function formatExportTimestamp(iso) {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  const p = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+}
+
 function HoldingsTab() {
   const [exportType, setExportType] = useState("all");
   const [asOnDate, setAsOnDate] = useState("");
@@ -24,6 +32,14 @@ function HoldingsTab() {
       opt.label.toLowerCase().includes(searchQuery.toLowerCase())
     );
   }, [clientOptions, searchQuery]);
+
+  const sortedExportJobs = useMemo(() => {
+    return [...exportJobs].sort((a, b) => {
+      const ta = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+      const tb = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+      return tb - ta;
+    });
+  }, [exportJobs]);
 
   /* ---------------- CLOSE DROPDOWN ---------------- */
   useEffect(() => {
@@ -100,7 +116,13 @@ function HoldingsTab() {
         const exists = prev.find((j) => j.jobName === data.jobName);
         if (exists) {
           return prev.map((j) =>
-            j.jobName === data.jobName ? { ...j, status: data.status } : j
+            j.jobName === data.jobName
+              ? {
+                  ...j,
+                  status: data.status,
+                  ...(data.createdAt ? { createdAt: data.createdAt } : {}),
+                }
+              : j
           );
         }
         return [
@@ -108,6 +130,7 @@ function HoldingsTab() {
             jobName: data.jobName,
             asOnDate: data.asOnDate || asOnDate,
             status: data.status,
+            createdAt: data.createdAt || new Date().toISOString(),
           },
           ...prev,
         ];
@@ -321,17 +344,19 @@ function HoldingsTab() {
           <table className="export-table">
             <thead>
               <tr>
-                <th>Job Name</th>
-                <th>As On Date</th>
+                <th>File Name</th>
+                <th>Timestamp</th>
                 <th>Status</th>
                 <th>Action</th>
               </tr>
             </thead>
             <tbody>
-              {exportJobs.map((job) => (
+              {sortedExportJobs.map((job) => (
                 <tr key={job.jobName}>
                   <td>{job.jobName}</td>
-                  <td>{job.asOnDate}</td>
+                  <td>
+                    {job.createdAt ? formatExportTimestamp(job.createdAt) : "—"}
+                  </td>
                   <td>
                     <span
                       className={`export-status ${job.status === "COMPLETED"
