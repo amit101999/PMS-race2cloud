@@ -11,7 +11,7 @@ const catalyst = require("zcatalyst-sdk-node");
 
 const BATCH_SIZE = 300;
 const CLIENT_IDS = [
-"AYAN051","AYAN053","AYAN012","AYAN048","NROAYAN09","203NREAYAN","202NREAYAN","AYAN055","AYAN031","AYAN056",
+  "SVAYAN012","HCAYAN081"
 ];
 const GLOBAL_START = "2020-01-01";
 /** Fixed inclusive end date for all runs (process every half-year up to this date). */
@@ -210,6 +210,8 @@ module.exports = async (jobRequest, context) => {
           } else {
             balance -= netAmount;
           }
+
+          balance -= Number(stt ?? 0) || 0;
 
           const txDate = String(trandate).slice(0, 10);
           const setDateStr = String(setdate).slice(0, 10);

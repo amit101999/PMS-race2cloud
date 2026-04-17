@@ -1,3 +1,5 @@
+import { stratusSignedUrlToString, STRATUS_GET_URL_OPTS } from "../../util/stratusSignedUrl.js";
+
 const esc = (s) => String(s ?? "").replace(/'/g, "''");
 
 const parseCatalystTime = (ct) => {
@@ -67,6 +69,75 @@ export const triggerCashBalExport = async (req, res) => {
   }
 };
 
+export const getCashBalExportHistory = async (req, res) => {
+  try {
+    const catalystApp = req.catalystApp;
+    const zcql = catalystApp.zcql();
+    const limit = Math.min(Math.max(Number(req.query.limit) || 10, 1), 50);
+
+    let cbRows = [];
+    let ccRows = [];
+    try {
+      cbRows = await zcql.executeZCQLQuery(
+        `SELECT jobName, status, CREATEDTIME FROM Jobs WHERE jobName LIKE 'CB_*' ORDER BY ROWID DESC LIMIT ${limit}`
+      );
+    } catch (e) {
+      console.error("getCashBalExportHistory CB query:", e);
+    }
+    try {
+      ccRows = await zcql.executeZCQLQuery(
+        `SELECT jobName, status, CREATEDTIME FROM Jobs WHERE jobName LIKE 'CC_*' ORDER BY ROWID DESC LIMIT ${limit}`
+      );
+    } catch (e) {
+      console.error("getCashBalExportHistory CC query:", e);
+    }
+
+    const now = Date.now();
+    const jobs = [];
+
+    for (const row of [...(cbRows || []), ...(ccRows || [])]) {
+      const j = row.Jobs || row;
+      const jobName = j.jobName || "";
+      let status = j.status || "UNKNOWN";
+      const createdAtMs = parseCatalystTime(j.CREATEDTIME);
+      const jobAge = now - createdAtMs;
+
+      if ((status === "PENDING" || status === "RUNNING") && jobAge > STALE_MS) {
+        try {
+          await zcql.executeZCQLQuery(`UPDATE Jobs SET status = 'ERROR' WHERE jobName = '${esc(jobName)}'`);
+        } catch (_) {
+          /* ignore */
+        }
+        status = "ERROR";
+      }
+
+      const isAllClients = jobName.startsWith("CC_");
+      const parts = jobName.split("_");
+      const accountCode =
+        !isAllClients && parts.length >= 3 ? parts.slice(1, -1).join("_") : "";
+      const asOnDate = isAllClients && jobName.length > 3 ? jobName.slice(3) : undefined;
+
+      jobs.push({
+        jobName,
+        accountCode,
+        ...(asOnDate ? { asOnDate } : {}),
+        status,
+        createdAt:
+          createdAtMs > 0 ? new Date(createdAtMs).toISOString() : new Date().toISOString(),
+        _sortMs: createdAtMs,
+      });
+    }
+
+    jobs.sort((a, b) => b._sortMs - a._sortMs);
+    const limited = jobs.slice(0, limit).map(({ _sortMs, ...rest }) => rest);
+
+    return res.json(limited);
+  } catch (error) {
+    console.error("getCashBalExportHistory error:", error);
+    return res.status(500).json({ message: "Failed to fetch export history", error: error.message });
+  }
+};
+
 export const getCashBalExportStatus = async (req, res) => {
   try {
     const zcql = req.catalystApp.zcql();
@@ -118,9 +189,16 @@ export const downloadCashBalExport = async (req, res) => {
 
     const stratus = catalystApp.stratus();
     const bucket = stratus.bucket("upload-data-bucket");
-    const signedUrl = await bucket.generatePreSignedUrl(fileName, "GET", { expiresIn: 3600 });
+    const rawUrl = await bucket.generatePreSignedUrl(fileName, "GET", STRATUS_GET_URL_OPTS);
+    const urlStr = stratusSignedUrlToString(rawUrl);
+    if (!urlStr) {
+      return res.status(500).json({
+        status: "ERROR",
+        message: "Could not generate download URL",
+      });
+    }
 
-    return res.json({ status: "READY", fileName, downloadUrl: { signature: signedUrl } });
+    return res.json({ status: "READY", fileName, downloadUrl: { signature: urlStr } });
   } catch (error) {
     console.error("downloadCashBalExport error:", error);
     return res.status(404).json({ status: "NOT_FOUND", message: "File not found" });

@@ -39,6 +39,9 @@ export const exportAllData = async (req, res) => {
           fileName,
           asOnDate: dateStr,
           status: oldStatus,
+          createdAt: createdTime
+            ? new Date(parseCatalystTime(createdTime)).toISOString()
+            : new Date().toISOString(),
           message: "Export is already in progress for this date",
         });
       }
@@ -81,6 +84,7 @@ export const exportAllData = async (req, res) => {
       fileName,
       asOnDate: dateStr,
       status: "PENDING",
+      createdAt: new Date().toISOString(),
       message: "Export job started",
     });
   } catch (error) {
@@ -170,6 +174,7 @@ export const getExportAllHistory = async (req, res) => {
       const jobName = row.Jobs.jobName;
       let status = row.Jobs.status;
       const createdTime = row.Jobs.CREATEDTIME;
+      const createdAtMs = parseCatalystTime(createdTime);
 
       let asOnDate;
       if (jobName.startsWith("EA_")) {
@@ -178,7 +183,7 @@ export const getExportAllHistory = async (req, res) => {
         asOnDate = jobName.replace("EXPORT_ALL_", "");
       }
 
-      const jobAge = now - parseCatalystTime(createdTime);
+      const jobAge = now - createdAtMs;
       if ((status === "PENDING" || status === "RUNNING") && jobAge > STALE_TIMEOUT_MS) {
         try {
           await zcql.executeZCQLQuery(
@@ -190,10 +195,22 @@ export const getExportAllHistory = async (req, res) => {
         status = "ERROR";
       }
 
-      jobs.push({ jobName, asOnDate, status });
+      jobs.push({
+        jobName,
+        asOnDate,
+        status,
+        createdAt:
+          createdAtMs > 0
+            ? new Date(createdAtMs).toISOString()
+            : new Date().toISOString(),
+        _sortMs: createdAtMs,
+      });
     }
 
-    return res.json(jobs);
+    jobs.sort((a, b) => b._sortMs - a._sortMs);
+    const limited = jobs.slice(0, limit).map(({ _sortMs, ...rest }) => rest);
+
+    return res.json(limited);
   } catch (error) {
     console.error("Error fetching export history:", error);
     return res.status(500).json({
