@@ -7,139 +7,72 @@ const TABLE_NAME = "Transaction";
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 /**
- * Official row-1 headers: exact count, order, spelling, and case.
- * Validation compares the physical first line to this list (comma- or tab-separated).
+ * Bank / broker export: row-1 headers — exact count, order, spelling, and case.
+ * SETDATEFLAG and MKTRATE stay in the file for layout; they are not inserted (not in HEADER_MAP).
  */
 const EXPECTED_HEADERS_IN_ORDER = [
-  "WS CLIENT ID",
-  "WS ACCOUNT CODE",
-  "CLIENT NAME",
-  "TRANDATE",
-  "SETDATE",
-  "TRANTYPE",
-  "TRAN DESC",
-  "SECURITY TYPE",
-  "SECURITY TYPE DESCRIPTION",
-  "DETAILTYPENAME",
-  "ISIN",
-  "SECURITY CODE",
-  "SECURITY NAME",
+  "Broker Code",
+  "BROKERACID",
+  "SYMBOLCODE",
   "EXCHG",
-  "BROKERCODE",
-  "DEPOSITOY/REGISTRAR",
-  "DPID/AMC",
-  "DP CLIENT ID/FOLIO",
-  "BANKCODE",
-  "BANKACID",
-  "QTY",
+  "TRANSTYPE",
+  "DATEPUR_ACQUI",
+  "SETDATE",
+  "QUANTITY",
   "RATE",
-  "BROKERAGE",
-  "SERVICETAX",
-  "NETRATE",
+  "NET RATE",
   "NET AMOUNT",
-  "STT",
-  "TRFDATE",
-  "TRFRATE",
-  "TRF AMOUNT",
-  "TOTAL_TRXNFEE",
-  "TOTAL_TRXNFEE_STAX",
-  "TXN_REF_NO",
-  "DESCMEMO",
-  "CHEQUENO",
-  "CHEQUEDTL",
-  "PORTFOLIOID",
-  "DELIVERYDATE",
-  "PAYMENTDATE",
+  "BROKERAGEPERSHARE",
+  "SERVICETAX",
+  "SETDATEFLAG",
+  "MKTRATE",
+  "CASHSYMBOLCODE",
+  "TRANEXPENSE",
   "ACCRUEDINTEREST",
-  "ISSUER",
-  "ISSUERNAME",
-  "TDSAMOUNT",
-  "STAMPDUTY",
-  "TPMSGAIN",
-  "RMID",
-  "RMNAME",
-  "ADVISORID",
-  "ADVISORNAME",
-  "BRANCHID",
-  "BRANCHNAME",
-  "GROUPID",
-  "GROUPNAME",
-  "OWNERID",
-  "OWNERNAME",
-  "WEALTHADVISOR_NAME",
-  "SCHEMEID",
-  "SCHEMENAME",
+  "BLOCKID",
+  "TRANSREF",
+  "Description",
+  "Cheque number",
+  "CHQDETAIL",
+  "BankRef",
+  "CashSetdate",
 ];
 
 /**
- * Row-1 template header (exact match to EXPECTED_HEADERS_IN_ORDER) → Transaction column for bulk CSV.
- * Template columns with no entry are omitted from the Stratus file (e.g. "CLIENT NAME" is not in Transaction).
+ * CSV header (exact) → Transaction column name(s) for bulk insert.
+ * String or string[] (duplicated value). Unmapped columns (SETDATEFLAG, MKTRATE) are dropped in rewrite.
  */
 const HEADER_MAP = {
-  "WS CLIENT ID": "WS_client_id",
-  "WS ACCOUNT CODE": "WS_Account_code",
-  TRANDATE: "TRANDATE",
-  SETDATE: "SETDATE",
-  TRANTYPE: "Tran_Type",
-  "TRAN DESC": "Tran_Desc",
-  "SECURITY TYPE": "Security_Type",
-  "SECURITY TYPE DESCRIPTION": "Security_Type_Description",
-  DETAILTYPENAME: "DETAILTYPENAME",
-  ISIN: "ISIN",
-  "SECURITY CODE": "Security_code",
-  "SECURITY NAME": "Security_Name",
+  "Broker Code": ["WS_client_id", "BROKERCODE"],
+  BROKERACID: "WS_Account_code",
+  SYMBOLCODE: "ISIN",
   EXCHG: "EXCHG",
-  BROKERCODE: "BROKERCODE",
-  "DEPOSITOY/REGISTRAR": "Depositoy_Registrar",
-  "DPID/AMC": "DPID_AMC",
-  "DP CLIENT ID/FOLIO": "Dp_Client_id_Folio",
-  BANKCODE: "BANKCODE",
-  BANKACID: "BANKACID",
-  QTY: "QTY",
+  TRANSTYPE: "Tran_Type",
+  DATEPUR_ACQUI: "TRANDATE",
+  SETDATE: "SETDATE",
+  QUANTITY: "QTY",
   RATE: "RATE",
-  BROKERAGE: "BROKERAGE",
-  SERVICETAX: "SERVICETAX",
-  NETRATE: "NETRATE",
+  "NET RATE": "NETRATE",
   "NET AMOUNT": "Net_Amount",
-  STT: "STT",
-  TRFDATE: "TRFDATE",
-  TRFRATE: "TRFRATE",
-  "TRF AMOUNT": "TRFAMT",
-  TOTAL_TRXNFEE: "TOTAL_TRXNFEE",
-  TOTAL_TRXNFEE_STAX: "TOTAL_TRXNFEE_STAX",
-  TXN_REF_NO: "Txn_Ref_No",
-  DESCMEMO: "DESCMEMO",
-  CHEQUENO: "CHEQUENO",
-  CHEQUEDTL: "CHEQUEDTL",
-  PORTFOLIOID: "PORTFOLIOID",
-  DELIVERYDATE: "DELIVERYDATE",
-  PAYMENTDATE: "PAYMENTDATE",
+  BROKERAGEPERSHARE: "BROKERAGE",
+  SERVICETAX: "SERVICETAX",
+  CASHSYMBOLCODE: "Security_code",
+  TRANEXPENSE: "STT",
   ACCRUEDINTEREST: "ACCRUEDINTEREST",
-  ISSUER: "ISSUER",
-  ISSUERNAME: "ISSUERNAME",
-  TDSAMOUNT: "TDSAMOUNT",
-  STAMPDUTY: "STAMPDUTY",
-  TPMSGAIN: "TPMSGAIN",
-  RMID: "RMID",
-  RMNAME: "RMNAME",
-  ADVISORID: "ADVISORID",
-  ADVISORNAME: "ADVISORNAME",
-  BRANCHID: "BRANCHID",
-  BRANCHNAME: "BRANCHNAME",
-  GROUPID: "GROUPID",
-  GROUPNAME: "GROUPNAME",
-  OWNERID: "OWNERID",
-  OWNERNAME: "OWNERNAME",
-  WEALTHADVISOR_NAME: "WEALTHADVISOR_NAME",
-  SCHEMEID: "SCHEMEID",
-  SCHEMENAME: "SCHEMENAME",
+  BLOCKID: "PORTFOLIOID",
+  TRANSREF: "Txn_Ref_No",
+  Description: ["Security_Name", "Tran_Desc"],
+  "Cheque number": "CHEQUENO",
+  CHQDETAIL: "CHEQUEDTL",
+  BankRef: "BANKACID",
+  CashSetdate: "PAYMENTDATE",
 };
 
 /** Must be yyyy-mm-dd when the cell is not blank / null / 0-like. */
-const REQUIRED_DATE_COLUMNS = ["TRANDATE", "SETDATE"];
+const REQUIRED_DATE_COLUMNS = ["DATEPUR_ACQUI", "SETDATE"];
 
 /** If non-empty, value must be yyyy-mm-dd. */
-const OPTIONAL_DATE_COLUMNS = ["TRFDATE", "DELIVERYDATE", "PAYMENTDATE"];
+const OPTIONAL_DATE_COLUMNS = ["CashSetdate"];
 
 function stripBom(text) {
   if (text.charCodeAt(0) === 0xfeff) {
@@ -168,7 +101,9 @@ function detectSeparator(firstLine) {
 }
 
 function splitHeaderCells(firstLine, separator) {
-  return firstLine.split(separator).map((c) => c.trim());
+  return firstLine
+    .split(separator)
+    .map((c) => c.trim().replace(/^\uFEFF/, "").trim());
 }
 
 /**
@@ -240,9 +175,13 @@ function isAbsentDateValue(value) {
   return lower === "null" || lower === "na" || lower === "n/a" || s === "-";
 }
 
+function targetsForHeader(mapped) {
+  return Array.isArray(mapped) ? mapped : [mapped];
+}
+
 /**
- * Rewrites CSV for bulk insert: maps template headers (HEADER_MAP) to Transaction column names,
- * trims cells, outputs comma-separated rows. Unmapped template columns are dropped.
+ * Rewrites CSV for bulk insert: maps template headers (HEADER_MAP) to Transaction column names;
+ * one source column can fill multiple DB columns. Unmapped template columns (e.g. SETDATEFLAG, MKTRATE) dropped.
  */
 function normalizeCsvForBulkUpload(fileBuffer) {
   const text = stripBom(fileBuffer.toString("utf8"));
@@ -251,21 +190,20 @@ function normalizeCsvForBulkUpload(fileBuffer) {
 
   const firstLine = lines[0] ?? "";
   const separator = detectSeparator(firstLine);
-  const splitLine = (line) => line.split(separator).map((c) => c.trim());
+  const splitLine = (line) =>
+    line.split(separator).map((c) => c.trim().replace(/^\uFEFF/, ""));
 
   const originalHeaders = splitLine(lines[0]);
-  const keepIndices = [];
-  const newHeaders = [];
-
+  const headerMappings = [];
   for (let i = 0; i < originalHeaders.length; i++) {
     const raw = originalHeaders[i];
     const mapped = HEADER_MAP[raw];
     if (mapped) {
-      keepIndices.push(i);
-      newHeaders.push(mapped);
+      headerMappings.push({ idx: i, targets: targetsForHeader(mapped) });
     }
   }
 
+  const newHeaders = headerMappings.flatMap((m) => m.targets);
   const outSep = ",";
   const newLines = [newHeaders.join(outSep)];
 
@@ -273,8 +211,14 @@ function normalizeCsvForBulkUpload(fileBuffer) {
     const line = lines[r];
     if (!line.trim()) continue;
     const cells = splitLine(line);
-    const kept = keepIndices.map((idx) => (idx < cells.length ? cells[idx] : ""));
-    newLines.push(kept.join(outSep));
+    const outCells = [];
+    for (const m of headerMappings) {
+      const v = m.idx < cells.length ? cells[m.idx] : "";
+      for (let t = 0; t < m.targets.length; t++) {
+        outCells.push(v);
+      }
+    }
+    newLines.push(outCells.join(outSep));
   }
 
   return Buffer.from(newLines.join("\n"), "utf8");
