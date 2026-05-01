@@ -26,7 +26,8 @@
       "ExportBonusAccountholding",
       "UpdateISIN",
       "ExportCashBalSingleClient",
-      "ExportCashBalance"
+      "ExportCashBalance",
+      "MegerFn"
     ],
     "ignore": [],
     "source": "functions"

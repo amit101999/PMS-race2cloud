@@ -1,4 +1,4 @@
-import { runFifoEngine } from "../analytics/transactionHistory/fifo.js";
+import { runLotFifo } from "./lotFifo.js";
 
 export const ZCQL_ROW_LIMIT = 270;
 
@@ -132,32 +132,118 @@ async function fetchSplitRowsForIsinAsOnDate(zcql, isin, asOnDateISO) {
 }
 
 /**
- * FIFO snapshot (card mode) for one ISIN as of record date — same inputs as Analytics holding tab
- * (effective-date filter, TRANDATE/SETDATE window, bonus/split &lt; next day, ORDER BY ROWID).
+ * Per-account demerger applied rows live in Demerger_Record (not Demerger,
+ * which is the master/header table with Old_ISIN / New_ISIN columns).
+ * Demerger_Record columns: WS_Account_code, TRANDATE, SETDATE, Tran_Type,
+ * ISIN, Security_Code, Security_Name, QTY, PRICE, TOTAL_AMOUNT, HOLDING,
+ * WAP, HOLDING_VALUE, PL.
  */
-export async function fifoCardForIsinOnRecordDate(zcql, isin, recordDateISO) {
+async function fetchDemergerRowsForIsinAsOnDate(zcql, isin, asOnDateISO) {
+  const nextDayStr = nextDayIso(asOnDateISO);
+  const out = [];
+  const seen = new Set();
+  let off = 0;
+  while (true) {
+    const r = await zcql.executeZCQLQuery(`
+      SELECT *
+      FROM Demerger_Record
+      WHERE ISIN='${escSql(isin)}' AND TRANDATE < '${escSql(nextDayStr)}'
+      ORDER BY ROWID ASC
+      LIMIT ${ZCQL_ROW_LIMIT} OFFSET ${off}
+    `);
+    if (!r || r.length === 0) break;
+    for (const row of r) {
+      const d = row.Demerger_Record || row;
+      if (!d || !d.ROWID) continue;
+      if (seen.has(d.ROWID)) continue;
+      seen.add(d.ROWID);
+      out.push(row);
+    }
+    if (r.length < ZCQL_ROW_LIMIT) break;
+    off += ZCQL_ROW_LIMIT;
+  }
+  return out;
+}
+
+async function fetchPriorMergerRowsForIsinAsOnDate(zcql, isin, asOnDateISO) {
+  const nextDayStr = nextDayIso(asOnDateISO);
+  const out = [];
+  const seen = new Set();
+  let off = 0;
+  while (true) {
+    const r = await zcql.executeZCQLQuery(`
+      SELECT *
+      FROM Merger
+      WHERE ISIN='${escSql(isin)}' AND TRANDATE < '${escSql(nextDayStr)}'
+      ORDER BY ROWID ASC
+      LIMIT ${ZCQL_ROW_LIMIT} OFFSET ${off}
+    `);
+    if (!r || r.length === 0) break;
+    for (const row of r) {
+      const m = row.Merger || row;
+      if (!m || !m.ROWID) continue;
+      if (seen.has(m.ROWID)) continue;
+      seen.add(m.ROWID);
+      out.push(row);
+    }
+    if (r.length < ZCQL_ROW_LIMIT) break;
+    off += ZCQL_ROW_LIMIT;
+  }
+  return out;
+}
+
+/**
+ * Lot-level FIFO snapshot for one ISIN as of record date.
+ *
+ * Reads all Transaction / Bonus / Split / Demerger / prior Merger rows (≤ recordDate)
+ * for the ISIN in single paginated passes, groups by WS_Account_code, then returns a
+ * lookup `(accountCode) => openLots[]`. Each lot is `{ sourceType, sourceRowId,
+ * originalTrandate, qty, costPerShare, totalCost }`.
+ *
+ * Identical replay rules as functions/MegerFn so preview === apply at the lot level.
+ */
+export async function fifoLotsForIsinOnRecordDate(zcql, isin, recordDateISO) {
   if (!recordDateISO || !/^\d{4}-\d{2}-\d{2}$/.test(recordDateISO)) {
-    throw new Error("fifoCardForIsinOnRecordDate: recordDateISO must be yyyy-mm-dd.");
+    throw new Error("fifoLotsForIsinOnRecordDate: recordDateISO must be yyyy-mm-dd.");
   }
 
   const txRows = await fetchTransactionsForIsinAsOnDate(zcql, isin, recordDateISO);
   const bonusRows = await fetchBonusRowsForIsinAsOnDate(zcql, isin, recordDateISO);
   const splitRows = await fetchSplitRowsForIsinAsOnDate(zcql, isin, recordDateISO);
+  const demergerRows = await fetchDemergerRowsForIsinAsOnDate(zcql, isin, recordDateISO);
+  const priorMergerRows = await fetchPriorMergerRowsForIsinAsOnDate(zcql, isin, recordDateISO);
 
   const txByAccount = {};
   txRows.forEach((row) => {
-    const t = row.Transaction;
+    const t = row.Transaction || row;
+    if (!t?.WS_Account_code) return;
     (txByAccount[t.WS_Account_code] ||= []).push(t);
   });
 
   const bonusByAccount = {};
   bonusRows.forEach((row) => {
-    const b = row.Bonus;
+    const b = row.Bonus || row;
+    if (!b?.WS_Account_code) return;
     (bonusByAccount[b.WS_Account_code] ||= []).push(b);
   });
 
+  const demergerByAccount = {};
+  demergerRows.forEach((row) => {
+    const d = row.Demerger_Record || row;
+    if (!d?.WS_Account_code) return;
+    if (String(d.Tran_Type || d.tran_type || "").toUpperCase() !== "DEMERGER") return;
+    (demergerByAccount[d.WS_Account_code] ||= []).push(d);
+  });
+
+  const priorMergerByAccount = {};
+  priorMergerRows.forEach((row) => {
+    const m = row.Merger || row;
+    if (!m?.WS_Account_code) return;
+    (priorMergerByAccount[m.WS_Account_code] ||= []).push(m);
+  });
+
   const splits = splitRows.map((row) => {
-    const s = row.Split;
+    const s = row.Split || row;
     return {
       issueDate: s.Issue_Date,
       ratio1: Number(s.Ratio1) || 0,
@@ -166,40 +252,13 @@ export async function fifoCardForIsinOnRecordDate(zcql, isin, recordDateISO) {
     };
   });
 
-  /** @param {string} accountCode */
+  /** @param {string} accountCode @returns {Array<{sourceRowId:string|null,sourceType:string,originalTrandate:string|null,qty:number,costPerShare:number,totalCost:number}>} */
   return (accountCode) => {
     const transactions = txByAccount[accountCode] || [];
-    if (!transactions.length) {
-      return {
-        holdings: 0,
-        holdingValue: 0,
-        averageCostOfHoldings: 0,
-      };
-    }
+    if (!transactions.length) return [];
     const bonuses = bonusByAccount[accountCode] || [];
-    return runFifoEngine(transactions, bonuses, splits, true);
+    const demergers = demergerByAccount[accountCode] || [];
+    const priorMergers = priorMergerByAccount[accountCode] || [];
+    return runLotFifo(transactions, bonuses, splits, demergers, priorMergers);
   };
-}
-
-/**
- * New shares from one old leg: ratio is "new shares per 1 old share" (e.g. 1 => 1:1).
- */
-export function newSharesFromLeg(holdings, ratio) {
-  const r = Number(ratio);
-  if (!Number.isFinite(r) || r <= 0 || holdings <= 0) return 0;
-  return Math.floor(holdings * r);
-}
-
-/**
- * Merger ratio: Ratio1 : Ratio2 as entered → mergedQty = floor(holdings × Ratio1 ÷ Ratio2).
- * Same as bonus (e.g. 1 : 2 ⇒ 480 → 240). 2 : 1 ⇒ double.
- */
-export function newMergedSharesFromRatio(holdings, ratio1, ratio2) {
-  const h = Number(holdings);
-  const r1 = Number(ratio1);
-  const r2 = Number(ratio2);
-  if (!Number.isFinite(h) || h <= 0 || !Number.isFinite(r1) || !Number.isFinite(r2) || r1 <= 0 || r2 <= 0) {
-    return 0;
-  }
-  return Math.floor((h * r1) / r2);
 }

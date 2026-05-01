@@ -25,6 +25,11 @@ export const runFifoEngine = (
   const output = [];
   let Balance = 0;
 
+  // Tracks the most recently processed merger event (date + oldIsin).
+  // Multiple lot-level Merger rows belonging to the same event are additive
+  // (do NOT re-wipe the queue between rows).
+  let lastMergerEventKey = null;
+
   /* ---------------- DATE NORMALIZATION ---------------- */
   const normalizeDate = (rawDate) => {
     if (!rawDate) return null;
@@ -389,7 +394,13 @@ export const runFifoEngine = (
       });
     }
 
-    /* ========== MERGER (old ISIN lots retired, replaced by new ISIN lot at carried cost) ========== */
+    /* ========== MERGER (old ISIN lots retired, replaced by new ISIN lots at carried cost) ==========
+     *
+     * One merger event can produce MULTIPLE rows in the Merger table — one per surviving lot
+     * (lot-level apply via MegerFn). All rows for the same event share the same TRANDATE and
+     * OldISIN. We retire the pre-merger queue ONCE on the first row of a new event, then add
+     * each subsequent lot row additively so holdings/WAP reflect the full post-merger position.
+     */
     if (e.type === "MERGER") {
       const qty = Math.abs(Number(e.data.qty) || 0);
       if (!qty) continue;
@@ -399,15 +410,22 @@ export const runFifoEngine = (
       if (!price && totalAmount && qty) price = totalAmount / qty;
       if (!totalAmount && price && qty) totalAmount = qty * price;
 
-      const activeLots = buyQueue.filter((l) => l.isActive);
-      for (const oldLot of activeLots) {
-        oldLot.isActive = false;
-        const oldRow = output.find((r) => r.lotId === oldLot.lotId && r.isActive);
-        if (oldRow) oldRow.isActive = false;
-      }
-      buyQueue.length = 0;
-
       const mergerDate = normalizeDate(e.data.trandate);
+      const eventKey = `${mergerDate}|${e.data.oldIsin || ""}`;
+
+      if (eventKey !== lastMergerEventKey) {
+        // First row of a new merger event: retire any prior holdings of this ISIN.
+        const activeLots = buyQueue.filter((l) => l.isActive);
+        for (const oldLot of activeLots) {
+          oldLot.isActive = false;
+          const oldRow = output.find((r) => r.lotId === oldLot.lotId && r.isActive);
+          if (oldRow) oldRow.isActive = false;
+        }
+        buyQueue.length = 0;
+        holdings = 0;
+        lastMergerEventKey = eventKey;
+      }
+
       const lotId = ++lotCounter;
 
       buyQueue.push({
@@ -419,7 +437,7 @@ export const runFifoEngine = (
         isActive: true,
       });
 
-      holdings = qty;
+      holdings += qty;
 
       output.push({
         lotId,

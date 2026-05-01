@@ -1,12 +1,8 @@
 import {
   escSql,
   fetchAccountsForIsin,
-  fifoCardForIsinOnRecordDate,
-  newMergedSharesFromRatio,
+  fifoLotsForIsinOnRecordDate,
 } from "../util/merger/mergerEngine.js";
-
-/** Value for Merger.Tran_Type (transaction-style type code). */
-const MERGER_TRAN_TYPE = "MERGER";
 
 /**
  * Calendar date for DB (no timezone shift). HTML date inputs send yyyy-mm-dd — must not use
@@ -56,8 +52,16 @@ function mergeIntoNewCompanyFields(body) {
 }
 
 /**
- * Single old ISIN → new ISIN. mergedQty = floor(holding × ratio1 ÷ ratio2) (same as bonus).
- * @returns {{ ok: true, recordISO, newIsin, oldIsins, r1, r2, preview, meta } | { ok: false, status: number, body: object }}
+ * Lot-level merger preview. One row per surviving FIFO lot (after replay of
+ * Transactions / Bonuses / Splits / prior Demergers / prior Mergers up to recordDate).
+ *
+ * Per-lot rounding mirrors the apply path (functions/MegerFn):
+ *   newQty = floor(lotQty × ratio1 ÷ ratio2)
+ *   newWAP = lotCost / newQty   (full lot cost preserved on surviving shares)
+ *   lots that round to newQty <= 0 are flagged willSkip:true (cost basis lost on apply).
+ *
+ * @returns {{ ok: true, recordISO, newIsin, oldIsins, r1, r2, preview, meta }
+ *          | { ok: false, status: number, body: object }}
  */
 async function computeMergerPreview(zcql, body) {
   const { recordDateIso, ratio1, ratio2, oldCompanies } = body || {};
@@ -106,45 +110,72 @@ async function computeMergerPreview(zcql, body) {
       r1,
       r2,
       preview: [],
-      meta: { message: "No accounts with transactions on this old ISIN." },
+      meta: {
+        recordDateIso: recordISO,
+        newIsin,
+        oldIsins,
+        message: "No accounts with transactions on this old ISIN.",
+        accountsAffected: 0,
+        survivingLots: 0,
+        skippedZeroLots: 0,
+        totalNewShares: 0,
+        totalCarriedCost: 0,
+        skippedCostBasis: 0,
+      },
     };
   }
 
-  const fifoCard = await fifoCardForIsinOnRecordDate(zcql, oldIsin, recordISO);
+  const lotsForAccount = await fifoLotsForIsinOnRecordDate(zcql, oldIsin, recordISO);
   const preview = [];
 
+  let accountsAffected = 0;
+  let survivingLots = 0;
+  let skippedZeroLots = 0;
+  let totalNewShares = 0;
+  let totalCarriedCost = 0;
+  let skippedCostBasis = 0;
+
   for (const accountCode of eligibleAccounts) {
-    const fifo = fifoCard(accountCode);
-    const holdings = Number(fifo?.holdings) || 0;
-    const carriedCost = Number(fifo?.holdingValue) || 0;
-    const newQty = newMergedSharesFromRatio(holdings, r1, r2);
-    const mergedWAP = newQty > 0 ? carriedCost / newQty : 0;
+    const openLots = lotsForAccount(accountCode);
+    if (!openLots.length) continue;
+    accountsAffected += 1;
 
-    if (newQty <= 0 && carriedCost <= 0) continue;
+    for (const lot of openLots) {
+      const lotQty = Number(lot.qty) || 0;
+      if (lotQty <= 0) continue;
+      const lotCost = Number(lot.totalCost) || 0;
+      const lotCostPerShare = Number(lot.costPerShare) || 0;
 
-    preview.push({
-      accountCode,
-      oldIsin,
-      newIsin,
-      ratio1: r1,
-      ratio2: r2,
-      holdingsOnRecordDate: holdings,
-      totalNewShares: newQty,
-      totalCarriedCost: carriedCost,
-      mergedWAP,
-      legs: [
-        {
-          oldIsin,
-          holdingsOnRecordDate: holdings,
-          carriedCost,
-          ratio1: r1,
-          ratio2: r2,
-          newSharesFromLeg: newQty,
-        },
-      ],
-      holdingsOldIsin1: holdings,
-      holdingsOldIsin2: null,
-    });
+      const newQty = Math.floor((lotQty * r1) / r2);
+      const willSkip = newQty <= 0;
+      const newWAP = newQty > 0 ? lotCost / newQty : 0;
+
+      if (willSkip) {
+        skippedZeroLots += 1;
+        skippedCostBasis += lotCost;
+      } else {
+        survivingLots += 1;
+        totalNewShares += newQty;
+        totalCarriedCost += lotCost;
+      }
+
+      preview.push({
+        accountCode,
+        oldIsin,
+        newIsin,
+        ratio1: r1,
+        ratio2: r2,
+        sourceType: lot.sourceType,
+        sourceRowId: lot.sourceRowId,
+        lotTrandate: lot.originalTrandate,
+        lotQty,
+        lotCostPerShare,
+        lotCost,
+        newQty,
+        newWAP,
+        willSkip,
+      });
+    }
   }
 
   return {
@@ -159,7 +190,15 @@ async function computeMergerPreview(zcql, body) {
       recordDateIso: recordISO,
       newIsin,
       oldIsins,
-      note: "mergedQty = floor(holdings * ratio1 / ratio2), same as bonus. COA = FIFO on old ISIN. mergedWAP = COA / mergedQty. Apply persists TRANDATE/SETDATE = recordDateIso only.",
+      accountsAffected,
+      survivingLots,
+      skippedZeroLots,
+      totalNewShares,
+      totalCarriedCost,
+      skippedCostBasis,
+      note:
+        "Lot-level: one row per surviving FIFO lot. newQty = floor(lotQty × ratio1 ÷ ratio2). " +
+        "Lots with newQty <= 0 are flagged willSkip:true and will not be persisted on apply.",
     },
   };
 }
@@ -167,7 +206,10 @@ async function computeMergerPreview(zcql, body) {
 /**
  * POST /api/merger/preview
  * Body: { recordDateIso, ratio1, ratio2, oldCompanies: [{ isin }], mergeIntoNewCompany: { isin, securityName?, securityCode? } }
- * Exactly one old ISIN. mergedQty = floor(holdings * ratio1 / ratio2).
+ * Exactly one old ISIN. Response is **lot-level**: one row per surviving FIFO lot.
+ *   - newQty = floor(lotQty × ratio1 ÷ ratio2) (per-lot floor, matches apply)
+ *   - newWAP = lotCost ÷ newQty when newQty > 0 (full lot cost preserved)
+ *   - willSkip:true when newQty == 0 (cost basis lost on apply, flagged to user)
  */
 export const previewMerger = async (req, res) => {
   try {
@@ -190,179 +232,203 @@ export const previewMerger = async (req, res) => {
   }
 };
 
-/**
- * POST /api/merger/apply
- * Body: same as preview (effectiveDateIso on the client is ignored here).
- * Merger + Merger_Record: TRANDATE and SETDATE both = user-selected record date only (recordDateIso → result.recordISO).
- */
+/* =====================================================================
+   APPLY (lot-level, background job)
+   --------------------------------------------------------------------
+   POST /api/merger/apply
+     - Validates the merger inputs (same shape as preview).
+     - Generates a deterministic jobName from the inputs (idempotency key)
+       so the same merger can't be queued twice while one is running.
+     - Submits the MegerFn Catalyst function which does the heavy
+       lot-level work (FIFO replay → surviving lots → bulk-insert into
+       Merger via Stratus + bulkJob).
+     - Responds immediately with { jobName, status: "PENDING" }.
+
+   GET /api/merger/apply-status?jobName=...
+     - Reads the Jobs row to surface progress to the React poller.
+   ===================================================================== */
+
+const MERGER_STALE_TIMEOUT_MS = 60 * 60 * 1000;
+
+const parseCatalystTime = (ct) => {
+  if (!ct) return 0;
+  const fixed = String(ct).replace(/:(\d{3})$/, ".$1");
+  const ms = new Date(fixed).getTime();
+  return Number.isNaN(ms) ? 0 : ms;
+};
+
+/** Short, human-readable jobName under the Catalyst 50-char limit. */
+function buildMergerJobName(oldIsin, newIsin, recordDateIso) {
+  const trim = (s, n) => String(s || "").replace(/[^A-Za-z0-9]/g, "").slice(-n);
+  const date = String(recordDateIso || "").replace(/[^\d]/g, "");
+  return `MRG_${trim(oldIsin, 6)}_${trim(newIsin, 6)}_${date}`;
+}
+
 export const applyMerger = async (req, res) => {
   try {
     if (!req.catalystApp) {
-      return res.status(500).json({ success: false, message: "Catalyst app not initialized" });
+      return res
+        .status(500)
+        .json({ success: false, message: "Catalyst app not initialized" });
     }
-
-    const mic = mergeIntoNewCompanyFields(req.body);
-    const secName = mic.securityName;
-    const newIsin = mic.isin;
-    const secCode = mic.securityCode || newIsin;
 
     const zcql = req.catalystApp.zcql();
-    const result = await computeMergerPreview(zcql, req.body);
-    if (!result.ok) {
-      return res.status(result.status).json(result.body);
-    }
+    const jobScheduling = req.catalystApp.jobScheduling();
 
-    const recordISO = result.recordISO;
-    const effectiveISO = toIsoDate(req.body.effectiveDateIso) || recordISO;
-    const resolvedSecName = secName || `Merged ${newIsin}`;
-    const rows = result.preview || [];
-    const actionable = rows.filter((r) => r.totalNewShares > 0);
-    if (!actionable.length) {
+    const mic = mergeIntoNewCompanyFields(req.body);
+    const newIsin = mic.isin;
+    const secCode = mic.securityCode || newIsin;
+    const secName = mic.securityName || `Merged ${newIsin}`;
+
+    const oldIsins = normalizeBodyOldIsins(req.body?.oldCompanies);
+    const recordISO = toIsoDate(req.body?.recordDateIso);
+    const effectiveISO = toIsoDate(req.body?.effectiveDateIso) || recordISO;
+    const r1 = Number(req.body?.ratio1);
+    const r2 = Number(req.body?.ratio2);
+
+    if (!recordISO) {
       return res.status(400).json({
         success: false,
-        message: "No accounts with positive merged share quantity; nothing to apply.",
+        message: "recordDateIso is required (yyyy-mm-dd).",
       });
     }
-
-    let securityListInserted = false;
-    let securityListUpdated = false;
-    let securityListReason = null;
-    let securityListTargetWasUpdate = false;
-    try {
-      const existingByIsin = await zcql.executeZCQLQuery(`
-        SELECT ROWID FROM Security_List WHERE ISIN='${escSql(newIsin)}' LIMIT 1
-      `);
-      if (existingByIsin?.length) {
-        securityListTargetWasUpdate = true;
-        await zcql.executeZCQLQuery(`
-          UPDATE Security_List
-          SET Security_Code = '${escSql(secCode)}', Security_Name = '${escSql(resolvedSecName)}'
-          WHERE ISIN = '${escSql(newIsin)}'
-        `);
-        securityListUpdated = true;
-        securityListReason = "isin_updated_in_security_list";
-      } else {
-        await zcql.executeZCQLQuery(`
-          INSERT INTO Security_List (Security_Code, ISIN, Security_Name)
-          VALUES ('${escSql(secCode)}', '${escSql(newIsin)}', '${escSql(resolvedSecName)}')
-        `);
-        securityListInserted = true;
-        securityListReason = "security_list_inserted";
-      }
-    } catch (e) {
-      securityListReason = securityListTargetWasUpdate
-        ? "security_list_update_failed"
-        : "security_list_insert_failed";
-      console.warn("[applyMerger] Security_List insert/update failed:", e.message);
-    }
-
-    const oldIsin = result.oldIsins[0] || "";
-    const r1 = result.r1;
-    const r2 = result.r2;
-
-    try {
-      await zcql.executeZCQLQuery(`
-        INSERT INTO Merger_Record
-        (
-          ISIN,
-          Security_Code,
-          Security_Name,
-          OldISIN,
-          Ratio1,
-          Ratio2,
-          TRANDATE,
-          SETDATE
-        )
-        VALUES
-        (
-          '${escSql(newIsin)}',
-          '${escSql(secCode)}',
-          '${escSql(resolvedSecName)}',
-          '${escSql(oldIsin)}',
-          ${r1},
-          ${r2},
-          '${escSql(effectiveISO)}',
-          '${escSql(effectiveISO)}'
-        )
-      `);
-    } catch (e) {
-      console.error("[applyMerger] Merger_Record insert failed:", e);
-      return res.status(500).json({
+    if (oldIsins.length !== 1) {
+      return res.status(400).json({
         success: false,
         message:
-          "Merger_Record insert failed. Create table Merger_Record with columns: ISIN, Security_Code, Security_Name, OldISIN, Ratio1, Ratio2, TRANDATE, SETDATE. TRANDATE and SETDATE both store the merger record date (recordDateIso).",
-        detail: e.message,
+          "Exactly one old ISIN is required (select or type one security).",
+      });
+    }
+    if (!newIsin) {
+      return res.status(400).json({
+        success: false,
+        message: "mergeIntoNewCompany.isin is required.",
+      });
+    }
+    if (oldIsins[0] === newIsin) {
+      return res
+        .status(400)
+        .json({ success: false, message: "New ISIN must differ from old ISIN." });
+    }
+    if (!Number.isFinite(r1) || !Number.isFinite(r2) || r1 <= 0 || r2 <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: "ratio1 and ratio2 must be positive numbers.",
       });
     }
 
-    let inserted = 0;
-    const errors = [];
-    for (const row of actionable) {
+    const oldIsin = oldIsins[0];
+    const jobName = buildMergerJobName(oldIsin, newIsin, recordISO);
+
+    const existing = await zcql.executeZCQLQuery(
+      `SELECT ROWID, status, CREATEDTIME FROM Jobs WHERE jobName = '${escSql(jobName)}' LIMIT 1`,
+    );
+
+    if (existing?.length) {
+      const oldStatus = existing[0].Jobs.status;
+      const oldRowId = existing[0].Jobs.ROWID;
+      const createdTime = existing[0].Jobs.CREATEDTIME;
+      const jobAge = Date.now() - parseCatalystTime(createdTime);
+      const isStale = jobAge > MERGER_STALE_TIMEOUT_MS;
+
+      if (
+        (oldStatus === "PENDING" || oldStatus === "RUNNING") &&
+        !isStale
+      ) {
+        return res.json({
+          success: true,
+          jobName,
+          status: oldStatus,
+          message: "Merger application is already in progress",
+        });
+      }
+
       try {
-        const avg = Number(row.mergedWAP) || 0;
-        const cost = Number(row.totalCarriedCost) || 0;
-        const qty = Number(row.totalNewShares) || 0;
-        const holdingValue = cost;
-        await zcql.executeZCQLQuery(`
-          INSERT INTO Merger
-          (
-            ISIN,
-            SecurityCode,
-            Security_Name,
-            WS_Account_code,
-            Holding,
-            OldISIN,
-            WAP,
-            Total_Amount,
-            TRANDATE,
-            SETDATE,
-            Tran_Type,
-            Quantity,
-            HoldingValue
-          )
-          VALUES
-          (
-            '${escSql(newIsin)}',
-            '${escSql(secCode)}',
-            '${escSql(resolvedSecName)}',
-            '${escSql(row.accountCode)}',
-            ${qty},
-            '${escSql(oldIsin)}',
-            ${avg},
-            ${cost},
-            '${escSql(effectiveISO)}',
-            '${escSql(effectiveISO)}',
-            '${escSql(MERGER_TRAN_TYPE)}',
-            ${qty},
-            ${holdingValue}
-          )
-        `);
-        inserted++;
-      } catch (e) {
-        errors.push({ accountCode: row.accountCode, message: e.message });
+        await zcql.executeZCQLQuery(`DELETE FROM Jobs WHERE ROWID = ${oldRowId}`);
+      } catch (delErr) {
+        console.error("[applyMerger] Error deleting old job row:", delErr);
       }
     }
 
-    if (inserted === 0 && errors.length) {
-      return res.status(500).json({
-        success: false,
-        message:
-          "Merger row insert failed. Create table Merger with columns: ISIN, SecurityCode, Security_Name, WS_Account_code, Holding, OldISIN, WAP, Total_Amount, TRANDATE, SETDATE, Tran_Type, Quantity, HoldingValue. TRANDATE and SETDATE both store the merger record date (recordDateIso).",
-        errors,
-      });
-    }
+    await jobScheduling.JOB.submitJob({
+      job_name: "ApplyMerger",
+      jobpool_name: "Export",
+      target_name: "MegerFn",
+      target_type: "Function",
+      params: {
+        jobName,
+        oldIsin,
+        newIsin,
+        secCode,
+        secName,
+        ratio1: String(r1),
+        ratio2: String(r2),
+        recordDateIso: recordISO,
+        effectiveDateIso: effectiveISO,
+      },
+    });
 
     return res.json({
       success: true,
-      message: `Merger applied: ${inserted} account row(s), Merger_Record created.`,
-      inserted,
-      securityListInserted,
-      securityListUpdated,
-      securityListReason,
-      applyErrors: errors.length ? errors : undefined,
+      jobName,
+      status: "PENDING",
+      message: "Merger application job started",
     });
   } catch (error) {
     console.error("[applyMerger]", error);
-    return res.status(500).json({ success: false, message: error.message || "Merger apply failed" });
+    return res
+      .status(500)
+      .json({ success: false, message: error.message || "Merger apply failed" });
+  }
+};
+
+export const getMergerApplyStatus = async (req, res) => {
+  try {
+    if (!req.catalystApp) {
+      return res
+        .status(500)
+        .json({ success: false, message: "Catalyst app not initialized" });
+    }
+    const zcql = req.catalystApp.zcql();
+
+    const { jobName } = req.query;
+    if (!jobName) {
+      return res
+        .status(400)
+        .json({ success: false, message: "jobName is required" });
+    }
+
+    const result = await zcql.executeZCQLQuery(
+      `SELECT ROWID, status, CREATEDTIME FROM Jobs WHERE jobName = '${escSql(String(jobName))}' LIMIT 1`,
+    );
+
+    if (!result?.length) {
+      return res.json({ success: true, status: "NOT_STARTED" });
+    }
+
+    let status = result[0].Jobs.status;
+    const createdTime = result[0].Jobs.CREATEDTIME;
+    const jobAge = Date.now() - parseCatalystTime(createdTime);
+
+    if (
+      (status === "PENDING" || status === "RUNNING") &&
+      jobAge > MERGER_STALE_TIMEOUT_MS
+    ) {
+      try {
+        await zcql.executeZCQLQuery(
+          `UPDATE Jobs SET status = 'ERROR' WHERE jobName = '${escSql(String(jobName))}'`,
+        );
+        status = "ERROR";
+      } catch (updateErr) {
+        console.error("[getMergerApplyStatus] Stale-mark failed:", updateErr);
+      }
+    }
+
+    return res.json({ success: true, status });
+  } catch (error) {
+    console.error("[getMergerApplyStatus]", error);
+    return res
+      .status(500)
+      .json({ success: false, message: error.message || "Status check failed" });
   }
 };
