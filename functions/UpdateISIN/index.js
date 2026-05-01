@@ -14,7 +14,6 @@ const TABLES_WITH_ISIN_COLUMN = [
   "Temp_Transaction",
   "Temp_Custodian",
   "Bhav_Copy",
-  "Daily_Holding_Quantity",
   "Cash_Balance_Per_Transaction",
 ];
 

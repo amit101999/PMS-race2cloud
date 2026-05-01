@@ -11,7 +11,7 @@ const catalyst = require("zcatalyst-sdk-node");
 
 const BATCH_SIZE = 300;
 const CLIENT_IDS = [
-  "SVAYAN012","HCAYAN081"
+  "233NREAYAN","ELNRO09","TAYAN012","IMFAYAN10","IMFAYAN20","ELNRE04","AYAN140","ELAYAN030","IMFAYAN25","AYAN139"
 ];
 const GLOBAL_START = "2020-01-01";
 /** Fixed inclusive end date for all runs (process every half-year up to this date). */
@@ -163,7 +163,7 @@ module.exports = async (jobRequest, context) => {
       const accountCode = CLIENT_IDS[ai];
       console.log(`\n===== Account ${ai + 1}/${CLIENT_IDS.length}: ${accountCode} =====`);
 
-      let balance = 0;
+      let balanceP = 0;  // balance in paise (integer) for precision
       let sequence = 1;
       let isFirstChunk = true;
       let usedOpeningCsPlus = false;
@@ -194,7 +194,7 @@ module.exports = async (jobRequest, context) => {
           const firstImpactDate = allEvents[0].impactDate;
           const firstDayCsPlus = allEvents.find((e) => e.impactDate === firstImpactDate && e.type === "CS+");
           if (firstDayCsPlus) {
-            balance = firstDayCsPlus.netAmount;
+            balanceP = Math.round(Math.abs(firstDayCsPlus.netAmount) * 100);
           }
           isFirstChunk = false;
         }
@@ -202,16 +202,20 @@ module.exports = async (jobRequest, context) => {
         for (const row of allEvents) {
           const { trandate, setdate, type, securityName, netAmount, isInflow, qty, price, isin, stt } = row;
 
-          if (!usedOpeningCsPlus && type === "CS+") {
-            usedOpeningCsPlus = true;
-            balance = netAmount;
-          } else if (isInflow) {
-            balance += netAmount;
-          } else {
-            balance -= netAmount;
-          }
+          const sttP = Math.round(Math.abs(Number(stt ?? 0)) * 100) || 0;
+          const amtP = Math.round(Math.abs(netAmount) * 100);
 
-          balance -= Number(stt ?? 0) || 0;
+          if (!usedOpeningCsPlus && type === "CS+") {
+            // Opening balance: principal minus STT when present
+            usedOpeningCsPlus = true;
+            balanceP = amtP - sttP;
+          } else if (isInflow) {
+            // Inflow: credit amount and deduct STT from balance
+            balanceP += amtP - sttP;
+          } else {
+            // Outflow: deduct principal + STT
+            balanceP -= (amtP + sttP);
+          }
 
           const txDate = String(trandate).slice(0, 10);
           const setDateStr = String(setdate).slice(0, 10);
@@ -225,7 +229,7 @@ module.exports = async (jobRequest, context) => {
               '${txDate}',
               '${setDateStr}',
               ${Number(price)},
-              ${Number(balance)},
+              ${Number((balanceP / 100).toFixed(2))},
               '${esc(securityName)}',
               '${esc(isin)}',
               ${Math.round(Number(qty ?? 0) || 0)},
@@ -238,10 +242,10 @@ module.exports = async (jobRequest, context) => {
         }
 
         totalInserted += allEvents.length;
-        console.log(`  Chunk ${ci + 1}: ${allEvents.length} event(s), balance=${balance.toFixed(2)}, seq=${sequence - 1}`);
+        console.log(`  Chunk ${ci + 1}: ${allEvents.length} event(s), balance=${(balanceP / 100).toFixed(2)}, seq=${sequence - 1}`);
       }
 
-      console.log(`Account ${accountCode} done: ${totalInserted} row(s), final balance=${balance.toFixed(2)}`);
+      console.log(`Account ${accountCode} done: ${totalInserted} row(s), final balance=${(balanceP / 100).toFixed(2)}`);
     }
 
     console.log(`\nCal_CB_Per_TNX completed for all ${CLIENT_IDS.length} accounts.`);

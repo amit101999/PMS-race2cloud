@@ -92,6 +92,52 @@ export const getCashPassbook = async (req, res) => {
       countRow["COUNT(ROWID)"] ?? countRow.cnt ?? countRow["count"] ?? Object.values(countRow)[0] ?? 0
     );
 
+    /* ── Paise helpers: do all math in integers to avoid float drift ── */
+    const toPaise = (n) => Math.round(n * 100);
+    const fromPaise = (p) => Number((p / 100).toFixed(2));
+
+    /* ── Compute carry-forward balance from all rows BEFORE this page ── */
+    let carryBalP = 0;   // balance in paise
+
+    if (offset > 0) {
+      const CARRY_BATCH = 300;
+      let carryOffset = 0;
+      let isFirstRecord = true;
+
+      while (carryOffset < offset) {
+        const batchSize = Math.min(CARRY_BATCH, offset - carryOffset);
+        const priorRows = await zcql.executeZCQLQuery(
+          `SELECT Transaction_Type, Total_Amount, STT
+           FROM Cash_Balance_Per_Transaction
+           WHERE ${conditions}
+           ORDER BY Sequence ASC
+           LIMIT ${carryOffset}, ${batchSize}`
+        );
+        if (!priorRows || priorRows.length === 0) break;
+
+        for (const r of priorRows) {
+          const row = r.Cash_Balance_Per_Transaction || r;
+          const tranType = row.Transaction_Type || "";
+          const amtP = toPaise(Math.abs(Number(row.Total_Amount) || 0));
+          const sttP = toPaise(Math.abs(Number(row.STT) || 0));
+
+          if (isFirstRecord && tranType === "CS+") {
+            carryBalP = amtP - sttP;
+            isFirstRecord = false;
+          } else if (CASH_ADD.includes(tranType)) {
+            carryBalP += amtP - sttP;
+          } else if (CASH_SUBTRACT.includes(tranType)) {
+            carryBalP -= (amtP + sttP);
+          }
+        }
+
+        if (isFirstRecord && priorRows.length > 0) isFirstRecord = false;
+        carryOffset += priorRows.length;
+        if (priorRows.length < CARRY_BATCH) break;
+      }
+    }
+
+    /* ── Fetch current page rows ── */
     const dataRows = await zcql.executeZCQLQuery(
       `SELECT ROWID, Account_Code, Transaction_Date, Settlement_Date, ISIN, Security_Name,
               Transaction_Type, Quantity, Price, Total_Amount, Cash_Balance, STT, Sequence
@@ -101,11 +147,34 @@ export const getCashPassbook = async (req, res) => {
        LIMIT ${offset}, ${size}`
     );
 
+    /* ── Compute running balance for current page (in paise) ── */
+    let runBalP = carryBalP;
+    let isFirstRecord = (offset === 0);
+
     const data = dataRows.map((r) => {
       const row = r.Cash_Balance_Per_Transaction || r;
       const tranType = row.Transaction_Type || "";
-      const amount = Number(row.Total_Amount) || 0;
+      const amount = Math.abs(Number(row.Total_Amount) || 0);
+      const amtP = toPaise(amount);
+      const sttP = toPaise(Math.abs(Number(row.STT) || 0));
 
+      // Update running balance in paise
+      const prevP = runBalP;
+      if (isFirstRecord && tranType === "CS+") {
+        runBalP = amtP - sttP;
+        isFirstRecord = false;
+      } else if (CASH_ADD.includes(tranType)) {
+        runBalP += amtP - sttP;
+      } else if (CASH_SUBTRACT.includes(tranType)) {
+        runBalP -= (amtP + sttP);
+      }
+
+      const computedBalance = fromPaise(runBalP);
+
+      // Debug log (temporary)
+      console.log(`[CB] ${tranType} | prev=₹${fromPaise(prevP)} amt=₹${fromPaise(amtP)} stt=₹${fromPaise(sttP)} => bal=₹${computedBalance}`);
+
+      // Debit / Credit for display (show original amount)
       let debit = null;
       let credit = null;
       if (CASH_SUBTRACT.includes(tranType)) {
@@ -125,13 +194,23 @@ export const getCashPassbook = async (req, res) => {
         Quantity: row.Quantity,
         Price: row.Price,
         Total_Amount: row.Total_Amount,
-        Cash_Balance: row.Cash_Balance,
+        Cash_Balance: computedBalance,
+        debug_old_balance: row.Cash_Balance,
         STT: row.STT,
         Sequence: row.Sequence,
         Debit: debit,
         Credit: credit,
       };
     });
+
+    // Debug: log first 3 rows to verify what's being sent
+    console.log("[CB] FINAL RESPONSE (first 3 rows):", data.slice(0, 3).map(d => ({
+      type: d.Transaction_Type,
+      amount: d.Total_Amount,
+      stt: d.STT,
+      Cash_Balance: d.Cash_Balance,
+      debug_old_balance: d.debug_old_balance,
+    })));
 
     return res.json({
       data,
@@ -148,3 +227,4 @@ export const getCashPassbook = async (req, res) => {
     });
   }
 };
+

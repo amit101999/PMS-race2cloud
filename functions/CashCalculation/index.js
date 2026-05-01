@@ -6,7 +6,10 @@
 
 const catalyst = require("zcatalyst-sdk-node");
 
-const applyCashEffect = (balance, tranType, amount) => {
+const applyCashEffect = (balance, tranType, amount, stt = 0) => {
+  const amt = Math.abs(Number(amount)) || 0;
+  const sttVal = Math.abs(Number(stt)) || 0;
+
   if (
     tranType === "CS+" ||
     tranType === "SL+" ||
@@ -20,7 +23,7 @@ const applyCashEffect = (balance, tranType, amount) => {
     tranType === "DI1" ||
     tranType === "IN+"
   ) {
-    return balance + amount;
+    return balance + amt - sttVal;
   }
 
   if (
@@ -39,7 +42,7 @@ const applyCashEffect = (balance, tranType, amount) => {
     tranType === "NF-" ||
     tranType === "SQB"
   ) {
-    return balance - amount;
+    return balance - amt - sttVal;
   }
 
   return balance;
@@ -96,7 +99,7 @@ module.exports = async (jobRequest, context) => {
         // 2️⃣ Fetch & process new transactions
         while (true) {
           const query = `
-            SELECT ROWID, SETDATE, Tran_Type, Net_Amount
+            SELECT ROWID, SETDATE, Tran_Type, Net_Amount, STT
             FROM Transaction
             WHERE WS_Account_code = '${acc.replace(/'/g, "''")}'
             ${lastTranId ? `AND ROWID > '${lastTranId}'` : ""}
@@ -113,7 +116,8 @@ module.exports = async (jobRequest, context) => {
             balance = applyCashEffect(
               balance,
               t.Tran_Type,
-              Number(t.Net_Amount) || 0
+              Number(t.Net_Amount) || 0,
+              Number(t.STT) || 0
             );
 
             // same date → UPDATE
