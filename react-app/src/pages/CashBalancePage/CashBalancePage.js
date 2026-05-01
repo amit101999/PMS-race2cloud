@@ -444,6 +444,7 @@ function CashBalancePage() {
                           <th>Tran Type</th>
                           <th>QTY</th>
                           <th>Rate</th>
+                          <th>STT</th>
                           <th>Amount</th>
                           <th className="cash-th-balance">Balance</th>
                         </tr>
@@ -462,6 +463,9 @@ function CashBalancePage() {
                               <td>{r.Transaction_Type || "–"}</td>
                               <td>{r.Quantity ?? "–"}</td>
                               <td>{r.Price != null ? formatINR(r.Price) : "–"}</td>
+                              <td className={Number(r.STT) ? "cash-debit" : ""}>
+                                {Number(r.STT) ? `- ${formatINR(r.STT)}` : "–"}
+                              </td>
                               <td className={r.Debit ? "cash-debit" : r.Credit ? "cash-credit" : ""}>
                                 {r.Debit ? `- ${formatINR(r.Debit)}` : r.Credit ? `+ ${formatINR(r.Credit)}` : "–"}
                               </td>

@@ -230,8 +230,7 @@ export const exportTransactionPerAccount = async (req, res) => {
     let totalExported = 0;
 
     for (const t of allRows) {
-      runningBalance = applyCashEffect(runningBalance, t.type, t.totalAmount);
-      runningBalance -= t.stt || 0;
+      runningBalance = applyCashEffect(runningBalance, t.type, t.totalAmount, t.stt);
 
       const line = [
         t.date,

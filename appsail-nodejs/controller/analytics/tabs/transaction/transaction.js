@@ -2,7 +2,11 @@
 // import { fetchDemergerRecordsForAccount } from "../../../../util/analytics/transactionHistory/demergers.js";
 // import { fetchMergerRecordsForAccount } from "../../../../util/analytics/transactionHistory/mergers.js";
 
-export const applyCashEffect = (balance, tranType, amount) => {
+/** Cash credits add (|amount| − STT); debits subtract (|amount| + STT). */
+export const applyCashEffect = (balance, tranType, amount, stt = 0) => {
+  const amt = Math.abs(Number(amount)) || 0;
+  const sttVal = Math.abs(Number(stt)) || 0;
+
   if (
     tranType === "CS+" ||
     tranType === "SL+" ||
@@ -17,7 +21,7 @@ export const applyCashEffect = (balance, tranType, amount) => {
     tranType === "IN+" ||
     tranType === "DIV+"
   ) {
-    return balance + amount;
+    return balance + amt - sttVal;
   }
 
   if (
@@ -36,7 +40,7 @@ export const applyCashEffect = (balance, tranType, amount) => {
     tranType === "NF-" ||
     tranType === "SQB"
   ) {
-    return balance - amount;
+    return balance - amt - sttVal;
   }
 
   return balance;
@@ -430,8 +434,7 @@ export const getPaginatedTransactions = async (req, res) => {
 
     let runningBalance = 0;
     const transactions = allRows.map(t => {
-      runningBalance = applyCashEffect(runningBalance, t.type, t.totalAmount);
-      runningBalance -= t.stt || 0;
+      runningBalance = applyCashEffect(runningBalance, t.type, t.totalAmount, t.stt);
       return Object.assign({}, t, { cashBalance: runningBalance });
     });
 

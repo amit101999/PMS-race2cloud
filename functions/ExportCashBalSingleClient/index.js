@@ -54,11 +54,17 @@ module.exports = async (jobRequest, context) => {
 
     const csvLines = [];
     csvLines.push(
-      "Tran Date,Set Date,Account Code,ISIN,Security Name,Tran Type,QTY,Rate,Amount,Cash Balance,STT\n"
+      "Tran Date,Set Date,Account Code,ISIN,Security Name,Tran Type,QTY,Rate,STT,Amount,Cash Balance\n"
     );
+
+    /* Paise helpers for precision */
+    const toPaise = (n) => Math.round(n * 100);
+    const fromPaise = (p) => Number((p / 100).toFixed(2));
 
     let offset = 0;
     let totalRows = 0;
+    let runBalP = 0;        // running balance in paise
+    let isFirstRecord = true;
 
     while (true) {
       const query = baseQuery + ` LIMIT ${BATCH} OFFSET ${offset}`;
@@ -69,6 +75,18 @@ module.exports = async (jobRequest, context) => {
         const row = r.Cash_Balance_Per_Transaction || r;
         const tranType = (row.Transaction_Type || "").trim();
         const totalAmount = Number(row.Total_Amount) || 0;
+        const amtP = toPaise(Math.abs(totalAmount));
+        const sttP = toPaise(Math.abs(Number(row.STT) || 0));
+
+        // Compute running balance in paise
+        if (isFirstRecord && tranType === "CS+") {
+          runBalP = amtP - sttP;
+          isFirstRecord = false;
+        } else if (CASH_ADD.includes(tranType)) {
+          runBalP += amtP - sttP;
+        } else if (CASH_SUBTRACT.includes(tranType)) {
+          runBalP -= (amtP + sttP);
+        }
 
         let amountStr = "";
         if (CASH_SUBTRACT.includes(tranType)) {
@@ -88,9 +106,9 @@ module.exports = async (jobRequest, context) => {
           csvCell(tranType),
           csvCell(row.Quantity),
           csvCell(row.Price),
-          csvCell(amountStr),
-          csvCell(row.Cash_Balance),
           csvCell(row.STT),
+          csvCell(amountStr),
+          csvCell(fromPaise(runBalP)),
         ].join(",");
 
         csvLines.push(line + "\n");
