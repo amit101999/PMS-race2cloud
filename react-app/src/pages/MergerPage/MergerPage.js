@@ -28,12 +28,9 @@ function escapeCsvCell(value) {
   return s;
 }
 
-/** WAP on old ISIN: holding value ÷ old qty (matches backend FIFO COA / holdings). */
-function mergerOldWapFromRow(row) {
-  const q = Number(row?.holdingsOnRecordDate ?? row?.holdingsOldIsin1);
-  const cost = Number(row?.totalCarriedCost);
-  if (!Number.isFinite(q) || q <= 0 || !Number.isFinite(cost)) return null;
-  return cost / q;
+/** Stable React key for a lot-level preview row. */
+function lotRowKey(row, idx) {
+  return `${row.accountCode}|${row.sourceType ?? ""}|${row.sourceRowId ?? ""}|${row.lotTrandate ?? ""}|${idx}`;
 }
 
 function MergerPage() {
@@ -53,9 +50,12 @@ function MergerPage() {
   const [formError, setFormError] = useState(null);
   const [apiError, setApiError] = useState(null);
   const [previewRows, setPreviewRows] = useState([]);
+  const [previewMeta, setPreviewMeta] = useState(null);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [applyLoading, setApplyLoading] = useState(false);
   const [applySuccess, setApplySuccess] = useState(null);
+  const [applyStatus, setApplyStatus] = useState(null);
+  const applyPollRef = useRef(null);
 
   const PAGE_SIZE = 10;
   const [page, setPage] = useState(1);
@@ -73,6 +73,16 @@ function MergerPage() {
     setFormError(null);
     setApiError(null);
     setApplySuccess(null);
+    setApplyStatus(null);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (applyPollRef.current) {
+        clearInterval(applyPollRef.current);
+        applyPollRef.current = null;
+      }
+    };
   }, []);
 
   useEffect(() => {
@@ -239,6 +249,7 @@ function MergerPage() {
   const handleFetchPreview = async () => {
     clearStatus();
     setPreviewRows([]);
+    setPreviewMeta(null);
     const err = validateForm();
     if (err) {
       setFormError(err);
@@ -257,12 +268,82 @@ function MergerPage() {
         return;
       }
       setPreviewRows(Array.isArray(data.data) ? data.data : []);
+      setPreviewMeta(data.meta || null);
     } catch (e) {
       setApiError(e.message || "Preview request failed");
     } finally {
       setPreviewLoading(false);
     }
   };
+
+  const stopApplyPoll = useCallback(() => {
+    if (applyPollRef.current) {
+      clearInterval(applyPollRef.current);
+      applyPollRef.current = null;
+    }
+  }, []);
+
+  /**
+   * Poll /merger/apply-status every 3s. Stop on terminal status or after
+   * MAX_POLL_ATTEMPTS to avoid forever spinning if the worker stalls.
+   */
+  const startApplyPoll = useCallback(
+    (jobName) => {
+      stopApplyPoll();
+      const POLL_INTERVAL_MS = 3000;
+      const MAX_POLL_ATTEMPTS = 200;
+      let attempts = 0;
+
+      const tick = async () => {
+        attempts += 1;
+        try {
+          const url = `${BASE_URL}/merger/apply-status?jobName=${encodeURIComponent(jobName)}`;
+          const res = await fetch(url);
+          const data = await res.json().catch(() => ({}));
+          if (!data?.success) {
+            setApiError(data?.message || `Status check failed (HTTP ${res.status})`);
+            stopApplyPoll();
+            setApplyLoading(false);
+            return;
+          }
+          const status = String(data.status || "").toUpperCase();
+          setApplyStatus(status);
+
+          if (status === "COMPLETED") {
+            stopApplyPoll();
+            setApplyLoading(false);
+            setApplySuccess("Merger applied successfully.");
+            return;
+          }
+          if (status === "FAILED" || status === "ERROR") {
+            stopApplyPoll();
+            setApplyLoading(false);
+            setApiError(
+              status === "FAILED"
+                ? "Merger application failed. Check function logs in Catalyst."
+                : "Merger application is stale or errored. Try again.",
+            );
+            return;
+          }
+          if (attempts >= MAX_POLL_ATTEMPTS) {
+            stopApplyPoll();
+            setApplyLoading(false);
+            setApiError(
+              "Merger is taking longer than expected. Refresh the page or check Catalyst job logs.",
+            );
+          }
+        } catch (e) {
+          stopApplyPoll();
+          setApplyLoading(false);
+          setApiError(e.message || "Status check error");
+        }
+      };
+
+      tick();
+      applyPollRef.current = setInterval(tick, POLL_INTERVAL_MS);
+    },
+    [stopApplyPoll],
+  );
 
   const handleApply = async () => {
     clearStatus();
@@ -276,6 +357,7 @@ function MergerPage() {
       return;
     }
     setApplyLoading(true);
+    setApplyStatus("PENDING");
     try {
       const res = await fetch(`${BASE_URL}/merger/apply`, {
         method: "POST",
@@ -285,13 +367,18 @@ function MergerPage() {
       const data = await res.json();
       if (!data.success) {
         setApiError(data.message || data.detail || "Apply failed");
+        setApplyLoading(false);
         return;
       }
-      setApplySuccess(data.message || "Merger applied.");
-      // setPreviewRows([]);
+      const jobName = data.jobName;
+      if (!jobName) {
+        setApiError("Apply queued but no jobName returned.");
+        setApplyLoading(false);
+        return;
+      }
+      startApplyPoll(jobName);
     } catch (e) {
       setApiError(e.message || "Apply request failed");
-    } finally {
       setApplyLoading(false);
     }
   };
@@ -304,42 +391,33 @@ function MergerPage() {
     const headers = [
       "Account Code",
       "Old ISIN",
-      "New ISIN",
-      "Old Qty",
-      "Old WAP",
+      "Effective Date",
+      "WAP",
+      "QTY",
       "Ratio 1",
       "Ratio 2",
-      "New Qty",
       "New WAP",
-      "Holding Value",
-      "Effective Date",
-      "Record Date",
+      "New ISIN",
+      "New QTY",
     ];
     const lines = [headers.map(escapeCsvCell).join(",")];
     for (const row of previewRows) {
       const oldIsinVal = row.oldIsin ?? (o || "");
       const newIsinVal = row.newIsin || newIsinTrimmed;
-      const oldQty = row.holdingsOnRecordDate ?? row.holdingsOldIsin1 ?? "";
-      const oldWapVal = mergerOldWapFromRow(row);
       const r1 = row.ratio1 ?? ratio1;
       const r2 = row.ratio2 ?? ratio2;
-      const newQty = row.totalNewShares ?? "";
-      const newWapVal = row.mergedWAP;
-      const hv = row.totalCarriedCost ?? "";
       lines.push(
         [
           row.accountCode,
           oldIsinVal,
-          newIsinVal,
-          oldQty,
-          oldWapVal === null ? "" : oldWapVal,
+          effectiveDate,
+          row.lotCostPerShare ?? "",
+          row.lotQty ?? "",
           r1,
           r2,
-          newQty,
-          newWapVal ?? "",
-          hv,
-          effectiveDate,
-          recordDate,
+          row.newWAP ?? "",
+          newIsinVal,
+          row.newQty ?? "",
         ]
           .map(escapeCsvCell)
           .join(","),
@@ -348,7 +426,7 @@ function MergerPage() {
     const csv = lines.join("\r\n");
     const safeDate = (recordDate || "nodate").replace(/[^\d-]/g, "") || "nodate";
     const safeIsin = (newIsinTrimmed || "merger").replace(/[^A-Za-z0-9_-]/g, "") || "merger";
-    const filename = `merger-preview_${safeDate}_${safeIsin}.csv`;
+    const filename = `merger-preview-lots_${safeDate}_${safeIsin}.csv`;
     const blob = new Blob(["\ufeff", csv], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -572,7 +650,6 @@ function MergerPage() {
       {previewRows.length > 0 && (
         <div className="bonus-preview-wrapper full-width">
           <div className="merger-preview-header-row">
-            <h3>Merger preview</h3>
             <div className="bonus-preview-actions">
               <button
                 type="button"
@@ -584,37 +661,66 @@ function MergerPage() {
             </div>
           </div>
 
+          {previewMeta ? (
+            <div
+              className="merger-preview-summary"
+              style={{
+                margin: "8px 0 12px 0",
+                padding: "8px 12px",
+                background: "#f4f7fb",
+                border: "1px solid #d8dde5",
+                borderRadius: 6,
+                fontSize: 13,
+                lineHeight: 1.6,
+                display: "flex",
+                gap: 18,
+                flexWrap: "wrap",
+              }}
+            >
+              <span><strong>Accounts affected:</strong> {previewMeta.accountsAffected ?? "—"}</span>
+              <span><strong>Surviving lots:</strong> {previewMeta.survivingLots ?? "—"}</span>
+              <span><strong>New shares total:</strong> {previewMeta.totalNewShares ?? "—"}</span>
+              <span><strong>Carried cost:</strong> {fmtNum(previewMeta.totalCarriedCost)}</span>
+              <span><strong>Skipped lots (round-to-0):</strong> {previewMeta.skippedZeroLots ?? 0}</span>
+              <span><strong>Skipped cost basis:</strong> {fmtNum(previewMeta.skippedCostBasis)}</span>
+            </div>
+          ) : null}
+
           <div className="bonus-preview-table-wrapper merger-preview-table-scroll">
             <table className="bonus-preview-table merger-preview-detail-table">
               <thead>
                 <tr>
                   <th>Account code</th>
                   <th>Old ISIN</th>
-                  <th>New ISIN</th>
-                  <th>Old Qty</th>
-                  <th>Old WAP</th>
+                  <th>Effective Date</th>
+                  <th>WAP</th>
+                  <th>QTY</th>
                   <th>Ratio 1</th>
                   <th>Ratio 2</th>
-                  <th>New Qty</th>
                   <th>New WAP</th>
-                  <th>Holding Value</th>
+                  <th>New ISIN</th>
+                  <th>New QTY</th>
                 </tr>
               </thead>
               <tbody>
-                {paginatedPreview.map((row) => {
-                  const oldWap = mergerOldWapFromRow(row);
+                {paginatedPreview.map((row, idx) => {
+                  const skipped = !!row.willSkip;
                   return (
-                    <tr key={row.accountCode}>
+                    <tr
+                      key={lotRowKey(row, (page - 1) * PAGE_SIZE + idx)}
+                      style={skipped ? { background: "#fff7f0", color: "#7a4a1a" } : undefined}
+                      title={skipped ? "Lot rounds to 0 — will be skipped on apply." : undefined}
+                    >
                       <td className="merger-account-cell">{row.accountCode}</td>
                       <td>{row.oldIsin ?? (norm(oldIsin) || "—")}</td>
-                      <td>{row.newIsin || newIsinTrimmed}</td>
-                      <td>{row.holdingsOnRecordDate ?? row.holdingsOldIsin1 ?? "—"}</td>
-                      <td>{oldWap === null ? "—" : fmtNum(oldWap)}</td>
+                      <td>{effectiveDate || "—"}</td>
+                      <td>{fmtNum(row.lotCostPerShare)}</td>
+                      <td>{fmtNum(row.lotQty)}</td>
                       <td>{row.ratio1 ?? ratio1}</td>
                       <td>{row.ratio2 ?? ratio2}</td>
-                      <td>{row.totalNewShares}</td>
-                      <td>{fmtNum(row.mergedWAP)}</td>
-                      <td>{fmtNum(row.totalCarriedCost)}</td>
+                      <td>{fmtNum(row.newWAP)}</td>
+                      <td>{row.newIsin || newIsinTrimmed}</td>
+                      <td>{row.newQty}</td>
                     </tr>
                   );
                 })}
@@ -651,8 +757,15 @@ function MergerPage() {
               disabled={applyLoading}
               onClick={handleApply}
             >
-              {applyLoading ? "Applying merger..." : "Confirm & Apply Merger"}
+              {applyLoading
+                ? applyStatus === "RUNNING"
+                  ? "Running... (this may take a few minutes)"
+                  : "Queued..."
+                : "Confirm & Apply Merger"}
             </button>
+            {applyLoading && applyStatus ? (
+              <span className="merger-job-status">Status: {applyStatus}</span>
+            ) : null}
           </div>
         </div>
       )}

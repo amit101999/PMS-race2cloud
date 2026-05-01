@@ -26,6 +26,11 @@ exports.runFifoEngine = (
   const buyQueue = [];
   const output = [];
 
+  // Tracks the most recently processed merger event (date + oldIsin). Multiple
+  // lot-level Merger rows belonging to the same event are additive — only the
+  // FIRST row of a new event retires the pre-merger queue.
+  let lastMergerEventKey = null;
+
   /* ---------------- DATE NORMALIZATION ---------------- */
   const normalizeDate = (rawDate) => {
     if (!rawDate) return null;
@@ -384,7 +389,7 @@ exports.runFifoEngine = (
       });
     }
 
-    /* ========== MERGER (old ISIN lots retired, replaced by new ISIN lot at carried cost) ========== */
+    /* ========== MERGER (lot-level: multiple rows per event are additive) ========== */
     if (e.type === "MERGER") {
       const qty = Math.abs(Number(e.data.qty) || 0);
       if (!qty) continue;
@@ -394,15 +399,21 @@ exports.runFifoEngine = (
       if (!price && totalAmount && qty) price = totalAmount / qty;
       if (!totalAmount && price && qty) totalAmount = qty * price;
 
-      const activeLots = buyQueue.filter((l) => l.isActive);
-      for (const oldLot of activeLots) {
-        oldLot.isActive = false;
-        const oldRow = output.find((r) => r.lotId === oldLot.lotId && r.isActive);
-        if (oldRow) oldRow.isActive = false;
-      }
-      buyQueue.length = 0;
-
       const mergerDate = normalizeDate(e.data.trandate);
+      const eventKey = `${mergerDate}|${e.data.oldIsin || ""}`;
+
+      if (eventKey !== lastMergerEventKey) {
+        const activeLots = buyQueue.filter((l) => l.isActive);
+        for (const oldLot of activeLots) {
+          oldLot.isActive = false;
+          const oldRow = output.find((r) => r.lotId === oldLot.lotId && r.isActive);
+          if (oldRow) oldRow.isActive = false;
+        }
+        buyQueue.length = 0;
+        holdings = 0;
+        lastMergerEventKey = eventKey;
+      }
+
       const lotId = ++lotCounter;
 
       buyQueue.push({
@@ -414,7 +425,7 @@ exports.runFifoEngine = (
         isActive: true,
       });
 
-      holdings = qty;
+      holdings += qty;
 
       output.push({
         lotId,
