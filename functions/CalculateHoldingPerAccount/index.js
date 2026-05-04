@@ -1,25 +1,53 @@
 /**
- * CalculateHoldingPerAccount (Catalyst Job)
+ * CalculateHoldingPerAccount (Catalyst Function)
  *
- * Reads Transaction (+ Bonus, Split, Demerger_Record, Merger), runs the same FIFO engine
- * as AppSail analytics, and materializes rows into the Holdings table.
+ * Reads Transaction (+ Bonus, Split, Demerger_Record, Merger), runs the same FIFO
+ * engine as AppSail analytics (`util/analytics/transactionHistory/fifo.js`), and
+ * materializes the per-(account, ISIN) FIFO timeline into the Holdings table.
  *
- * Holdings columns: WS_Account_code, LINE_NO, TRANSACTION_DATE, SETTLEMENT_DATE, TYPE,
- * ISIN, QUANTITY, PRICE, TOTAL_AMOUNT, HOLDING, WAP, HOLDING_VALUE, P_L
+ * Holdings columns it writes:
+ *   WS_Account_code, TRANSACTION_DATE, SETTLEMENT_DATE, TYPE, ISIN,
+ *   QUANTITY, PRICE, TOTAL_AMOUNT, HOLDING, WAP, HOLDING_VALUE, P_L, STATUS
  *
- * Configure ACCOUNTS_FILTER / AS_ON_DATE below. Deploy as type "job", then run on a schedule
- * or invoke manually from the Catalyst console (Event functions fire per-row — unsuitable for full rebuilds).
+ * Row order within a pair is preserved by INSERT order — the FIFO output is
+ * already chronologically sorted, so reads can use `ORDER BY ROWID ASC`.
+ *
+ * Mirrors `getHoldingsSummarySimple`:
+ *   - One paged read of Transaction / Bonus per account (NOT per pair).
+ *   - One Demerger_Record / Merger fetch per account.
+ *   - One IN-clause read of Split for all ISINs in the account.
+ *   - Skips ISINs that have been merged away (via Merger.OldISIN) so the
+ *     Holdings table matches what the dashboard chooses to display.
+ *
+ * Configure ACCOUNTS_FILTER / ISINS_FILTER / MAX_PAIRS / DRY_RUN below for test
+ * runs. Deploy and invoke from the Catalyst console (or via the configured
+ * trigger). Event payload (`jobRequest`) is intentionally ignored — this
+ * function always rebuilds the Holdings slice for the selected accounts.
  */
 
 const catalyst = require("zcatalyst-sdk-node");
 
-/** Non-empty array = only these WS_Account_code values; empty array = all accounts found in Transaction */
-const ACCOUNTS_FILTER = [];
+/* ============================== CONFIG ============================== */
 
-/** YYYY-MM-DD inclusive as-on date, or null for full history */
+/** Non-empty array = process only these WS_Account_code values; empty = all accounts found in Transaction. */
+const ACCOUNTS_FILTER = ["NROAYAN03","AYAN008","NROAYAN01","AYAN021","AYAN019","AYAN003","AYAN029","AYAN028","AYAN030","AYAN015"];
+
+/** Non-empty array = process only these ISINs (within selected accounts); empty = all ISINs for the account. */
+const ISINS_FILTER = [];
+
+/** Hard cap on number of (account, ISIN) pairs processed; 0 = unlimited. Useful for first event-fire tests. */
+const MAX_PAIRS = 0;
+
+/** YYYY-MM-DD inclusive cutoff for source data, or null for full history. */
 const AS_ON_DATE = null;
 
+/** When true, computes everything but does not DELETE/INSERT into Holdings (safe smoke test). */
+const DRY_RUN = false;
+
+/** ZCQL paging size. */
 const BATCH = 250;
+
+/* ============================== HELPERS ============================== */
 
 const esc = (s) => String(s ?? "").replace(/'/g, "''");
 
@@ -37,6 +65,15 @@ const getEffectiveDate = (r) => {
     ? setDate || tradeDate
     : tradeDate || setDate;
 };
+
+const nextDayCutoff = (asOnDate) => {
+  if (!asOnDate || !/^\d{4}-\d{2}-\d{2}$/.test(asOnDate)) return null;
+  const nextDay = new Date(asOnDate);
+  nextDay.setDate(nextDay.getDate() + 1);
+  return nextDay.toISOString().split("T")[0];
+};
+
+/* ============================== FETCH (batched per account) ============================== */
 
 async function fetchDistinctAccounts(zcql) {
   const codes = new Set();
@@ -65,282 +102,201 @@ async function fetchDistinctAccounts(zcql) {
   return list;
 }
 
-async function fetchDistinctIsins(zcql, accountCode) {
-  const isins = new Set();
-  let offset = 0;
-  const ac = esc(accountCode);
-  while (true) {
-    const batch = await zcql.executeZCQLQuery(`
-      SELECT ISIN FROM Transaction
-      WHERE WS_Account_code = '${ac}'
-        AND ISIN IS NOT NULL AND ISIN != ''
-      ORDER BY ROWID ASC
-      LIMIT ${BATCH} OFFSET ${offset}
-    `);
-    if (!batch || batch.length === 0) break;
-    for (const row of batch) {
-      const t = row.Transaction || row;
-      const i = String(t.ISIN ?? "").trim();
-      if (i) isins.add(i);
-    }
-    if (batch.length < BATCH) break;
-    offset += BATCH;
-  }
-  return [...isins].sort((a, b) => a.localeCompare(b));
-}
+async function fetchAccountTransactions(zcql, accountCode, asOnDate) {
+  const cutoff = nextDayCutoff(asOnDate);
+  const dateClause = cutoff
+    ? ` AND (TRANDATE < '${cutoff}' OR SETDATE < '${cutoff}')`
+    : "";
 
-async function fetchStockTransactions(zcql, accountCode, isin, asOnDate) {
-  let dateCondition = "";
-  let cutoff = null;
-  if (asOnDate && /^\d{4}-\d{2}-\d{2}$/.test(asOnDate)) {
-    const nextDay = new Date(asOnDate);
-    nextDay.setDate(nextDay.getDate() + 1);
-    const nextDayStr = nextDay.toISOString().split("T")[0];
-    dateCondition = ` AND (TRANDATE < '${nextDayStr}' OR SETDATE < '${nextDayStr}')`;
-    cutoff = nextDayStr;
-  }
-  const where = `
-    WHERE WS_Account_code = '${esc(accountCode)}'
-    AND ISIN = '${esc(isin)}'
-    ${dateCondition}
-  `;
   const rows = [];
-  const seenRowIds = new Set();
+  const seen = new Set();
   let offset = 0;
   while (true) {
     try {
-      const query = `
-        SELECT SETDATE, TRANDATE, Tran_Type, Security_code, QTY, NETRATE, Net_Amount, ISIN, ROWID
+      const batch = await zcql.executeZCQLQuery(`
+        SELECT SETDATE, TRANDATE, Tran_Type, Security_Name, Security_code, QTY, NETRATE, Net_Amount, ISIN, ROWID
         FROM Transaction
-        ${where}
+        WHERE WS_Account_code = '${esc(accountCode)}'
+        ${dateClause}
         ORDER BY SETDATE ASC, ROWID ASC
         LIMIT ${BATCH} OFFSET ${offset}
-      `;
-      const batch = await zcql.executeZCQLQuery(query);
+      `);
       if (!batch || batch.length === 0) break;
       for (const row of batch) {
         const r = row.Transaction || row;
-        if (r.ROWID && seenRowIds.has(r.ROWID)) continue;
-        if (r.ROWID) seenRowIds.add(r.ROWID);
+        if (r.ROWID && seen.has(r.ROWID)) continue;
+        if (r.ROWID) seen.add(r.ROWID);
         rows.push(r);
       }
       if (batch.length < BATCH) break;
       offset += BATCH;
     } catch (err) {
-      console.error(`fetchStockTransactions offset ${offset}:`, err.message);
+      console.error(`fetchAccountTransactions[${accountCode}] offset=${offset}:`, err.message);
       break;
     }
   }
-  const filteredRows = cutoff
+
+  return cutoff
     ? rows.filter((r) => {
-        const effectiveDate = getEffectiveDate(r);
-        return !effectiveDate || effectiveDate < cutoff;
+        const d = getEffectiveDate(r);
+        return !d || d < cutoff;
       })
     : rows;
-
-  return filteredRows.map((r) => ({
-    SETDATE: r.SETDATE,
-    TRANDATE: r.TRANDATE,
-    Tran_Type: r.Tran_Type,
-    tranType: r.Tran_Type,
-    QTY: r.QTY,
-    qty: Number(r.QTY) || 0,
-    NETRATE: r.NETRATE,
-    netrate: Number(r.NETRATE) || 0,
-    Net_Amount: r.Net_Amount,
-    netAmount: Number(r.Net_Amount) || 0,
-    ISIN: r.ISIN || "",
-    isin: r.ISIN || "",
-  }));
 }
 
-async function fetchBonusesForStock(zcql, accountCode, isin, asOnDate) {
-  let dateCondition = "";
-  if (asOnDate && /^\d{4}-\d{2}-\d{2}$/.test(asOnDate)) {
-    const nextDay = new Date(asOnDate);
-    nextDay.setDate(nextDay.getDate() + 1);
-    dateCondition = ` AND ExDate < '${nextDay.toISOString().split("T")[0]}'`;
-  }
+async function fetchAccountBonuses(zcql, accountCode, asOnDate) {
+  const cutoff = nextDayCutoff(asOnDate);
+  const dateClause = cutoff ? ` AND ExDate < '${cutoff}'` : "";
+
   const rows = [];
-  const seenRowIds = new Set();
+  const seen = new Set();
   let offset = 0;
   while (true) {
     try {
-      const query = `
+      const batch = await zcql.executeZCQLQuery(`
         SELECT SecurityCode, SecurityName, ExDate, BonusShare, ISIN, ROWID
         FROM Bonus
         WHERE WS_Account_code = '${esc(accountCode)}'
-        AND ISIN = '${esc(isin)}'
-        ${dateCondition}
+        ${dateClause}
         ORDER BY ExDate ASC, ROWID ASC
         LIMIT ${BATCH} OFFSET ${offset}
-      `;
-      const batch = await zcql.executeZCQLQuery(query);
+      `);
       if (!batch || batch.length === 0) break;
       for (const row of batch) {
         const b = row.Bonus || row;
-        if (b.ROWID && seenRowIds.has(b.ROWID)) continue;
-        if (b.ROWID) seenRowIds.add(b.ROWID);
+        if (b.ROWID && seen.has(b.ROWID)) continue;
+        if (b.ROWID) seen.add(b.ROWID);
         rows.push(b);
       }
       if (batch.length < BATCH) break;
       offset += BATCH;
     } catch (err) {
-      console.error(`fetchBonuses offset ${offset}:`, err.message);
+      console.error(`fetchAccountBonuses[${accountCode}] offset=${offset}:`, err.message);
       break;
     }
   }
-  return rows.map((b) => ({
-    SecurityCode: b.SecurityCode,
-    SecurityName: b.SecurityName,
-    ExDate: b.ExDate,
-    exDate: b.ExDate,
-    BonusShare: b.BonusShare,
-    bonusShare: Number(b.BonusShare) || 0,
-    ISIN: b.ISIN || "",
-    isin: b.ISIN || "",
-  }));
+  return rows;
 }
 
-async function fetchSplitForStock(zcql, isin, asOnDate) {
-  let dateCondition = "";
-  if (asOnDate && /^\d{4}-\d{2}-\d{2}$/.test(asOnDate)) {
-    const nextDay = new Date(asOnDate);
-    nextDay.setDate(nextDay.getDate() + 1);
-    dateCondition = ` AND Issue_Date < '${nextDay.toISOString().split("T")[0]}'`;
-  }
-  const rows = [];
-  const seenRowIds = new Set();
-  let offset = 0;
-  while (true) {
-    try {
-      const query = `
-        SELECT Security_Code, Security_Name, Issue_Date, Ratio1, Ratio2, ISIN, ROWID
-        FROM Split
-        WHERE ISIN = '${esc(isin)}'
-        ${dateCondition}
-        ORDER BY Issue_Date ASC, ROWID ASC
-        LIMIT ${BATCH} OFFSET ${offset}
-      `;
-      const batch = await zcql.executeZCQLQuery(query);
-      if (!batch || batch.length === 0) break;
-      for (const row of batch) {
-        const s = row.Split || row;
-        if (s.ROWID && seenRowIds.has(s.ROWID)) continue;
-        if (s.ROWID) seenRowIds.add(s.ROWID);
-        rows.push(s);
-      }
-      if (batch.length < BATCH) break;
-      offset += BATCH;
-    } catch (err) {
-      console.error(`fetchSplit offset ${offset}:`, err.message);
-      break;
-    }
-  }
-  return rows.map((b) => ({
-    ratio1: Number(b.Ratio1) || 0,
-    ratio2: Number(b.Ratio2) || 0,
-    issueDate: b.Issue_Date,
-    isin: b.ISIN || "",
-  }));
-}
+async function fetchAccountDemergers(zcql, accountCode, asOnDate) {
+  const cutoff = nextDayCutoff(asOnDate);
+  const dateClause = cutoff
+    ? ` AND (TRANDATE < '${cutoff}' OR SETDATE < '${cutoff}')`
+    : "";
 
-async function fetchDemergerRecordsForAccount(zcql, accountCode, asOnDate) {
-  let dateCondition = "";
-  if (asOnDate && /^\d{4}-\d{2}-\d{2}$/.test(asOnDate)) {
-    const nextDay = new Date(asOnDate);
-    nextDay.setDate(nextDay.getDate() + 1);
-    dateCondition = ` AND (TRANDATE < '${nextDay.toISOString().split("T")[0]}' OR SETDATE < '${nextDay.toISOString().split("T")[0]}')`;
-  }
   const rows = [];
   const seen = new Set();
   let offset = 0;
   while (true) {
-    const batch = await zcql.executeZCQLQuery(`
-      SELECT *
-      FROM Demerger_Record
-      WHERE WS_Account_code = '${esc(accountCode)}'
-      ${dateCondition}
-      ORDER BY TRANDATE ASC, ROWID ASC
-      LIMIT ${BATCH} OFFSET ${offset}
-    `);
-    if (!batch || batch.length === 0) break;
-    for (const row of batch) {
-      const d = row.Demerger_Record || row;
-      const rid = d.ROWID;
-      if (rid != null && seen.has(rid)) continue;
-      if (rid != null) seen.add(rid);
-      rows.push(d);
+    try {
+      const batch = await zcql.executeZCQLQuery(`
+        SELECT *
+        FROM Demerger_Record
+        WHERE WS_Account_code = '${esc(accountCode)}'
+        ${dateClause}
+        ORDER BY TRANDATE ASC, ROWID ASC
+        LIMIT ${BATCH} OFFSET ${offset}
+      `);
+      if (!batch || batch.length === 0) break;
+      for (const row of batch) {
+        const d = row.Demerger_Record || row;
+        if (d.ROWID != null && seen.has(d.ROWID)) continue;
+        if (d.ROWID != null) seen.add(d.ROWID);
+        rows.push(d);
+      }
+      if (batch.length < BATCH) break;
+      offset += BATCH;
+    } catch (err) {
+      console.error(`fetchAccountDemergers[${accountCode}] offset=${offset}:`, err.message);
+      break;
     }
-    if (batch.length < BATCH) break;
-    offset += BATCH;
   }
   return rows.filter(
     (d) => String(d.Tran_Type || d.tran_type || "").toUpperCase() === "DEMERGER",
   );
 }
 
-async function fetchDemergerRecordsForStock(zcql, accountCode, isin, asOnDate) {
-  const all = await fetchDemergerRecordsForAccount(zcql, accountCode, asOnDate);
-  const u = String(isin || "").trim().toUpperCase();
-  return all.filter((d) => String(d.ISIN || d.isin || "").trim().toUpperCase() === u);
-}
+async function fetchAccountMergers(zcql, accountCode, asOnDate) {
+  const cutoff = nextDayCutoff(asOnDate);
+  const dateClause = cutoff
+    ? ` AND (TRANDATE < '${cutoff}' OR SETDATE < '${cutoff}')`
+    : "";
 
-async function fetchMergerRecordsForAccount(zcql, accountCode, asOnDate) {
-  let dateCondition = "";
-  if (asOnDate && /^\d{4}-\d{2}-\d{2}$/.test(asOnDate)) {
-    const nextDay = new Date(asOnDate);
-    nextDay.setDate(nextDay.getDate() + 1);
-    dateCondition = ` AND (TRANDATE < '${nextDay.toISOString().split("T")[0]}' OR SETDATE < '${nextDay.toISOString().split("T")[0]}')`;
-  }
   const rows = [];
   const seen = new Set();
   let offset = 0;
   while (true) {
-    const batch = await zcql.executeZCQLQuery(`
-      SELECT *
-      FROM Merger
-      WHERE WS_Account_code = '${esc(accountCode)}'
-      ${dateCondition}
-      ORDER BY TRANDATE ASC, ROWID ASC
-      LIMIT ${BATCH} OFFSET ${offset}
-    `);
-    if (!batch || batch.length === 0) break;
-    for (const row of batch) {
-      const m = row.Merger || row;
-      const rid = m.ROWID;
-      if (rid != null && seen.has(rid)) continue;
-      if (rid != null) seen.add(rid);
-      rows.push(m);
+    try {
+      const batch = await zcql.executeZCQLQuery(`
+        SELECT *
+        FROM Merger
+        WHERE WS_Account_code = '${esc(accountCode)}'
+        ${dateClause}
+        ORDER BY TRANDATE ASC, ROWID ASC
+        LIMIT ${BATCH} OFFSET ${offset}
+      `);
+      if (!batch || batch.length === 0) break;
+      for (const row of batch) {
+        const m = row.Merger || row;
+        if (m.ROWID != null && seen.has(m.ROWID)) continue;
+        if (m.ROWID != null) seen.add(m.ROWID);
+        rows.push(m);
+      }
+      if (batch.length < BATCH) break;
+      offset += BATCH;
+    } catch (err) {
+      console.error(`fetchAccountMergers[${accountCode}] offset=${offset}:`, err.message);
+      break;
     }
-    if (batch.length < BATCH) break;
-    offset += BATCH;
   }
   return rows.filter(
     (m) => String(m.Tran_Type || m.tran_type || "").toUpperCase() === "MERGER",
   );
 }
 
-async function fetchMergerRecordsForStock(zcql, accountCode, isin, asOnDate) {
-  const all = await fetchMergerRecordsForAccount(zcql, accountCode, asOnDate);
-  const u = String(isin || "").trim().toUpperCase();
-  return all.filter((m) => String(m.ISIN || m.isin || "").trim().toUpperCase() === u);
+async function fetchSplitsForIsins(zcql, isins, asOnDate) {
+  if (!isins || !isins.length) return [];
+  const cutoff = nextDayCutoff(asOnDate);
+  const dateClause = cutoff ? ` AND Issue_Date < '${cutoff}'` : "";
+  const inClause = isins.map((i) => `'${esc(i)}'`).join(",");
+
+  const rows = [];
+  const seen = new Set();
+  let offset = 0;
+  while (true) {
+    try {
+      const batch = await zcql.executeZCQLQuery(`
+        SELECT Security_Code, Security_Name, Issue_Date, Ratio1, Ratio2, ISIN, ROWID
+        FROM Split
+        WHERE ISIN IN (${inClause})
+        ${dateClause}
+        ORDER BY Issue_Date ASC, ROWID ASC
+        LIMIT ${BATCH} OFFSET ${offset}
+      `);
+      if (!batch || batch.length === 0) break;
+      for (const row of batch) {
+        const s = row.Split || row;
+        if (s.ROWID && seen.has(s.ROWID)) continue;
+        if (s.ROWID) seen.add(s.ROWID);
+        rows.push(s);
+      }
+      if (batch.length < BATCH) break;
+      offset += BATCH;
+    } catch (err) {
+      console.error(`fetchSplitsForIsins offset=${offset}:`, err.message);
+      break;
+    }
+  }
+
+  return rows.map((s) => ({
+    ratio1: Number(s.Ratio1) || 0,
+    ratio2: Number(s.Ratio2) || 0,
+    issueDate: s.Issue_Date,
+    isin: s.ISIN || "",
+  }));
 }
 
-/* ========= FIFO engine (aligned with appsail-nodejs/util/analytics/transactionHistory/fifo.js) ========= */
-
-/**
- * Tie-breaker for events that share the same date.
- * SPLIT must be processed BEFORE BONUS so that bonus shares (stored in the DB
- * as the post-split count) are not multiplied a second time by the split.
- */
-const EVENT_TYPE_PRIORITY = {
-  TXN: 0,
-  SPLIT: 1,
-  BONUS: 2,
-  DEMERGER: 3,
-  MERGER: 4,
-};
+/* ============================== FIFO ENGINE (mirror of analytics fifo.js) ============================== */
 
 function runFifoEngine(
   transactions = [],
@@ -370,7 +326,7 @@ function runFifoEngine(
 
   const normalizeDate = (rawDate) => {
     if (!rawDate) return null;
-    const [y, m, d] = rawDate.split("-").map(Number);
+    const [y, m, d] = String(rawDate).split("-").map(Number);
     const fullYear = y < 100 ? 2000 + y : y;
     return `${fullYear}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
   };
@@ -462,11 +418,7 @@ function runFifoEngine(
           },
         };
       }),
-  ].sort((a, b) => {
-    const dateDiff = new Date(a.date) - new Date(b.date);
-    if (dateDiff !== 0) return dateDiff;
-    return (EVENT_TYPE_PRIORITY[a.type] ?? 99) - (EVENT_TYPE_PRIORITY[b.type] ?? 99);
-  });
+  ].sort((a, b) => new Date(a.date) - new Date(b.date));
 
   const isSell = (t) => /^SL\+|SQS|OPO|NF-/.test(String(t).toUpperCase());
 
@@ -477,6 +429,7 @@ function runFifoEngine(
 
   for (const e of events) {
     const t = e.data;
+
     if (e.type === "TXN") {
       const qty = Math.abs(Number(t.qty) || 0);
       if (!qty) continue;
@@ -783,15 +736,18 @@ function runFifoEngine(
   return output;
 }
 
+/* ============================== HOLDINGS WRITER ============================== */
+
 async function deleteHoldingsForPair(zcql, accountCode, isin) {
   await zcql.executeZCQLQuery(`
-    DELETE FROM Holdings WHERE WS_Account_code = '${esc(accountCode)}' AND ISIN = '${esc(isin)}'
+    DELETE FROM Holdings
+    WHERE WS_Account_code = '${esc(accountCode)}' AND ISIN = '${esc(isin)}'
   `);
 }
 
-async function insertHoldingsRow(zcql, accountCode, lineNo, row, displayIsin) {
+async function insertHoldingsRow(zcql, accountCode, row, displayIsin) {
   const txD = sqlDate(row.originalTrandate || row.trandate);
-  const setD = sqlDate(row.setdate);
+  const setD = sqlDate(row.setdate || row.trandate);
   const typ = String(row.tranType ?? "").trim();
   const qty = Number(row.qty) || 0;
   const price = Number(row.price) || 0;
@@ -803,14 +759,14 @@ async function insertHoldingsRow(zcql, accountCode, lineNo, row, displayIsin) {
     row.profitLoss === null || row.profitLoss === undefined
       ? "NULL"
       : Number(row.profitLoss);
+  const status = row.isActive ? "true" : "false";
 
   await zcql.executeZCQLQuery(`
     INSERT INTO Holdings (
-      WS_Account_code, LINE_NO, TRANSACTION_DATE, SETTLEMENT_DATE, TYPE, ISIN,
-      QUANTITY, PRICE, TOTAL_AMOUNT, HOLDING, WAP, HOLDING_VALUE, P_L
+      WS_Account_code, TRANSACTION_DATE, SETTLEMENT_DATE, TYPE, ISIN,
+      QUANTITY, PRICE, TOTAL_AMOUNT, HOLDING, WAP, HOLDING_VALUE, P_L, STATUS
     ) VALUES (
       '${esc(accountCode)}',
-      ${lineNo},
       '${esc(txD)}',
       '${esc(setD)}',
       '${esc(typ)}',
@@ -821,72 +777,175 @@ async function insertHoldingsRow(zcql, accountCode, lineNo, row, displayIsin) {
       ${holding},
       ${wap},
       ${hv},
-      ${pl}
+      ${pl},
+      ${status}
     )
   `);
 }
 
-async function rebuildHoldingsForPair(zcql, accountCode, isin, asOnDate) {
-  const transactions = await fetchStockTransactions(zcql, accountCode, isin, asOnDate);
-  const bonuses = await fetchBonusesForStock(zcql, accountCode, isin, asOnDate);
-  const splits = await fetchSplitForStock(zcql, isin, asOnDate);
-  const demergers = await fetchDemergerRecordsForStock(zcql, accountCode, isin, asOnDate);
-  const mergers = await fetchMergerRecordsForStock(zcql, accountCode, isin, asOnDate);
+/* ============================== PER-ACCOUNT REBUILD ============================== */
 
-  if (
-    transactions.length === 0 &&
-    bonuses.length === 0 &&
-    splits.length === 0 &&
-    demergers.length === 0 &&
-    mergers.length === 0
-  ) {
-    await deleteHoldingsForPair(zcql, accountCode, isin);
-    return 0;
+async function rebuildHoldingsForAccount(zcql, accountCode, asOnDate, counters) {
+  const t0 = Date.now();
+
+  const transactions = await fetchAccountTransactions(zcql, accountCode, asOnDate);
+  const bonuses = await fetchAccountBonuses(zcql, accountCode, asOnDate);
+  const demergers = await fetchAccountDemergers(zcql, accountCode, asOnDate);
+  const mergers = await fetchAccountMergers(zcql, accountCode, asOnDate);
+
+  const isins = new Set();
+  for (const t of transactions) if (t.ISIN) isins.add(t.ISIN);
+  for (const b of bonuses) if (b.ISIN) isins.add(b.ISIN);
+  for (const d of demergers) if (d.ISIN) isins.add(d.ISIN);
+  for (const m of mergers) if (m.ISIN) isins.add(m.ISIN);
+
+  let isinList = [...isins];
+  if (ISINS_FILTER.length > 0) {
+    const allow = new Set(ISINS_FILTER.map(String));
+    isinList = isinList.filter((i) => allow.has(i));
   }
 
-  const fifoRows = runFifoEngine(transactions, bonuses, splits, false, demergers, mergers);
-  if (!Array.isArray(fifoRows) || fifoRows.length === 0) {
-    await deleteHoldingsForPair(zcql, accountCode, isin);
-    return 0;
+  const splits = await fetchSplitsForIsins(zcql, isinList, asOnDate);
+
+  // Match dashboard behavior: ISINs that appear as Merger.OldISIN are merged
+  // away — the surviving (new) ISIN is used instead.
+  const mergedAwayIsins = new Set();
+  for (const m of mergers) {
+    const oldIsin = String(m.OldISIN || m.oldIsin || "").trim();
+    if (oldIsin) mergedAwayIsins.add(oldIsin);
   }
 
-  await deleteHoldingsForPair(zcql, accountCode, isin);
+  // Group inputs by ISIN.
+  const txByIsin = {};
+  const bonusByIsin = {};
+  const splitByIsin = {};
+  const demergerByIsin = {};
+  const mergerByIsin = {};
 
-  let lineNo = 1;
-  for (const r of fifoRows) {
-    await insertHoldingsRow(zcql, accountCode, lineNo, r, isin);
-    lineNo++;
+  for (const t of transactions) {
+    if (!t.ISIN) continue;
+    (txByIsin[t.ISIN] = txByIsin[t.ISIN] || []).push(t);
   }
-  return fifoRows.length;
+  for (const b of bonuses) {
+    if (!b.ISIN) continue;
+    (bonusByIsin[b.ISIN] = bonusByIsin[b.ISIN] || []).push(b);
+  }
+  for (const s of splits) {
+    if (!s.isin) continue;
+    (splitByIsin[s.isin] = splitByIsin[s.isin] || []).push(s);
+  }
+  for (const d of demergers) {
+    if (!d.ISIN) continue;
+    (demergerByIsin[d.ISIN] = demergerByIsin[d.ISIN] || []).push(d);
+  }
+  for (const m of mergers) {
+    if (!m.ISIN) continue;
+    (mergerByIsin[m.ISIN] = mergerByIsin[m.ISIN] || []).push(m);
+  }
+
+  const targetIsins = isinList.filter((i) => !mergedAwayIsins.has(i));
+
+  console.log(
+    `[${accountCode}] tx=${transactions.length} bon=${bonuses.length} ` +
+    `spl=${splits.length} dmg=${demergers.length} mrg=${mergers.length} ` +
+    `isins=${isinList.length} mergedAway=${mergedAwayIsins.size} ` +
+    `pairs=${targetIsins.length} (fetched in ${Date.now() - t0}ms)`,
+  );
+
+  for (const isin of targetIsins) {
+    if (MAX_PAIRS > 0 && counters.pairs >= MAX_PAIRS) {
+      console.log(`MAX_PAIRS=${MAX_PAIRS} reached, stopping early`);
+      return;
+    }
+
+    counters.pairs++;
+
+    let fifoRows;
+    try {
+      fifoRows = runFifoEngine(
+        txByIsin[isin] || [],
+        bonusByIsin[isin] || [],
+        splitByIsin[isin] || [],
+        false,
+        demergerByIsin[isin] || [],
+        mergerByIsin[isin] || [],
+      );
+    } catch (err) {
+      console.error(`[${accountCode}/${isin}] FIFO failed:`, err.message);
+      counters.errors++;
+      continue;
+    }
+
+    const rowCount = Array.isArray(fifoRows) ? fifoRows.length : 0;
+
+    if (DRY_RUN) {
+      console.log(
+        `[DRY_RUN][${accountCode}/${isin}] would write ${rowCount} row(s)`,
+      );
+      counters.rows += rowCount;
+      continue;
+    }
+
+    if (!rowCount) {
+      try {
+        await deleteHoldingsForPair(zcql, accountCode, isin);
+      } catch (err) {
+        console.error(`[${accountCode}/${isin}] delete (empty) failed:`, err.message);
+        counters.errors++;
+      }
+      continue;
+    }
+
+    try {
+      await deleteHoldingsForPair(zcql, accountCode, isin);
+      for (const r of fifoRows) {
+        await insertHoldingsRow(zcql, accountCode, r, isin);
+      }
+      counters.rows += rowCount;
+    } catch (err) {
+      console.error(`[${accountCode}/${isin}] rebuild failed:`, err.message);
+      counters.errors++;
+    }
+  }
 }
 
-/** Catalyst Job entry (same pattern as Cal_CB_Per_TNX) */
+/* ============================== ENTRY ============================== */
+
 module.exports = async (jobRequest, context) => {
   const app = catalyst.initialize(context);
   const zcql = app.zcql();
 
+  const startedAt = Date.now();
+
   try {
     const accounts = await fetchDistinctAccounts(zcql);
+
     console.log(
-      `CalculateHoldingPerAccount: ${accounts.length} account(s), AS_ON_DATE=${AS_ON_DATE ?? "null"}`,
+      `CalculateHoldingPerAccount: ${accounts.length} account(s) | ` +
+      `AS_ON_DATE=${AS_ON_DATE ?? "null"} | DRY_RUN=${DRY_RUN} | ` +
+      `ACCOUNTS_FILTER=[${ACCOUNTS_FILTER.join(",")}] | ` +
+      `ISINS_FILTER=[${ISINS_FILTER.join(",")}] | MAX_PAIRS=${MAX_PAIRS}`,
     );
 
-    let pairs = 0;
-    let rowsWritten = 0;
+    const counters = { pairs: 0, rows: 0, errors: 0 };
 
     for (let ai = 0; ai < accounts.length; ai++) {
+      if (MAX_PAIRS > 0 && counters.pairs >= MAX_PAIRS) break;
       const accountCode = accounts[ai];
-      const isins = await fetchDistinctIsins(zcql, accountCode);
-      console.log(`Account ${ai + 1}/${accounts.length} ${accountCode}: ${isins.length} ISIN(s)`);
-
-      for (const isin of isins) {
-        const n = await rebuildHoldingsForPair(zcql, accountCode, isin, AS_ON_DATE);
-        pairs++;
-        rowsWritten += n;
+      console.log(`Account ${ai + 1}/${accounts.length} ${accountCode}`);
+      try {
+        await rebuildHoldingsForAccount(zcql, accountCode, AS_ON_DATE, counters);
+      } catch (err) {
+        console.error(`[${accountCode}] account rebuild failed:`, err.message);
+        counters.errors++;
       }
     }
 
-    console.log(`CalculateHoldingPerAccount done: ${pairs} pair(s), ${rowsWritten} row(s) inserted.`);
+    console.log(
+      `CalculateHoldingPerAccount done in ${Date.now() - startedAt}ms: ` +
+      `${counters.pairs} pair(s), ${counters.rows} row(s), ${counters.errors} error(s).`,
+    );
+
     context.closeWithSuccess();
   } catch (err) {
     console.error("CalculateHoldingPerAccount failed:", err);

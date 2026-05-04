@@ -27,7 +27,8 @@
       "ExportCashBalSingleClient",
       "ExportCashBalance",
       "MegerFn",
-      "CalculateHoldingPerAccount"
+      "CalculateHoldingPerAccount",
+      "UpdateDividendData"
     ],
     "ignore": [],
     "source": "functions"
