@@ -45,12 +45,12 @@ async function fetchHoldingRowsForPair(zcql, accountCode, isin, recordDateISO) {
   while (true) {
     const batch = await zcql.executeZCQLQuery(`
       SELECT ROWID, TRANSACTION_DATE, SETTLEMENT_DATE, TYPE, ISIN,
-             QUANTITY, PRICE, TOTAL_AMOUNT, HOLDING, WAP, HOLDING_VALUE, STATUS
+             QUANTITY, PRICE, TOTAL_AMOUNT, HOLDING, WAP, HOLDING_VALUE, STATUS, CREATEDTIME
       FROM Holdings
       WHERE WS_Account_code = '${esc(accountCode)}'
         AND ISIN = '${esc(isin)}'
         AND SETTLEMENT_DATE <= '${esc(recordDateISO)}'
-      ORDER BY SETTLEMENT_DATE ASC, ROWID ASC
+      ORDER BY CREATEDTIME ASC, ROWID ASC
       LIMIT ${ZCQL_ROW_LIMIT} OFFSET ${offset}
     `);
     if (!batch || batch.length === 0) break;

@@ -29,7 +29,8 @@
       "MegerFn",
       "CalculateHoldingPerAccount",
       "UpdateDividendData",
-      "DemergerFn"
+      "DemergerFn",
+      "RebuildHoldingtable"
     ],
     "ignore": [],
     "source": "functions"

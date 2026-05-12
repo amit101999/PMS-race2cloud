@@ -2,8 +2,30 @@ const catalyst = require("zcatalyst-sdk-node");
 const { runFifoEngine } = require("./fifo.js");
 
 const ZCQL_ROW_LIMIT = 270;
+const REBUILD_BATCH = 400;
 
-/**
+async function queueRebuildHoldingsJobs(catalystApp, accountCodes, source) {
+  const uniq = [...new Set(accountCodes)]
+    .map((a) => String(a || "").trim())
+    .filter(Boolean);
+  if (!uniq.length) return;
+
+  const scheduling = catalystApp.jobScheduling();
+  for (let i = 0; i < uniq.length; i += REBUILD_BATCH) {
+    const chunk = uniq.slice(i, i + REBUILD_BATCH);
+    const catalystJobName = `H${Date.now()}${i}`.slice(0, 20);
+    await scheduling.JOB.submitJob({
+      job_name: catalystJobName,
+      jobpool_name: "Export",
+      target_name: "RebuildHoldingtable",
+      target_type: "Function",
+      params: {
+        accountCodesJson: JSON.stringify(chunk),
+        source,
+      },
+    });
+  }
+}
  * @param {import("./types/job").JobRequest} jobRequest
  * @param {import("./types/job").Context} context
  */
@@ -133,6 +155,7 @@ module.exports = async (jobRequest, context) => {
        ====================================================== */
     let inserted = 0;
     let errorCount = 0;
+    const accountsRebuild = [];
 
     for (const accountCode of eligibleAccounts) {
       try {
@@ -169,6 +192,7 @@ module.exports = async (jobRequest, context) => {
         `);
 
         inserted++;
+        accountsRebuild.push(accountCode);
         console.log(`Bonus applied for ${accountCode}: ${bonusShares} shares`);
       } catch (accountErr) {
         errorCount++;
@@ -207,6 +231,21 @@ module.exports = async (jobRequest, context) => {
     }
 
     console.log(`Bonus job completed: ${inserted} accounts updated, ${errorCount} errors`);
+
+    if (accountsRebuild.length > 0) {
+      try {
+        await queueRebuildHoldingsJobs(
+          catalystApp,
+          accountsRebuild,
+          "UpdateBonusTable",
+        );
+        console.log(
+          `Queued RebuildHoldingtable for ${accountsRebuild.length} account(s)`,
+        );
+      } catch (rebuildErr) {
+        console.error("Failed to queue RebuildHoldingtable:", rebuildErr);
+      }
+    }
 
     await zcql.executeZCQLQuery(
       `UPDATE Jobs SET status = 'COMPLETED' WHERE jobName = '${jobName}'`

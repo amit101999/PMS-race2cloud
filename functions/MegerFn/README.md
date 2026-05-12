@@ -39,7 +39,11 @@ Inside the function:
 7. Bulk-insert into `Merger` via `datastore.table("Merger").bulkJob("write")`
    (matches the pattern used by `CalcullateAllTransactionHoldingOnce`).
 8. Insert one row into `Merger_Record`, update / insert `Security_List` for
-   the new ISIN, mark `Jobs` row as `COMPLETED`.
+   the new ISIN.
+9. Queue Catalyst job `RebuildHoldingtable` (Export pool) with affected
+    `WS_Account_code` values so **Holdings** is rebuilt in a separate execution
+    (`functions/RebuildHoldingtable/holdingsRebuildFromSources.js`).
+10. Mark `Jobs` row as `COMPLETED` (or `FAILED` if queuing the rebuild throws).
 
 ---
 
