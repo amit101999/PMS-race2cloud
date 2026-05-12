@@ -23,9 +23,11 @@
  * source Holdings ROWID — enables traceability + lossless re-computation.
  *
  * APPLY queues background job `DemergerFn`: inserts Demerger / Security_List /
- * Demerger_Record then rebuilds Holdings for affected accounts inside that
- * function (see `functions/DemergerFn/holdingsRebuildFromSources.js`, not CalculateHoldingPerAccount).
+ * Demerger_Record then queues `RebuildHoldingtable` for affected accounts so
+ * Holdings is refreshed (`functions/RebuildHoldingtable/`).
  */
+
+import { HOLDINGS_FIFO_ORDER_BY_SQL } from "../../util/analytics/holdingsFromTable.js";
 
 const ZCQL_ROW_LIMIT = 270;
 
@@ -74,12 +76,12 @@ async function fetchHoldingRowsForPair(zcql, accountCode, isin, recordDateISO) {
   while (true) {
     const batch = await zcql.executeZCQLQuery(`
       SELECT ROWID, TRANSACTION_DATE, SETTLEMENT_DATE, TYPE, ISIN,
-             QUANTITY, PRICE, TOTAL_AMOUNT, HOLDING, WAP, HOLDING_VALUE, STATUS
+             QUANTITY, PRICE, TOTAL_AMOUNT, HOLDING, WAP, HOLDING_VALUE, STATUS, CREATEDTIME
       FROM Holdings
       WHERE WS_Account_code = '${escSql(accountCode)}'
         AND ISIN = '${escSql(isin)}'
         AND SETTLEMENT_DATE <= '${recordDateISO}'
-      ORDER BY SETTLEMENT_DATE ASC, ROWID ASC
+      ORDER BY ${HOLDINGS_FIFO_ORDER_BY_SQL}
       LIMIT ${ZCQL_ROW_LIMIT} OFFSET ${offset}
     `);
     if (!batch || batch.length === 0) break;
@@ -94,7 +96,8 @@ async function fetchHoldingRowsForPair(zcql, accountCode, isin, recordDateISO) {
    MINI-FIFO over Holdings rows → surviving lots
    --------------------------------------------------------------------
    Each Holdings row represents one FIFO event already materialized.
-   We walk in date order to derive each surviving lot's surviving qty
+   We walk rows in **`CREATEDTIME` / fifo materialisation order** (same as
+   `HOLDINGS_FIFO_ORDER_BY_SQL`) to derive each surviving lot's surviving qty
    (Holdings rows alone do not carry surviving-qty after partial sells).
    ==================================================================== */
 function computeSurvivingLotsFromHoldingRows(rows) {

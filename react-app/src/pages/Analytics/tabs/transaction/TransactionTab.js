@@ -145,6 +145,7 @@ const TransactionTab = ({ accountCode, asOnDate }) => {
         const params = new URLSearchParams({
           ...(secSearch ? { search: secSearch } : {}),
           ...(accountCode ? { accountCode } : {}),
+          ...(asOnDate ? { asOnDate } : {}),
         });
         const res = await fetch(
           `${BASE_URL}/analytics/getSecurityNameOptions?${params.toString()}`
@@ -155,7 +156,7 @@ const TransactionTab = ({ accountCode, asOnDate }) => {
       } catch {}
     }, 500);
     return () => clearTimeout(id);
-  }, [secSearch, accountCode]);
+  }, [secSearch, accountCode, asOnDate]);
 
   // Client-side contains filter over fetched options
   const filteredSecOptions = useMemo(() => {

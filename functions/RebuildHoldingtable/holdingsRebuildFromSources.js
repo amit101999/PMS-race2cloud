@@ -1,8 +1,8 @@
 "use strict";
 
 /**
- * Holdings rebuild for DemergerFn only — duplicated FIFO + writer from CalculateHoldingPerAccount.
- * Keep in sync manually if holdings logic changes.
+ * FIFO + Holdings writer for Catalyst job `RebuildHoldingtable`.
+ * Single source — do not duplicate under other functions.
  */
 
 const BATCH = 250;
@@ -866,12 +866,12 @@ async function rebuildHoldingsForAccountList(zcql, accountCodes, asOnDate) {
     try {
       await rebuildHoldingsForAccount(zcql, accountCode, cutoff, counters);
     } catch (err) {
-      console.error(`[DemergerFn holdings][${accountCode}]`, err.message);
+      console.error(`[RebuildHoldingtable holdings][${accountCode}]`, err.message);
       counters.errors++;
     }
   }
   console.log(
-    `[DemergerFn] holdings rebuild: ${list.length} accounts, pairs=${counters.pairs}, rows=${counters.rows}, errors=${counters.errors}`
+    `[RebuildHoldingtable] holdings rebuild: ${list.length} accounts, pairs=${counters.pairs}, rows=${counters.rows}, errors=${counters.errors}`
   );
   return counters;
 }

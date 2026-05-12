@@ -258,9 +258,17 @@ export const previewStockSplit = async (req, res) => {
   }
 };
 
+const REBUILD_HOLDINGS_BATCH = 400;
+
 export const addStockSplit = async (req, res) => {
   try {
     const app = req.catalystApp;
+    if (!app) {
+      return res.status(500).json({
+        success: false,
+        message: "Catalyst app not initialized",
+      });
+    }
     const zcql = app.zcql();
 
     const { securityCode, securityName, ratio1, ratio2, issueDate, isin } =
@@ -292,6 +300,43 @@ export const addStockSplit = async (req, res) => {
         '${isin}'
       )
     `);
+
+    const isinEsc = String(isin ?? "").replace(/'/g, "''");
+    const accountSet = new Set();
+    let holdOffset = 0;
+
+    while (true) {
+      const batch = await zcql.executeZCQLQuery(`
+        SELECT WS_Account_code
+        FROM Transaction
+        WHERE ISIN='${isinEsc}'
+        LIMIT ${ZCQL_ROW_LIMIT} OFFSET ${holdOffset}
+      `);
+
+      if (!batch || batch.length === 0) break;
+      batch.forEach((r) => accountSet.add(r.Transaction.WS_Account_code));
+      if (batch.length < ZCQL_ROW_LIMIT) break;
+      holdOffset += ZCQL_ROW_LIMIT;
+    }
+
+    const affectedAccounts = Array.from(accountSet);
+    if (affectedAccounts.length > 0) {
+      const scheduling = app.jobScheduling();
+      for (let i = 0; i < affectedAccounts.length; i += REBUILD_HOLDINGS_BATCH) {
+        const chunk = affectedAccounts.slice(i, i + REBUILD_HOLDINGS_BATCH);
+        const catalystJobName = `H${Date.now()}${i}`.slice(0, 20);
+        await scheduling.JOB.submitJob({
+          job_name: catalystJobName,
+          jobpool_name: "Export",
+          target_name: "RebuildHoldingtable",
+          target_type: "Function",
+          params: {
+            accountCodesJson: JSON.stringify(chunk),
+            source: "SplitController",
+          },
+        });
+      }
+    }
 
     return res.status(200).json({
       success: true,

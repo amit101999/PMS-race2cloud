@@ -4,6 +4,31 @@ const catalyst = require("zcatalyst-sdk-node");
 const { Readable } = require("stream");
 const { runFifoForLots } = require("./fifo.js");
 
+const REBUILD_BATCH = 400;
+
+async function queueRebuildHoldingsJobs(catalystApp, accountCodes, source) {
+  const uniq = [...new Set(accountCodes)]
+    .map((a) => String(a || "").trim())
+    .filter(Boolean);
+  if (!uniq.length) return;
+
+  const scheduling = catalystApp.jobScheduling();
+  for (let i = 0; i < uniq.length; i += REBUILD_BATCH) {
+    const chunk = uniq.slice(i, i + REBUILD_BATCH);
+    const catalystJobName = `H${Date.now()}${i}`.slice(0, 20);
+    await scheduling.JOB.submitJob({
+      job_name: catalystJobName,
+      jobpool_name: "Export",
+      target_name: "RebuildHoldingtable",
+      target_type: "Function",
+      params: {
+        accountCodesJson: JSON.stringify(chunk),
+        source,
+      },
+    });
+  }
+}
+
 const ZCQL_ROW_LIMIT = 270;
 const STRATUS_BUCKET = "upload-data-bucket";
 const BULK_WRITE_MAX = 50000;
@@ -493,6 +518,35 @@ module.exports = async (jobRequest, context) => {
         `[MegerFn] Created bulk job ${job.job_id} for ${fileName} (${i + 1}/${csvFiles.length})`,
       );
       await pollBulkWriteJob(bulkWrite, job.job_id);
+    }
+
+    const accountsAffectedSet = new Set();
+    for (const r of mergerInsertRows) {
+      const a = String(r.WS_Account_code ?? "").trim();
+      if (a) accountsAffectedSet.add(a);
+    }
+    const accountsAffected = [...accountsAffectedSet].sort((x, y) =>
+      x.localeCompare(y),
+    );
+
+    if (accountsAffected.length > 0) {
+      try {
+        await queueRebuildHoldingsJobs(
+          catalystApp,
+          accountsAffected,
+          "MegerFn",
+        );
+        console.log(
+          "[MegerFn] Queued RebuildHoldingtable for",
+          accountsAffected.length,
+          "account(s)",
+        );
+      } catch (rbErr) {
+        console.error("[MegerFn] Queue holdings rebuild failed:", rbErr);
+        await setJobStatus(zcql, jobName, "FAILED");
+        context.closeWithFailure();
+        return;
+      }
     }
 
     const elapsed = Math.round((Date.now() - startedAt) / 1000);

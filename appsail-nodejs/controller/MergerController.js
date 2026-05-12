@@ -241,7 +241,8 @@ export const previewMerger = async (req, res) => {
        so the same merger can't be queued twice while one is running.
      - Submits the MegerFn Catalyst function which does the heavy
        lot-level work (FIFO replay → surviving lots → bulk-insert into
-       Merger via Stratus + bulkJob).
+       Merger via Stratus + bulkJob), then rebuilds the Holdings table for
+       every affected WS_Account_code (same FIFO materialiser as DemergerFn).
      - Responds immediately with { jobName, status: "PENDING" }.
 
    GET /api/merger/apply-status?jobName=...

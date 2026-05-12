@@ -9,8 +9,8 @@
  *   WS_Account_code, TRANSACTION_DATE, SETTLEMENT_DATE, TYPE, ISIN,
  *   QUANTITY, PRICE, TOTAL_AMOUNT, HOLDING, WAP, HOLDING_VALUE, P_L, STATUS
  *
- * Row order within a pair is preserved by INSERT order — the FIFO output is
- * already chronologically sorted, so reads can use `ORDER BY ROWID ASC`.
+ * Row order within a pair is preserved by INSERT order — reads should use the same ORDER BY
+ * as AppSail `HOLDINGS_FIFO_ORDER_BY_SQL` (`CREATEDTIME ASC, ROWID ASC`), not settlement-only.
  *
  * Mirrors `getHoldingsSummarySimple`:
  *   - One paged read of Transaction / Bonus per account (NOT per pair).
@@ -21,8 +21,9 @@
  *
  * Configure ACCOUNTS_FILTER / ISINS_FILTER / MAX_PAIRS / DRY_RUN below for test
  * runs. Deploy and invoke from the Catalyst console (or via the configured
- * trigger). Event payload (`jobRequest`) is intentionally ignored — this
- * function always rebuilds the Holdings slice for the selected accounts.
+ * trigger). Optionally pass non-empty `jobName` via `jobRequest.getAllJobParams()`
+ * so this function writes `Jobs` / `JobStatusPerAccount` for retries and UX; omit
+ * `jobName` for legacy/test runs — no Job tables are touched.
  */
 
 const catalyst = require("zcatalyst-sdk-node");
@@ -49,6 +50,127 @@ const BATCH = 250;
 /* ============================== HELPERS ============================== */
 
 const esc = (s) => String(s ?? "").replace(/'/g, "''");
+
+/** When tracking is enabled, written to JobStatusPerAccount.jobType unless params.jobType overrides. */
+const HOLDINGS_JOB_TYPE_DEFAULT = "HOLDINGS_FULL_REBUILD";
+
+/* ---------------- Optional Jobs / JobStatusPerAccount (see file header) ---------------- */
+
+function extractJobParams(jobRequest) {
+  try {
+    if (jobRequest && typeof jobRequest.getAllJobParams === "function") {
+      const p = jobRequest.getAllJobParams() || {};
+      return {
+        jobName: String(p.jobName ?? "").trim(),
+        jobType: String(p.jobType ?? "").trim() || HOLDINGS_JOB_TYPE_DEFAULT,
+      };
+    }
+  } catch (e) {
+    console.warn("extractJobParams:", e.message);
+  }
+  return { jobName: "", jobType: HOLDINGS_JOB_TYPE_DEFAULT };
+}
+
+function rowFromJobStatusRow(r) {
+  if (!r) return null;
+  return r.JobStatusPerAccount || r;
+}
+
+async function ensureJobsRowRunning(zcql, jobName) {
+  try {
+    await zcql.executeZCQLQuery(
+      `INSERT INTO Jobs (jobName, status) VALUES ('${esc(jobName)}', 'RUNNING')`,
+    );
+  } catch (insertErr) {
+    try {
+      await zcql.executeZCQLQuery(
+        `UPDATE Jobs SET status = 'RUNNING' WHERE jobName = '${esc(jobName)}'`,
+      );
+    } catch (upErr) {
+      console.warn(`[Jobs] ensure RUNNING failed for ${jobName}:`, upErr.message);
+    }
+  }
+}
+
+async function finalizeJobsRow(zcql, jobName, status) {
+  if (!jobName) return;
+  try {
+    await zcql.executeZCQLQuery(
+      `UPDATE Jobs SET status = '${esc(status)}' WHERE jobName = '${esc(jobName)}'`,
+    );
+  } catch (e) {
+    console.error(`[Jobs] finalize failed for ${jobName}:`, e.message);
+  }
+}
+
+async function getPerAccountJobStatus(zcql, jobName, accountCode) {
+  try {
+    const rows = await zcql.executeZCQLQuery(`
+      SELECT status FROM JobStatusPerAccount
+      WHERE jobName = '${esc(jobName)}' AND WS_Account_code = '${esc(accountCode)}'
+      LIMIT 1
+    `);
+    if (!rows?.length) return "";
+    const st = rowFromJobStatusRow(rows[0]);
+    return String(st?.status ?? "").trim();
+  } catch (e) {
+    console.warn("[JobStatusPerAccount] read status failed:", e.message);
+    return "";
+  }
+}
+
+async function upsertAccountRowRunning(zcql, jobName, jobType, accountCode) {
+  try {
+    await zcql.executeZCQLQuery(`
+      INSERT INTO JobStatusPerAccount (jobType, WS_Account_code, status, lastError, jobName)
+      VALUES (
+        '${esc(jobType)}',
+        '${esc(accountCode)}',
+        'RUNNING',
+        '',
+        '${esc(jobName)}'
+      )
+    `);
+  } catch (insertErr) {
+    try {
+      await zcql.executeZCQLQuery(`
+        UPDATE JobStatusPerAccount
+        SET status = 'RUNNING', lastError = '', jobType = '${esc(jobType)}'
+        WHERE jobName = '${esc(jobName)}' AND WS_Account_code = '${esc(accountCode)}'
+      `);
+    } catch (upErr) {
+      console.warn(
+        `[JobStatusPerAccount] upsert RUNNING failed ${accountCode}:`,
+        upErr.message,
+      );
+    }
+  }
+}
+
+async function markAccountSuccess(zcql, jobName, accountCode) {
+  try {
+    await zcql.executeZCQLQuery(`
+      UPDATE JobStatusPerAccount
+      SET status = 'SUCCESS', lastError = ''
+      WHERE jobName = '${esc(jobName)}' AND WS_Account_code = '${esc(accountCode)}'
+    `);
+  } catch (e) {
+    console.warn(`[JobStatusPerAccount] mark SUCCESS failed ${accountCode}:`, e.message);
+  }
+}
+
+async function markAccountFailed(zcql, jobName, accountCode, errMsg) {
+  const msg = esc(String(errMsg || "UNKNOWN").slice(0, 500));
+  try {
+    await zcql.executeZCQLQuery(`
+      UPDATE JobStatusPerAccount
+      SET status = 'FAILED', lastError = '${msg}'
+      WHERE jobName = '${esc(jobName)}' AND WS_Account_code = '${esc(accountCode)}'
+    `);
+  } catch (e) {
+    console.warn(`[JobStatusPerAccount] mark FAILED failed ${accountCode}:`, e.message);
+  }
+}
 
 const sqlDate = (v) => {
   const s = String(v ?? "").trim().slice(0, 10);
@@ -931,6 +1053,10 @@ module.exports = async (jobRequest, context) => {
   const app = catalyst.initialize(context);
   const zcql = app.zcql();
 
+  const { jobName: trackingJobName, jobType: trackingJobType } =
+    extractJobParams(jobRequest);
+  const trackingOn = Boolean(trackingJobName);
+
   const startedAt = Date.now();
 
   try {
@@ -940,8 +1066,13 @@ module.exports = async (jobRequest, context) => {
       `CalculateHoldingPerAccount: ${accounts.length} account(s) | ` +
       `AS_ON_DATE=${AS_ON_DATE ?? "null"} | DRY_RUN=${DRY_RUN} | ` +
       `ACCOUNTS_FILTER=[${ACCOUNTS_FILTER.join(",")}] | ` +
-      `ISINS_FILTER=[${ISINS_FILTER.join(",")}] | MAX_PAIRS=${MAX_PAIRS}`,
+      `ISINS_FILTER=[${ISINS_FILTER.join(",")}] | MAX_PAIRS=${MAX_PAIRS} | ` +
+      `jobTracking=${trackingOn ? `"${trackingJobName}"` : "off"}`,
     );
+
+    if (trackingOn) {
+      await ensureJobsRowRunning(zcql, trackingJobName);
+    }
 
     const counters = { pairs: 0, rows: 0, errors: 0 };
 
@@ -949,11 +1080,56 @@ module.exports = async (jobRequest, context) => {
       if (MAX_PAIRS > 0 && counters.pairs >= MAX_PAIRS) break;
       const accountCode = accounts[ai];
       console.log(`Account ${ai + 1}/${accounts.length} ${accountCode}`);
+
+      if (trackingOn) {
+        const prev = await getPerAccountJobStatus(
+          zcql,
+          trackingJobName,
+          accountCode,
+        );
+        if (prev === "SUCCESS") {
+          console.log(`[${accountCode}] skip — JobStatusPerAccount already SUCCESS`);
+          continue;
+        }
+        await upsertAccountRowRunning(
+          zcql,
+          trackingJobName,
+          trackingJobType,
+          accountCode,
+        );
+      }
+
+      const errsBeforeAccount = counters.errors;
       try {
-        await rebuildHoldingsForAccount(zcql, accountCode, AS_ON_DATE, counters);
+        await rebuildHoldingsForAccount(
+          zcql,
+          accountCode,
+          AS_ON_DATE,
+          counters,
+        );
+        if (trackingOn) {
+          if (counters.errors > errsBeforeAccount) {
+            await markAccountFailed(
+              zcql,
+              trackingJobName,
+              accountCode,
+              "One or more ISIN rebuild(s) logged errors — see Catalyst logs.",
+            );
+          } else {
+            await markAccountSuccess(zcql, trackingJobName, accountCode);
+          }
+        }
       } catch (err) {
         console.error(`[${accountCode}] account rebuild failed:`, err.message);
         counters.errors++;
+        if (trackingOn) {
+          await markAccountFailed(
+            zcql,
+            trackingJobName,
+            accountCode,
+            err.message,
+          );
+        }
       }
     }
 
@@ -962,9 +1138,20 @@ module.exports = async (jobRequest, context) => {
       `${counters.pairs} pair(s), ${counters.rows} row(s), ${counters.errors} error(s).`,
     );
 
+    if (trackingOn) {
+      await finalizeJobsRow(
+        zcql,
+        trackingJobName,
+        counters.errors > 0 ? "FAILED" : "COMPLETED",
+      );
+    }
+
     context.closeWithSuccess();
   } catch (err) {
     console.error("CalculateHoldingPerAccount failed:", err);
+    if (trackingOn) {
+      await finalizeJobsRow(zcql, trackingJobName, "FAILED");
+    }
     context.closeWithFailure();
   }
 };

@@ -2,9 +2,31 @@
 
 const catalyst = require("zcatalyst-sdk-node");
 const { runDemergerApply } = require("./demergerApplyCore.js");
-const {
-  rebuildHoldingsForAccountList,
-} = require("./holdingsRebuildFromSources.js");
+
+const REBUILD_BATCH = 400;
+
+async function queueRebuildHoldingsJobs(catalystApp, accountCodes, source) {
+  const uniq = [...new Set(accountCodes)]
+    .map((a) => String(a || "").trim())
+    .filter(Boolean);
+  if (!uniq.length) return;
+
+  const scheduling = catalystApp.jobScheduling();
+  for (let i = 0; i < uniq.length; i += REBUILD_BATCH) {
+    const chunk = uniq.slice(i, i + REBUILD_BATCH);
+    const catalystJobName = `H${Date.now()}${i}`.slice(0, 20);
+    await scheduling.JOB.submitJob({
+      job_name: catalystJobName,
+      jobpool_name: "Export",
+      target_name: "RebuildHoldingtable",
+      target_type: "Function",
+      params: {
+        accountCodesJson: JSON.stringify(chunk),
+        source,
+      },
+    });
+  }
+}
 
 const esc = (v) => String(v ?? "").replace(/'/g, "''");
 
@@ -108,14 +130,18 @@ module.exports = async (jobRequest, context) => {
 
     if (applyResult.accountsAffected.length > 0) {
       try {
-        const rebuildCounters = await rebuildHoldingsForAccountList(
-          zcql,
+        await queueRebuildHoldingsJobs(
+          catalystApp,
           applyResult.accountsAffected,
-          null,
+          "DemergerFn",
         );
-        console.log("[DemergerFn] Holdings rebuild:", rebuildCounters);
+        console.log(
+          "[DemergerFn] Queued RebuildHoldingtable for",
+          applyResult.accountsAffected.length,
+          "account(s)",
+        );
       } catch (rbErr) {
-        console.error("[DemergerFn] Holdings rebuild failed:", rbErr);
+        console.error("[DemergerFn] Queue holdings rebuild failed:", rbErr);
         await setJobStatus(zcql, jobName, "FAILED");
         context.closeWithFailure();
         return;
