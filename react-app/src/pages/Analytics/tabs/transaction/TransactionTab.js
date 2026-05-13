@@ -7,17 +7,18 @@ const PAGE_SIZE_DEFAULT = 20;
 
 const TransactionTab = ({ accountCode, asOnDate }) => {
   const [data, setData] = useState([]);
-  const [nextCursor, setNextCursor] = useState(null);
-  const [prevCursor, setPrevCursor] = useState(null);
-  const [hasNext, setHasNext] = useState(false);
-  const [hasPrev, setHasPrev] = useState(false);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
+  const [totalCount, setTotalCount] = useState(0);
   const [limit] = useState(PAGE_SIZE_DEFAULT);
   const [loading, setLoading] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState("");
 
   const [secSearch, setSecSearch] = useState("");
-  const [selectedSecurity, setSelectedSecurity] = useState("");
+  /** Committed ISIN filter — empty string when no security is selected. */
+  const [selectedIsin, setSelectedIsin] = useState("");
+  /** @type {[Array<{isin: string, securityName: string}>, React.Dispatch<React.SetStateAction<any[]>>]} */
   const [secOptions, setSecOptions] = useState([]);
   const [showSecDropdown, setShowSecDropdown] = useState(false);
   const secDropdownRef = useRef(null);
@@ -40,25 +41,19 @@ const TransactionTab = ({ accountCode, asOnDate }) => {
   const buildBaseParams = useCallback(() => {
     const params = {
       limit,
-      direction: "next",
       accountCode,
       ...(asOnDate ? { asOnDate } : {}),
-      ...(selectedSecurity ? { securityName: selectedSecurity } : {}),
+      ...(selectedIsin ? { isin: selectedIsin } : {}),
     };
     return params;
-  }, [limit, accountCode, asOnDate, selectedSecurity]);
+  }, [limit, accountCode, asOnDate, selectedIsin]);
 
   const fetchPage = useCallback(
-    async (cursor, direction = "next") => {
+    async (page) => {
       const params = new URLSearchParams({
         ...buildBaseParams(),
-        direction,
+        page: String(Math.max(1, page || 1)),
       });
-      if (cursor?.lastDate != null && cursor?.lastRowId != null) {
-        params.set("lastDate", cursor.lastDate);
-        params.set("lastRowId", String(cursor.lastRowId));
-        params.set("lastPriority", String(cursor.lastPriority ?? 0));
-      }
       const res = await fetch(
         `${BASE_URL}/analytics/getPaginatedTransactions?${params.toString()}`
       );
@@ -68,14 +63,13 @@ const TransactionTab = ({ accountCode, asOnDate }) => {
     [buildBaseParams]
   );
 
-  // Initial load and refetch when filters change (only when account code is selected)
+  // Initial load + reset to page 1 whenever filters change.
   useEffect(() => {
     if (!accountCode || !accountCode.trim()) {
       setData([]);
-      setNextCursor(null);
-      setPrevCursor(null);
-      setHasNext(false);
-      setHasPrev(false);
+      setCurrentPage(1);
+      setTotalPages(1);
+      setTotalCount(0);
       setLoading(false);
       setError("");
       return;
@@ -85,13 +79,12 @@ const TransactionTab = ({ accountCode, asOnDate }) => {
     setError("");
     const loadFirstPage = async () => {
       try {
-        const json = await fetchPage(null, "next");
+        const json = await fetchPage(1);
         if (loadId !== initialLoadIdRef.current) return;
         setData(json.data || []);
-        setNextCursor(json.nextCursor ?? null);
-        setPrevCursor(json.prevCursor ?? null);
-        setHasNext(Boolean(json.hasNext));
-        setHasPrev(Boolean(json.hasPrev));
+        setCurrentPage(json.page || 1);
+        setTotalPages(Math.max(1, json.totalPages || 1));
+        setTotalCount(Number(json.totalCount) || 0);
       } catch (err) {
         if (loadId !== initialLoadIdRef.current) return;
         setError(err.message || "Failed to load transactions");
@@ -100,43 +93,28 @@ const TransactionTab = ({ accountCode, asOnDate }) => {
       }
     };
     loadFirstPage();
-  }, [accountCode, asOnDate, selectedSecurity, fetchPage]);
+  }, [accountCode, asOnDate, selectedIsin, fetchPage]);
 
-  const goNext = async () => {
-    if (!nextCursor || !hasNext || loading || loadingMore) return;
-    setLoadingMore(true);
-    setError("");
-    try {
-      const json = await fetchPage(nextCursor, "next");
-      setData(json.data || []);
-      setNextCursor(json.nextCursor ?? null);
-      setPrevCursor(json.prevCursor ?? null);
-      setHasNext(Boolean(json.hasNext));
-      setHasPrev(Boolean(json.hasPrev));
-    } catch (err) {
-      setError(err.message || "Failed to load next page");
-    } finally {
-      setLoadingMore(false);
-    }
-  };
-
-  const goPrev = async () => {
-    if (!prevCursor || !hasPrev || loading || loadingMore) return;
-    setLoadingMore(true);
-    setError("");
-    try {
-      const json = await fetchPage(prevCursor, "prev");
-      setData(json.data || []);
-      setNextCursor(json.nextCursor ?? null);
-      setPrevCursor(json.prevCursor ?? null);
-      setHasNext(Boolean(json.hasNext));
-      setHasPrev(Boolean(json.hasPrev));
-    } catch (err) {
-      setError(err.message || "Failed to load previous page");
-    } finally {
-      setLoadingMore(false);
-    }
-  };
+  const goToPage = useCallback(
+    async (page) => {
+      const target = Math.min(Math.max(1, page), Math.max(1, totalPages));
+      if (target === currentPage || loading || loadingMore) return;
+      setLoadingMore(true);
+      setError("");
+      try {
+        const json = await fetchPage(target);
+        setData(json.data || []);
+        setCurrentPage(json.page || target);
+        setTotalPages(Math.max(1, json.totalPages || 1));
+        setTotalCount(Number(json.totalCount) || 0);
+      } catch (err) {
+        setError(err.message || "Failed to load page");
+      } finally {
+        setLoadingMore(false);
+      }
+    },
+    [currentPage, fetchPage, loading, loadingMore, totalPages]
+  );
 
   // Fetch security options (on open/typing, debounce 400ms)
   useEffect(() => {
@@ -158,11 +136,15 @@ const TransactionTab = ({ accountCode, asOnDate }) => {
     return () => clearTimeout(id);
   }, [secSearch, accountCode, asOnDate]);
 
-  // Client-side contains filter over fetched options
+  // Client-side contains filter over fetched options — matches Security Name OR ISIN.
   const filteredSecOptions = useMemo(() => {
     const q = secSearch.trim().toLowerCase();
     if (!q) return secOptions;
-    return secOptions.filter((name) => name.toLowerCase().indexOf(q) !== -1);
+    return secOptions.filter(
+      (opt) =>
+        (opt.securityName || "").toLowerCase().indexOf(q) !== -1 ||
+        (opt.isin || "").toLowerCase().indexOf(q) !== -1
+    );
   }, [secOptions, secSearch]);
 
   const formatNumber = (v) =>
@@ -181,7 +163,7 @@ const TransactionTab = ({ accountCode, asOnDate }) => {
         <h3>Transaction History</h3>
 
         <div className="security-name-search" ref={secDropdownRef}>
-          <label className="search-label">Security Name</label>
+          <label className="search-label">Security</label>
 
           <div className="search-input-wrapper">
             <span className="search-icon">🔍</span>
@@ -189,7 +171,7 @@ const TransactionTab = ({ accountCode, asOnDate }) => {
             <input
               type="text"
               className="search-input"
-              placeholder="Search Security Name..."
+              placeholder="Search Security Name or ISIN..."
               value={secSearch}
               onChange={(e) => {
                 setSecSearch(e.target.value);
@@ -203,7 +185,7 @@ const TransactionTab = ({ accountCode, asOnDate }) => {
                 className="clear-icon"
                 onClick={() => {
                   setSecSearch("");
-                  setSelectedSecurity("");
+                  setSelectedIsin("");
                   setSecOptions([]);
                   setShowSecDropdown(false);
                 }}
@@ -217,20 +199,27 @@ const TransactionTab = ({ accountCode, asOnDate }) => {
 
           {showSecDropdown && (
             <div className="search-dropdown">
-              <div className="dropdown-header">Search Security Name...</div>
+              <div className="dropdown-header">Search Security Name or ISIN...</div>
 
               <div className="dropdown-options">
-                {filteredSecOptions.map((name) => (
+                {filteredSecOptions.map((opt) => (
                   <div
-                    key={name}
-                    className="dropdown-option"
+                    key={opt.isin}
+                    className="dropdown-option security-option"
                     onClick={() => {
-                      setSelectedSecurity(name);
-                      setSecSearch(name);
+                      setSelectedIsin(opt.isin);
+                      setSecSearch(
+                        opt.securityName
+                          ? `${opt.securityName} (${opt.isin})`
+                          : opt.isin
+                      );
                       setShowSecDropdown(false);
                     }}
                   >
-                    {name}
+                    <span className="security-option-name">
+                      {opt.securityName || "—"}
+                    </span>
+                    <span className="security-option-isin">{opt.isin}</span>
                   </div>
                 ))}
               </div>
@@ -294,27 +283,126 @@ const TransactionTab = ({ accountCode, asOnDate }) => {
         </div>
       )}
 
-      {!loading && !error && data.length > 0 && (
+      {!loading && !error && data.length > 0 && totalPages > 1 && (
         <div className="transaction-pagination">
           <button
             type="button"
-            className="pagination-btn pagination-prev"
-            onClick={goPrev}
-            disabled={!hasPrev || loadingMore}
+            className="transaction-page-btn"
+            disabled={currentPage <= 1 || loadingMore}
+            onClick={() => goToPage(1)}
+            title="First page"
           >
-            ← Previous
+            «
           </button>
-          <span className="pagination-info">
-            {loadingMore ? "Loading…" : `Showing ${data.length} transaction${data.length === 1 ? "" : "s"}`}
-          </span>
           <button
             type="button"
-            className="pagination-btn pa gination-next"
-            onClick={goNext}
-            disabled={!hasNext || loadingMore}
+            className="transaction-page-btn"
+            disabled={currentPage <= 1 || loadingMore}
+            onClick={() => goToPage(currentPage - 1)}
+            title="Previous page"
           >
-            Next →
+            Prev
           </button>
+
+          {(() => {
+            const pages = [];
+            const maxVisible = 5;
+            let start = Math.max(
+              1,
+              currentPage - Math.floor(maxVisible / 2)
+            );
+            let end = start + maxVisible - 1;
+            if (end > totalPages) {
+              end = totalPages;
+              start = Math.max(1, end - maxVisible + 1);
+            }
+
+            if (start > 1) {
+              pages.push(
+                <button
+                  key={1}
+                  className="transaction-page-num"
+                  onClick={() => goToPage(1)}
+                  disabled={loadingMore}
+                >
+                  1
+                </button>
+              );
+              if (start > 2) {
+                pages.push(
+                  <span
+                    key="dots-l"
+                    className="transaction-page-dots"
+                  >
+                    …
+                  </span>
+                );
+              }
+            }
+
+            for (let i = start; i <= end; i++) {
+              pages.push(
+                <button
+                  key={i}
+                  className={`transaction-page-num ${i === currentPage ? "active" : ""}`}
+                  onClick={() => goToPage(i)}
+                  disabled={i === currentPage || loadingMore}
+                >
+                  {i}
+                </button>
+              );
+            }
+
+            if (end < totalPages) {
+              if (end < totalPages - 1) {
+                pages.push(
+                  <span
+                    key="dots-r"
+                    className="transaction-page-dots"
+                  >
+                    …
+                  </span>
+                );
+              }
+              pages.push(
+                <button
+                  key={totalPages}
+                  className="transaction-page-num"
+                  onClick={() => goToPage(totalPages)}
+                  disabled={loadingMore}
+                >
+                  {totalPages}
+                </button>
+              );
+            }
+
+            return pages;
+          })()}
+
+          <button
+            type="button"
+            className="transaction-page-btn"
+            disabled={currentPage >= totalPages || loadingMore}
+            onClick={() => goToPage(currentPage + 1)}
+            title="Next page"
+          >
+            Next
+          </button>
+          <button
+            type="button"
+            className="transaction-page-btn"
+            disabled={currentPage >= totalPages || loadingMore}
+            onClick={() => goToPage(totalPages)}
+            title="Last page"
+          >
+            »
+          </button>
+
+          <span className="transaction-page-info">
+            {loadingMore
+              ? "Loading…"
+              : `Page ${currentPage} of ${totalPages} • ${totalCount.toLocaleString("en-IN")} transaction${totalCount === 1 ? "" : "s"}`}
+          </span>
         </div>
       )}
         </>
