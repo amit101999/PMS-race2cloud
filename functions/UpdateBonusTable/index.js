@@ -4,6 +4,140 @@ const { runFifoEngine } = require("./fifo.js");
 const ZCQL_ROW_LIMIT = 270;
 const REBUILD_BATCH = 400;
 
+/** Written to JobStatusPerAccount.jobType (override via params.jobType). */
+const BONUS_JOB_TYPE_DEFAULT = "BONUS_APPLY";
+
+const esc = (v) => String(v ?? "").replace(/'/g, "''");
+
+function rowFromJobStatusRow(r) {
+  if (!r) return null;
+  return r.JobStatusPerAccount || r;
+}
+
+async function getPerAccountJobStatus(zcql, jobName, accountCode) {
+  try {
+    const rows = await zcql.executeZCQLQuery(`
+      SELECT status FROM JobStatusPerAccount
+      WHERE jobName = '${esc(jobName)}' AND WS_Account_code = '${esc(accountCode)}'
+      LIMIT 1
+    `);
+    if (!rows?.length) return "";
+    const st = rowFromJobStatusRow(rows[0]);
+    return String(st?.status ?? "").trim();
+  } catch (e) {
+    console.warn("[UpdateBonusTable][JobStatusPerAccount] read failed:", e.message);
+    return "";
+  }
+}
+
+async function upsertAccountRowRunning(zcql, jobName, jobType, accountCode) {
+  try {
+    await zcql.executeZCQLQuery(`
+      INSERT INTO JobStatusPerAccount (jobType, WS_Account_code, status, lastError, jobName)
+      VALUES (
+        '${esc(jobType)}',
+        '${esc(accountCode)}',
+        'RUNNING',
+        '',
+        '${esc(jobName)}'
+      )
+    `);
+  } catch (insertErr) {
+    try {
+      await zcql.executeZCQLQuery(`
+        UPDATE JobStatusPerAccount
+        SET status = 'RUNNING', lastError = '', jobType = '${esc(jobType)}'
+        WHERE jobName = '${esc(jobName)}' AND WS_Account_code = '${esc(accountCode)}'
+      `);
+    } catch (upErr) {
+      console.warn(
+        `[UpdateBonusTable][JobStatusPerAccount] upsert RUNNING failed ${accountCode}:`,
+        upErr.message,
+      );
+    }
+  }
+}
+
+async function markAccountSuccess(zcql, jobName, accountCode) {
+  try {
+    await zcql.executeZCQLQuery(`
+      UPDATE JobStatusPerAccount
+      SET status = 'SUCCESS', lastError = ''
+      WHERE jobName = '${esc(jobName)}' AND WS_Account_code = '${esc(accountCode)}'
+    `);
+  } catch (e) {
+    console.warn(
+      `[UpdateBonusTable][JobStatusPerAccount] SUCCESS failed ${accountCode}:`,
+      e.message,
+    );
+  }
+}
+
+async function markAccountFailed(zcql, jobName, accountCode, errMsg) {
+  const msg = esc(String(errMsg || "UNKNOWN").slice(0, 500));
+  try {
+    await zcql.executeZCQLQuery(`
+      UPDATE JobStatusPerAccount
+      SET status = 'FAILED', lastError = '${msg}'
+      WHERE jobName = '${esc(jobName)}' AND WS_Account_code = '${esc(accountCode)}'
+    `);
+  } catch (e) {
+    console.warn(
+      `[UpdateBonusTable][JobStatusPerAccount] FAILED failed ${accountCode}:`,
+      e.message,
+    );
+  }
+}
+
+/** Skip INSERT on retry if row already exists for this corporate-action key. */
+async function bonusRowExists(zcql, isin, accountCode, exDateISO) {
+  try {
+    const rows = await zcql.executeZCQLQuery(`
+      SELECT ROWID FROM Bonus
+      WHERE ISIN = '${esc(isin)}'
+        AND WS_Account_code = '${esc(accountCode)}'
+        AND ExDate = '${esc(exDateISO)}'
+      LIMIT 1
+    `);
+    return Boolean(rows?.length);
+  } catch (e) {
+    console.warn(`[UpdateBonusTable] bonusRowExists check failed:`, e.message);
+    return false;
+  }
+}
+
+async function ensureBonusRecord(zcql, { secCode, secName, isin, r1, r2, exDateISO }) {
+  const existing = await zcql.executeZCQLQuery(`
+    SELECT ROWID FROM Bonus_Record
+    WHERE ISIN = '${esc(isin)}' AND ExDate = '${esc(exDateISO)}'
+    LIMIT 1
+  `);
+  if (existing?.length) {
+    console.log("[UpdateBonusTable] Bonus_Record already exists — skip INSERT (retry)");
+    return;
+  }
+  await zcql.executeZCQLQuery(`
+      INSERT INTO Bonus_Record
+      (
+        SecurityCode,
+        SecurityName,
+        ISIN,
+        Ratio1,
+        Ratio2,
+        ExDate
+      )
+      VALUES
+      (
+        '${(secCode || "").replace(/'/g, "''")}',
+        '${(secName || "").replace(/'/g, "''")}',
+        '${esc(isin)}',
+        ${r1},
+        ${r2},
+        '${esc(exDateISO)}'
+      )
+    `);
+}
+
 async function queueRebuildHoldingsJobs(catalystApp, accountCodes, source) {
   const uniq = [...new Set(accountCodes)]
     .map((a) => String(a || "").trim())
@@ -19,6 +153,11 @@ async function queueRebuildHoldingsJobs(catalystApp, accountCodes, source) {
       jobpool_name: "Export",
       target_name: "RebuildHoldingtable",
       target_type: "Function",
+      /* Catalyst Job Pool: retries only on execution failure. Min interval 1m. */
+      job_config: {
+        number_of_retries: 5,
+        retry_interval: 60 * 1000,
+      },
       params: {
         accountCodesJson: JSON.stringify(chunk),
         source,
@@ -26,6 +165,7 @@ async function queueRebuildHoldingsJobs(catalystApp, accountCodes, source) {
     });
   }
 }
+/**
  * @param {import("./types/job").JobRequest} jobRequest
  * @param {import("./types/job").Context} context
  */
@@ -42,12 +182,28 @@ module.exports = async (jobRequest, context) => {
     const r1 = Number(params.ratio1);
     const r2 = Number(params.ratio2);
     jobName = params.jobName;
+    const bonusJobType =
+      String(params.jobType || "").trim() || BONUS_JOB_TYPE_DEFAULT;
+    const trackingOn = Boolean(String(jobName || "").trim());
 
-    await zcql.executeZCQLQuery(
-      `INSERT INTO Jobs (jobName, status) VALUES ('${jobName}', 'PENDING')`
-    );
+    try {
+      await zcql.executeZCQLQuery(
+        `INSERT INTO Jobs (jobName, status) VALUES ('${esc(jobName)}', 'PENDING')`,
+      );
+    } catch (insertJobErr) {
+      await zcql.executeZCQLQuery(
+        `UPDATE Jobs SET status = 'PENDING' WHERE jobName = '${esc(jobName)}'`,
+      );
+    }
 
     const exDateISO = exDate;
+
+    console.log("[UpdateBonusTable]", {
+      jobName,
+      bonusJobType,
+      jobStatusTracking: trackingOn,
+      isin,
+    });
 
     /* ======================================================
        STEP 1: FIND ACCOUNTS WITH TRANSACTIONS FOR THIS ISIN
@@ -59,7 +215,7 @@ module.exports = async (jobRequest, context) => {
       const batch = await zcql.executeZCQLQuery(`
         SELECT WS_Account_code
         FROM Transaction
-        WHERE ISIN='${isin}'
+        WHERE ISIN='${esc(isin)}'
         LIMIT ${ZCQL_ROW_LIMIT} OFFSET ${holdOffset}
       `);
 
@@ -74,7 +230,7 @@ module.exports = async (jobRequest, context) => {
     if (!eligibleAccounts.length) {
       console.log("No eligible accounts found");
       await zcql.executeZCQLQuery(
-        `UPDATE Jobs SET status = 'COMPLETED' WHERE jobName = '${jobName}'`
+        `UPDATE Jobs SET status = 'COMPLETED' WHERE jobName = '${esc(jobName)}'`,
       );
       context.closeWithSuccess();
       return;
@@ -91,7 +247,7 @@ module.exports = async (jobRequest, context) => {
         const r = await zcql.executeZCQLQuery(`
           SELECT *
           FROM ${table}
-          WHERE ISIN='${isin}' AND ${dateCol} ${operator} '${exDateISO}'
+          WHERE ISIN='${esc(isin)}' AND ${dateCol} ${operator} '${esc(exDateISO)}'
           ORDER BY ${orderBySql}
           LIMIT ${ZCQL_ROW_LIMIT} OFFSET ${off}
         `);
@@ -158,17 +314,52 @@ module.exports = async (jobRequest, context) => {
     const accountsRebuild = [];
 
     for (const accountCode of eligibleAccounts) {
+      if (trackingOn) {
+        const prev = await getPerAccountJobStatus(zcql, jobName, accountCode);
+        if (prev === "SUCCESS") {
+          console.log(
+            `[UpdateBonusTable] skip ${accountCode} — JobStatusPerAccount already SUCCESS`,
+          );
+          continue;
+        }
+        await upsertAccountRowRunning(
+          zcql,
+          jobName,
+          bonusJobType,
+          accountCode,
+        );
+      }
+
       try {
         const tx = txByAcc[accountCode] || [];
-        if (!tx.length) continue;
+        if (!tx.length) {
+          if (trackingOn) await markAccountSuccess(zcql, jobName, accountCode);
+          continue;
+        }
 
         const bonuses = bonusByAcc[accountCode] || [];
 
         const fifo = runFifoEngine(tx, bonuses, splits, true);
-        if (!fifo || fifo.holdings <= 0) continue;
+        if (!fifo || fifo.holdings <= 0) {
+          if (trackingOn) await markAccountSuccess(zcql, jobName, accountCode);
+          continue;
+        }
 
         const bonusShares = Math.floor((fifo.holdings * r1) / r2);
-        if (bonusShares <= 0) continue;
+        if (bonusShares <= 0) {
+          if (trackingOn) await markAccountSuccess(zcql, jobName, accountCode);
+          continue;
+        }
+
+        if (await bonusRowExists(zcql, isin, accountCode, exDateISO)) {
+          console.log(
+            `[UpdateBonusTable] Bonus row already present for ${accountCode} — idempotent`,
+          );
+          if (trackingOn) await markAccountSuccess(zcql, jobName, accountCode);
+          accountsRebuild.push(accountCode);
+          inserted++;
+          continue;
+        }
 
         await zcql.executeZCQLQuery(`
           INSERT INTO Bonus
@@ -182,49 +373,47 @@ module.exports = async (jobRequest, context) => {
           )
           VALUES
           (
-            '${isin}',
+            '${esc(isin)}',
             '${(secCode || "").replace(/'/g, "''")}',
             '${(secName || "").replace(/'/g, "''")}',
-            '${accountCode}',
+            '${esc(accountCode)}',
             ${bonusShares},
-            '${exDateISO}'
+            '${esc(exDateISO)}'
           )
         `);
 
         inserted++;
         accountsRebuild.push(accountCode);
         console.log(`Bonus applied for ${accountCode}: ${bonusShares} shares`);
+
+        if (trackingOn) await markAccountSuccess(zcql, jobName, accountCode);
       } catch (accountErr) {
         errorCount++;
         console.error(`Error applying bonus for ${accountCode}:`, accountErr);
+        if (trackingOn) {
+          await markAccountFailed(
+            zcql,
+            jobName,
+            accountCode,
+            accountErr.message,
+          );
+        }
       }
     }
 
     /* ======================================================
-       STEP 4: INSERT BONUS_RECORD (master record)
+       STEP 4: BONUS_RECORD (master record, idempotent)
        ====================================================== */
     if (inserted > 0) {
       try {
-        await zcql.executeZCQLQuery(`
-          INSERT INTO Bonus_Record
-          (
-            SecurityCode,
-            SecurityName,
-            ISIN,
-            Ratio1,
-            Ratio2,
-            ExDate
-          )
-          VALUES
-          (
-            '${(secCode || "").replace(/'/g, "''")}',
-            '${(secName || "").replace(/'/g, "''")}',
-            '${isin}',
-            ${r1},
-            ${r2},
-            '${exDateISO}'
-          )
-        `);
+        await ensureBonusRecord(zcql, {
+          secCode,
+          secName,
+          isin,
+          r1,
+          r2,
+          exDateISO,
+        });
       } catch (recordErr) {
         console.error("Error inserting Bonus_Record:", recordErr);
       }
@@ -244,11 +433,24 @@ module.exports = async (jobRequest, context) => {
         );
       } catch (rebuildErr) {
         console.error("Failed to queue RebuildHoldingtable:", rebuildErr);
+        await zcql.executeZCQLQuery(
+          `UPDATE Jobs SET status = 'FAILED' WHERE jobName = '${esc(jobName)}'`,
+        );
+        context.closeWithFailure();
+        return;
       }
     }
 
+    if (trackingOn && errorCount > 0) {
+      await zcql.executeZCQLQuery(
+        `UPDATE Jobs SET status = 'FAILED' WHERE jobName = '${esc(jobName)}'`,
+      );
+      context.closeWithFailure();
+      return;
+    }
+
     await zcql.executeZCQLQuery(
-      `UPDATE Jobs SET status = 'COMPLETED' WHERE jobName = '${jobName}'`
+      `UPDATE Jobs SET status = 'COMPLETED' WHERE jobName = '${esc(jobName)}'`,
     );
     context.closeWithSuccess();
   } catch (error) {
@@ -256,7 +458,7 @@ module.exports = async (jobRequest, context) => {
 
     try {
       await zcql.executeZCQLQuery(
-        `UPDATE Jobs SET status = 'FAILED' WHERE jobName = '${jobName}'`
+        `UPDATE Jobs SET status = 'FAILED' WHERE jobName = '${esc(jobName)}'`,
       );
     } catch (updateErr) {
       console.error("Failed to update job status to FAILED:", updateErr);

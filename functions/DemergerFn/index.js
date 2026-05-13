@@ -1,7 +1,7 @@
 "use strict";
 
 const catalyst = require("zcatalyst-sdk-node");
-const { runDemergerApply } = require("./demergerApplyCore.js");
+const { runDemergerApply, DEMERGER_JOB_TYPE_DEFAULT } = require("./demergerApplyCore.js");
 
 const REBUILD_BATCH = 400;
 
@@ -20,6 +20,11 @@ async function queueRebuildHoldingsJobs(catalystApp, accountCodes, source) {
       jobpool_name: "Export",
       target_name: "RebuildHoldingtable",
       target_type: "Function",
+      /* Catalyst Job Pool: retries only on execution failure. Min interval 1m. */
+      job_config: {
+        number_of_retries: 5,
+        retry_interval: 60 * 1000,
+      },
       params: {
         accountCodesJson: JSON.stringify(chunk),
         source,
@@ -51,6 +56,8 @@ module.exports = async (jobRequest, context) => {
   try {
     const params = jobRequest.getAllJobParams();
     jobName = String(params.jobName || "").trim();
+    const demergerJobType =
+      String(params.jobType || "").trim() || DEMERGER_JOB_TYPE_DEFAULT;
 
     const oldIsin = String(params.oldIsin || "").trim();
     const newIsin = String(params.newIsin || "").trim();
@@ -66,6 +73,8 @@ module.exports = async (jobRequest, context) => {
 
     console.log("[DemergerFn] Started", {
       jobName,
+      demergerJobType,
+      jobStatusTracking: Boolean(jobName),
       oldIsin,
       newIsin,
       r1,
@@ -124,9 +133,19 @@ module.exports = async (jobRequest, context) => {
       pct,
       effectiveDateISO,
       recordDateISO,
+      jobTracking: {
+        enabled: Boolean(jobName),
+        jobName,
+        jobType: demergerJobType,
+      },
     });
 
     console.log("[DemergerFn] Records inserted:", applyResult.recordsInserted);
+    if (applyResult.trackingFailures > 0) {
+      console.warn(
+        `[DemergerFn] ${applyResult.trackingFailures} account(s) FAILED — check JobStatusPerAccount`,
+      );
+    }
 
     if (applyResult.accountsAffected.length > 0) {
       try {
@@ -149,7 +168,11 @@ module.exports = async (jobRequest, context) => {
     }
 
     console.log(`[DemergerFn] Done in ${Date.now() - startedAt}ms`);
-    await setJobStatus(zcql, jobName, "COMPLETED");
+    await setJobStatus(
+      zcql,
+      jobName,
+      applyResult.trackingFailures > 0 ? "FAILED" : "COMPLETED",
+    );
     context.closeWithSuccess();
   } catch (error) {
     console.error("[DemergerFn] FATAL:", error);

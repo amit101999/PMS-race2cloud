@@ -8,6 +8,121 @@ const ZCQL_ROW_LIMIT = 270;
 
 const esc = (s) => String(s ?? "").replace(/'/g, "''");
 
+/** Written to JobStatusPerAccount.jobType when tracking is enabled. */
+const DEMERGER_JOB_TYPE_DEFAULT = "DEMERGER_APPLY";
+
+function rowFromJobStatusRow(r) {
+  if (!r) return null;
+  return r.JobStatusPerAccount || r;
+}
+
+async function getPerAccountJobStatus(zcql, jobName, accountCode) {
+  try {
+    const rows = await zcql.executeZCQLQuery(`
+      SELECT status FROM JobStatusPerAccount
+      WHERE jobName = '${esc(jobName)}' AND WS_Account_code = '${esc(accountCode)}'
+      LIMIT 1
+    `);
+    if (!rows?.length) return "";
+    const st = rowFromJobStatusRow(rows[0]);
+    return String(st?.status ?? "").trim();
+  } catch (e) {
+    console.warn("[DemergerFn][JobStatusPerAccount] read failed:", e.message);
+    return "";
+  }
+}
+
+async function upsertAccountRowRunning(zcql, jobName, jobType, accountCode) {
+  try {
+    await zcql.executeZCQLQuery(`
+      INSERT INTO JobStatusPerAccount (jobType, WS_Account_code, status, lastError, jobName)
+      VALUES (
+        '${esc(jobType)}',
+        '${esc(accountCode)}',
+        'RUNNING',
+        '',
+        '${esc(jobName)}'
+      )
+    `);
+  } catch (insertErr) {
+    try {
+      await zcql.executeZCQLQuery(`
+        UPDATE JobStatusPerAccount
+        SET status = 'RUNNING', lastError = '', jobType = '${esc(jobType)}'
+        WHERE jobName = '${esc(jobName)}' AND WS_Account_code = '${esc(accountCode)}'
+      `);
+    } catch (upErr) {
+      console.warn(
+        `[DemergerFn][JobStatusPerAccount] upsert RUNNING failed ${accountCode}:`,
+        upErr.message,
+      );
+    }
+  }
+}
+
+async function markAccountSuccess(zcql, jobName, accountCode) {
+  try {
+    await zcql.executeZCQLQuery(`
+      UPDATE JobStatusPerAccount
+      SET status = 'SUCCESS', lastError = ''
+      WHERE jobName = '${esc(jobName)}' AND WS_Account_code = '${esc(accountCode)}'
+    `);
+  } catch (e) {
+    console.warn(`[DemergerFn][JobStatusPerAccount] SUCCESS failed ${accountCode}:`, e.message);
+  }
+}
+
+async function markAccountFailed(zcql, jobName, accountCode, errMsg) {
+  const msg = esc(String(errMsg || "UNKNOWN").slice(0, 500));
+  try {
+    await zcql.executeZCQLQuery(`
+      UPDATE JobStatusPerAccount
+      SET status = 'FAILED', lastError = '${msg}'
+      WHERE jobName = '${esc(jobName)}' AND WS_Account_code = '${esc(accountCode)}'
+    `);
+  } catch (e) {
+    console.warn(`[DemergerFn][JobStatusPerAccount] FAILED failed ${accountCode}:`, e.message);
+  }
+}
+
+async function ensureDemergerHeader(zcql, headerOpts) {
+  const {
+    oldIsin,
+    oldSecurityCode,
+    oldSecurityName,
+    newIsin,
+    newSecurityCode,
+    newSecurityName,
+    r1,
+    r2,
+    pct,
+    effectiveDateISO,
+    recordDateISO,
+  } = headerOpts;
+
+  const existing = await zcql.executeZCQLQuery(`
+    SELECT ROWID FROM Demerger
+    WHERE Old_ISIN = '${esc(oldIsin)}' AND New_ISIN = '${esc(newIsin)}'
+      AND Record_Date = '${esc(recordDateISO)}'
+    LIMIT 1
+  `);
+  if (existing?.length) {
+    console.log("[DemergerFn] Demerger header exists — skip INSERT (retry)");
+    return;
+  }
+
+  await zcql.executeZCQLQuery(`
+      INSERT INTO Demerger
+      (Old_ISIN, Old_Security_Code, Old_Security_Name,
+       New_ISIN, New_Security_Code, New_Security_Name,
+       Ratio1, Ratio2, Effective_Date, Record_Date, Allocation_To_New_Pct)
+      VALUES
+      ('${esc(oldIsin)}', '${esc(oldSecurityCode)}', '${esc(oldSecurityName)}',
+       '${esc(newIsin)}', '${esc(newSecurityCode)}', '${esc(newSecurityName)}',
+       ${r1}, ${r2}, '${esc(effectiveDateISO)}', '${esc(recordDateISO)}', ${pct})
+    `);
+}
+
 const round = (n, d = 2) => {
   const f = Math.pow(10, d);
   return Math.round(Number(n || 0) * f) / f;
@@ -170,18 +285,30 @@ async function runDemergerApply(zcql, opts) {
     pct,
     effectiveDateISO,
     recordDateISO,
+    jobTracking,
   } = opts;
 
-  await zcql.executeZCQLQuery(`
-      INSERT INTO Demerger
-      (Old_ISIN, Old_Security_Code, Old_Security_Name,
-       New_ISIN, New_Security_Code, New_Security_Name,
-       Ratio1, Ratio2, Effective_Date, Record_Date, Allocation_To_New_Pct)
-      VALUES
-      ('${esc(oldIsin)}', '${esc(oldSecurityCode)}', '${esc(oldSecurityName)}',
-       '${esc(newIsin)}', '${esc(newSecurityCode)}', '${esc(newSecurityName)}',
-       ${r1}, ${r2}, '${esc(effectiveDateISO)}', '${esc(recordDateISO)}', ${pct})
-    `);
+  const tracking =
+    jobTracking &&
+    jobTracking.enabled &&
+    String(jobTracking.jobName || "").trim();
+  const trackJobName = tracking ? String(jobTracking.jobName).trim() : "";
+  const trackJobType =
+    String(jobTracking?.jobType || "").trim() || DEMERGER_JOB_TYPE_DEFAULT;
+
+  await ensureDemergerHeader(zcql, {
+    oldIsin,
+    oldSecurityCode,
+    oldSecurityName,
+    newIsin,
+    newSecurityCode,
+    newSecurityName,
+    r1,
+    r2,
+    pct,
+    effectiveDateISO,
+    recordDateISO,
+  });
 
   try {
     await zcql.executeZCQLQuery(`
@@ -197,32 +324,64 @@ async function runDemergerApply(zcql, opts) {
   const accounts = await fetchAccountsHoldingIsin(zcql, oldIsin);
   let lotRowsInserted = 0;
   const affectedAccountsSet = new Set();
+  let trackingFailures = 0;
 
   for (const accountCode of accounts) {
-    const rows = await fetchHoldingRowsForPair(zcql, accountCode, oldIsin, recordDateISO);
-    if (!rows.length) continue;
+    if (tracking) {
+      const prev = await getPerAccountJobStatus(zcql, trackJobName, accountCode);
+      if (prev === "SUCCESS") {
+        console.log(
+          `[DemergerFn] skip ${accountCode} — JobStatusPerAccount already SUCCESS`,
+        );
+        continue;
+      }
+      await upsertAccountRowRunning(
+        zcql,
+        trackJobName,
+        trackJobType,
+        accountCode,
+      );
+    }
 
-    const lots = computeSurvivingLotsFromHoldingRows(rows);
-    if (!lots.length) continue;
+    try {
+      const rows = await fetchHoldingRowsForPair(
+        zcql,
+        accountCode,
+        oldIsin,
+        recordDateISO,
+      );
+      if (!rows.length) {
+        if (tracking) await markAccountSuccess(zcql, trackJobName, accountCode);
+        continue;
+      }
 
-    const lotRows = buildLotLevelDemergerForAccount({
-      accountCode,
-      lots,
-      oldIsin,
-      newIsin,
-      r1,
-      r2,
-      pct,
-    });
+      const lots = computeSurvivingLotsFromHoldingRows(rows);
+      if (!lots.length) {
+        if (tracking) await markAccountSuccess(zcql, trackJobName, accountCode);
+        continue;
+      }
 
-    if (!lotRows.length) continue;
+      const lotRows = buildLotLevelDemergerForAccount({
+        accountCode,
+        lots,
+        oldIsin,
+        newIsin,
+        r1,
+        r2,
+        pct,
+      });
 
-    for (const lr of lotRows) {
-      const sourceRowId = lr.sourceLotRowId
-        ? `'${esc(lr.sourceLotRowId)}'`
-        : "NULL";
+      if (!lotRows.length) {
+        if (tracking) await markAccountSuccess(zcql, trackJobName, accountCode);
+        continue;
+      }
 
-      await zcql.executeZCQLQuery(`
+      for (const lr of lotRows) {
+        const sourceRowId = lr.sourceLotRowId
+          ? `'${esc(lr.sourceLotRowId)}'`
+          : "NULL";
+
+        await zcql.executeZCQLQuery(`
           INSERT INTO Demerger_Record
           (WS_Account_code, TRANDATE, SETDATE, Tran_Type, ISIN,
            Security_Code, Security_Name,
@@ -237,11 +396,11 @@ async function runDemergerApply(zcql, opts) {
            0,
            ${sourceRowId})
         `);
-      lotRowsInserted++;
-      affectedAccountsSet.add(accountCode);
+        lotRowsInserted++;
+        affectedAccountsSet.add(accountCode);
 
-      if (lr.newQty > 0) {
-        await zcql.executeZCQLQuery(`
+        if (lr.newQty > 0) {
+          await zcql.executeZCQLQuery(`
             INSERT INTO Demerger_Record
             (WS_Account_code, TRANDATE, SETDATE, Tran_Type, ISIN,
              Security_Code, Security_Name,
@@ -256,15 +415,25 @@ async function runDemergerApply(zcql, opts) {
              0,
              ${sourceRowId})
           `);
-        lotRowsInserted++;
+          lotRowsInserted++;
+        }
       }
+
+      if (tracking) await markAccountSuccess(zcql, trackJobName, accountCode);
+    } catch (acctErr) {
+      console.error(`[DemergerFn][${accountCode}] apply failed:`, acctErr.message);
+      if (tracking) {
+        await markAccountFailed(zcql, trackJobName, accountCode, acctErr.message);
+      }
+      trackingFailures++;
     }
   }
 
   return {
     accountsAffected: [...affectedAccountsSet].sort((a, b) => a.localeCompare(b)),
     recordsInserted: lotRowsInserted,
+    trackingFailures,
   };
 }
 
-module.exports = { runDemergerApply };
+module.exports = { runDemergerApply, DEMERGER_JOB_TYPE_DEFAULT };
