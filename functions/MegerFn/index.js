@@ -21,6 +21,11 @@ async function queueRebuildHoldingsJobs(catalystApp, accountCodes, source) {
       jobpool_name: "Export",
       target_name: "RebuildHoldingtable",
       target_type: "Function",
+      /* Catalyst Job Pool: retries only on execution failure. Min interval 1m. */
+      job_config: {
+        number_of_retries: 5,
+        retry_interval: 60 * 1000,
+      },
       params: {
         accountCodesJson: JSON.stringify(chunk),
         source,
@@ -36,7 +41,132 @@ const POLL_INTERVAL_MS = 3000;
 const POLL_MAX_WAIT_MS = 10 * 60 * 1000;
 const MERGER_TRAN_TYPE = "MERGER";
 
+/** Written to JobStatusPerAccount.jobType (override via params.jobType). */
+const MERGER_JOB_TYPE_DEFAULT = "MERGER_APPLY";
+
 const esc = (v) => String(v ?? "").replace(/'/g, "''");
+
+function rowFromJobStatusRow(r) {
+  if (!r) return null;
+  return r.JobStatusPerAccount || r;
+}
+
+async function getPerAccountJobStatus(zcql, jobName, accountCode) {
+  try {
+    const rows = await zcql.executeZCQLQuery(`
+      SELECT status FROM JobStatusPerAccount
+      WHERE jobName = '${esc(jobName)}' AND WS_Account_code = '${esc(accountCode)}'
+      LIMIT 1
+    `);
+    if (!rows?.length) return "";
+    const st = rowFromJobStatusRow(rows[0]);
+    return String(st?.status ?? "").trim();
+  } catch (e) {
+    console.warn("[MegerFn][JobStatusPerAccount] read failed:", e.message);
+    return "";
+  }
+}
+
+async function upsertAccountRowRunning(zcql, jobName, jobType, accountCode) {
+  try {
+    await zcql.executeZCQLQuery(`
+      INSERT INTO JobStatusPerAccount (jobType, WS_Account_code, status, lastError, jobName)
+      VALUES (
+        '${esc(jobType)}',
+        '${esc(accountCode)}',
+        'RUNNING',
+        '',
+        '${esc(jobName)}'
+      )
+    `);
+  } catch (insertErr) {
+    try {
+      await zcql.executeZCQLQuery(`
+        UPDATE JobStatusPerAccount
+        SET status = 'RUNNING', lastError = '', jobType = '${esc(jobType)}'
+        WHERE jobName = '${esc(jobName)}' AND WS_Account_code = '${esc(accountCode)}'
+      `);
+    } catch (upErr) {
+      console.warn(
+        `[MegerFn][JobStatusPerAccount] upsert RUNNING failed ${accountCode}:`,
+        upErr.message,
+      );
+    }
+  }
+}
+
+async function markAccountSuccess(zcql, jobName, accountCode) {
+  try {
+    await zcql.executeZCQLQuery(`
+      UPDATE JobStatusPerAccount
+      SET status = 'SUCCESS', lastError = ''
+      WHERE jobName = '${esc(jobName)}' AND WS_Account_code = '${esc(accountCode)}'
+    `);
+  } catch (e) {
+    console.warn(`[MegerFn][JobStatusPerAccount] SUCCESS failed ${accountCode}:`, e.message);
+  }
+}
+
+async function markAccountFailed(zcql, jobName, accountCode, errMsg) {
+  const msg = esc(String(errMsg || "UNKNOWN").slice(0, 500));
+  try {
+    await zcql.executeZCQLQuery(`
+      UPDATE JobStatusPerAccount
+      SET status = 'FAILED', lastError = '${msg}'
+      WHERE jobName = '${esc(jobName)}' AND WS_Account_code = '${esc(accountCode)}'
+    `);
+  } catch (e) {
+    console.warn(`[MegerFn][JobStatusPerAccount] FAILED failed ${accountCode}:`, e.message);
+  }
+}
+
+/** Safe on retry: skip INSERT when header row already exists for this event. */
+async function ensureMergerRecordHeader(zcql, payload) {
+  const {
+    newIsin,
+    secCode,
+    secName,
+    oldIsin,
+    r1,
+    r2,
+    effectiveDateIso,
+  } = payload;
+  const existing = await zcql.executeZCQLQuery(`
+    SELECT ROWID FROM Merger_Record
+    WHERE OldISIN = '${esc(oldIsin)}' AND ISIN = '${esc(newIsin)}'
+      AND TRANDATE = '${esc(effectiveDateIso)}'
+    LIMIT 1
+  `);
+  if (existing?.length) {
+    console.log("[MegerFn] Merger_Record header already exists — skip INSERT (retry)");
+    return true;
+  }
+  await zcql.executeZCQLQuery(`
+    INSERT INTO Merger_Record
+    (
+      ISIN,
+      Security_Code,
+      Security_Name,
+      OldISIN,
+      Ratio1,
+      Ratio2,
+      TRANDATE,
+      SETDATE
+    )
+    VALUES
+    (
+      '${esc(newIsin)}',
+      '${esc(secCode)}',
+      '${esc(secName)}',
+      '${esc(oldIsin)}',
+      ${r1},
+      ${r2},
+      '${esc(effectiveDateIso)}',
+      '${esc(effectiveDateIso)}'
+    )
+  `);
+  return true;
+}
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 function csvCell(value) {
@@ -237,6 +367,9 @@ module.exports = async (jobRequest, context) => {
   try {
     const params = jobRequest.getAllJobParams();
     jobName = params.jobName || "";
+    const mergerJobType =
+      String(params.jobType || "").trim() || MERGER_JOB_TYPE_DEFAULT;
+    const trackingOn = Boolean(String(jobName || "").trim());
     const oldIsin = String(params.oldIsin || "").trim().toUpperCase();
     const newIsin = String(params.newIsin || "").trim().toUpperCase();
     const secCode = String(params.secCode || "").trim() || newIsin;
@@ -249,6 +382,8 @@ module.exports = async (jobRequest, context) => {
 
     console.log("[MegerFn] Started", {
       jobName,
+      mergerJobType,
+      jobStatusTracking: trackingOn,
       oldIsin,
       newIsin,
       r1,
@@ -377,29 +512,70 @@ module.exports = async (jobRequest, context) => {
     let skippedZeroLots = 0;
     let skippedCostBasis = 0;
 
+    let trackingFailures = 0;
+
     for (const accountCode of accounts) {
+      if (trackingOn) {
+        const prev = await getPerAccountJobStatus(zcql, jobName, accountCode);
+        if (prev === "SUCCESS") {
+          console.log(
+            `[MegerFn] skip ${accountCode} — JobStatusPerAccount already SUCCESS`,
+          );
+          continue;
+        }
+        await upsertAccountRowRunning(
+          zcql,
+          jobName,
+          mergerJobType,
+          accountCode,
+        );
+      }
+
       const tx = txByAcc[accountCode] || [];
       if (!tx.length) {
         skippedAccounts++;
+        if (trackingOn) await markAccountSuccess(zcql, jobName, accountCode);
         continue;
       }
       const bonuses = bonusByAcc[accountCode] || [];
       const demergers = demergerByAcc[accountCode] || [];
       const priorMergers = priorMergerByAcc[accountCode] || [];
 
-      const fifo = runFifoForLots(
-        tx,
-        bonuses,
-        splits,
-        demergers,
-        priorMergers,
-        "openLots",
-      );
+      let fifo;
+      if (trackingOn) {
+        try {
+          fifo = runFifoForLots(
+            tx,
+            bonuses,
+            splits,
+            demergers,
+            priorMergers,
+            "openLots",
+          );
+        } catch (err) {
+          console.error(`[MegerFn][${accountCode}] FIFO failed:`, err.message);
+          await markAccountFailed(zcql, jobName, accountCode, err.message);
+          trackingFailures++;
+          continue;
+        }
+      } else {
+        fifo = runFifoForLots(
+          tx,
+          bonuses,
+          splits,
+          demergers,
+          priorMergers,
+          "openLots",
+        );
+      }
+
       if (!fifo || !Array.isArray(fifo.openLots) || !fifo.openLots.length) {
         skippedAccounts++;
+        if (trackingOn) await markAccountSuccess(zcql, jobName, accountCode);
         continue;
       }
 
+      let accountHadMergerRow = false;
       for (const lot of fifo.openLots) {
         const lotQty = Number(lot.qty) || 0;
         if (lotQty <= 0) continue;
@@ -413,6 +589,7 @@ module.exports = async (jobRequest, context) => {
           continue;
         }
 
+        accountHadMergerRow = true;
         const lotWap = newQty > 0 ? lotCost / newQty : 0;
 
         mergerInsertRows.push({
@@ -437,6 +614,10 @@ module.exports = async (jobRequest, context) => {
         totalNewQty += newQty;
         totalCarriedCost += lotCost;
       }
+
+      if (trackingOn && !accountHadMergerRow) {
+        await markAccountSuccess(zcql, jobName, accountCode);
+      }
     }
 
     console.log(
@@ -446,7 +627,11 @@ module.exports = async (jobRequest, context) => {
 
     if (!mergerInsertRows.length) {
       console.log("[MegerFn] Nothing to insert; closing as COMPLETED.");
-      await setJobStatus(zcql, jobName, "COMPLETED");
+      await setJobStatus(
+        zcql,
+        jobName,
+        trackingOn && trackingFailures > 0 ? "FAILED" : "COMPLETED",
+      );
       context.closeWithSuccess();
       return;
     }
@@ -455,30 +640,15 @@ module.exports = async (jobRequest, context) => {
     console.log("[MegerFn] Security_List:", slResult);
 
     try {
-      await zcql.executeZCQLQuery(`
-        INSERT INTO Merger_Record
-        (
-          ISIN,
-          Security_Code,
-          Security_Name,
-          OldISIN,
-          Ratio1,
-          Ratio2,
-          TRANDATE,
-          SETDATE
-        )
-        VALUES
-        (
-          '${esc(newIsin)}',
-          '${esc(secCode)}',
-          '${esc(secName)}',
-          '${esc(oldIsin)}',
-          ${r1},
-          ${r2},
-          '${esc(effectiveDateIso)}',
-          '${esc(effectiveDateIso)}'
-        )
-      `);
+      await ensureMergerRecordHeader(zcql, {
+        newIsin,
+        secCode,
+        secName,
+        oldIsin,
+        r1,
+        r2,
+        effectiveDateIso,
+      });
     } catch (recordErr) {
       console.error("[MegerFn] Merger_Record insert failed:", recordErr.message);
       await setJobStatus(zcql, jobName, "FAILED");
@@ -541,8 +711,19 @@ module.exports = async (jobRequest, context) => {
           accountsAffected.length,
           "account(s)",
         );
+        if (trackingOn) {
+          const okAccounts = new Set(
+            accountsAffected.map((a) => String(a || "").trim()).filter(Boolean),
+          );
+          for (const ac of okAccounts) {
+            await markAccountSuccess(zcql, jobName, ac);
+          }
+        }
       } catch (rbErr) {
         console.error("[MegerFn] Queue holdings rebuild failed:", rbErr);
+        console.warn(
+          "[MegerFn] Merger rows are persisted but Holdings rebuild was not queued — remediate manually if needed.",
+        );
         await setJobStatus(zcql, jobName, "FAILED");
         context.closeWithFailure();
         return;
@@ -554,7 +735,11 @@ module.exports = async (jobRequest, context) => {
       `[MegerFn] Done. accounts=${accounts.length} lots=${totalSurvivingLots} ` +
         `newQty=${totalNewQty} carriedCost=${totalCarriedCost.toFixed(2)} elapsed=${elapsed}s`,
     );
-    await setJobStatus(zcql, jobName, "COMPLETED");
+    await setJobStatus(
+      zcql,
+      jobName,
+      trackingOn && trackingFailures > 0 ? "FAILED" : "COMPLETED",
+    );
     context.closeWithSuccess();
   } catch (error) {
     console.error("[MegerFn] FATAL:", error);

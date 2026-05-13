@@ -330,6 +330,11 @@ export const addStockSplit = async (req, res) => {
           jobpool_name: "Export",
           target_name: "RebuildHoldingtable",
           target_type: "Function",
+          /* Catalyst Job Pool: retries only on execution failure. Min interval 1m. */
+          job_config: {
+            number_of_retries: 5,
+            retry_interval: 60 * 1000,
+          },
           params: {
             accountCodesJson: JSON.stringify(chunk),
             source: "SplitController",

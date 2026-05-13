@@ -356,6 +356,11 @@ export const applyMerger = async (req, res) => {
       jobpool_name: "Export",
       target_name: "MegerFn",
       target_type: "Function",
+      /* Catalyst Job Pool: retries only run when execution fails. Min interval 1m. */
+      job_config: {
+        number_of_retries: 5,
+        retry_interval: 60 * 1000,
+      },
       params: {
         jobName,
         oldIsin,
