@@ -6,11 +6,81 @@ import { stratusSignedUrlToString } from "../../util/stratusSignedUrl.js";
 const BUCKET_NAME = "client-transaction-files";
 const TABLE_NAME = "Transaction";
 
+/** Poll Catalyst Datastore bulk write (same pattern as `functions/MegerFn/index.js`). */
+const BULK_POLL_INTERVAL_MS = 3000;
+const BULK_POLL_MAX_WAIT_MS = 45 * 60 * 1000;
+
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
+function sleep(ms) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+function escSql(s) {
+  return String(s ?? "").replace(/'/g, "''");
+}
+
+async function ensureJobsRow(zcql, jobName, status) {
+  try {
+    await zcql.executeZCQLQuery(`
+      INSERT INTO Jobs (jobName, status) VALUES ('${escSql(jobName)}', '${escSql(status)}')
+    `);
+  } catch {
+    try {
+      await zcql.executeZCQLQuery(`
+        UPDATE Jobs SET status = '${escSql(status)}' WHERE jobName = '${escSql(jobName)}'
+      `);
+    } catch (e2) {
+      console.warn(
+        `[TempTransactionUpload] Jobs upsert failed for ${jobName}:`,
+        e2.message,
+      );
+    }
+  }
+}
+
+async function updateJobsStatus(zcql, jobName, status) {
+  try {
+    await zcql.executeZCQLQuery(`
+      UPDATE Jobs SET status = '${escSql(status)}' WHERE jobName = '${escSql(jobName)}'
+    `);
+  } catch (e) {
+    console.warn(
+      `[TempTransactionUpload] Jobs status update failed for ${jobName}:`,
+      e.message,
+    );
+  }
+}
+
+async function pollTransactionBulkWriteJob(bulkWrite, jobId) {
+  const start = Date.now();
+  while (Date.now() - start < BULK_POLL_MAX_WAIT_MS) {
+    await sleep(BULK_POLL_INTERVAL_MS);
+    try {
+      const res = await bulkWrite.getStatus(jobId);
+      const st = String(res?.status || "").toUpperCase();
+      if (st === "COMPLETED") return res;
+      if (st === "FAILED") {
+        throw new Error(
+          `Bulk write job ${jobId} failed: ${JSON.stringify(res)}`,
+        );
+      }
+    } catch (err) {
+      if (String(err?.message || "").includes("failed")) throw err;
+      console.error(`[TempTransactionUpload] poll bulk ${jobId}:`, err);
+    }
+  }
+  throw new Error(
+    `Bulk write job ${jobId} timed out after ${BULK_POLL_MAX_WAIT_MS}ms`,
+  );
+}
+
 /**
- * Bank / broker export: row-1 headers — exact count, order, spelling, and case.
- * SETDATEFLAG and MKTRATE stay in the file for layout; they are not inserted (not in HEADER_MAP).
+ * Bank / broker export: row-1 headers — exact count (26), order, spelling, and case.
+ * Three literal `filler` headers after BankRef match the broker file; first two map by position to NETRATE / Net_Amount.
+ * SETDATEFLAG, MKTRATE, and the third `filler` are layout-only (not inserted).
  */
 const EXPECTED_HEADERS_IN_ORDER = [
   "Broker Code",
@@ -22,8 +92,6 @@ const EXPECTED_HEADERS_IN_ORDER = [
   "SETDATE",
   "QUANTITY",
   "RATE",
-  "NET RATE",
-  "NET AMOUNT",
   "BROKERAGEPERSHARE",
   "SERVICETAX",
   "SETDATEFLAG",
@@ -37,12 +105,20 @@ const EXPECTED_HEADERS_IN_ORDER = [
   "Cheque number",
   "CHQDETAIL",
   "BankRef",
+  "filler",
+  "filler",
+  "filler",
   "CashSetdate",
 ];
 
+/** 0-based column indices of literal `filler` in the template (first two → DB, third dropped). */
+const FILLER_TEMPLATE_INDICES = EXPECTED_HEADERS_IN_ORDER.map((h, i) =>
+  h === "filler" ? i : -1,
+).filter((i) => i >= 0);
+
 /**
  * CSV header (exact) → Transaction column name(s) for bulk insert.
- * String or string[] (duplicated value). Unmapped columns (SETDATEFLAG, MKTRATE) are dropped in rewrite.
+ * String or string[] (duplicated value). Unmapped columns (SETDATEFLAG, MKTRATE, third filler) dropped in rewrite.
  */
 const HEADER_MAP = {
   "Broker Code": ["WS_client_id", "BROKERCODE"],
@@ -54,8 +130,6 @@ const HEADER_MAP = {
   SETDATE: "SETDATE",
   QUANTITY: "QTY",
   RATE: "RATE",
-  "NET RATE": "NETRATE",
-  "NET AMOUNT": "Net_Amount",
   BROKERAGEPERSHARE: "BROKERAGE",
   SERVICETAX: "SERVICETAX",
   CASHSYMBOLCODE: "Security_code",
@@ -69,6 +143,22 @@ const HEADER_MAP = {
   BankRef: "BANKACID",
   CashSetdate: "PAYMENTDATE",
 };
+
+/**
+ * @param {string} raw Header cell from row 1 (trimmed).
+ * @param {number} columnIndex 0-based column index (must match validated template order).
+ * @returns {string | string[] | null} null = omit from bulk CSV.
+ */
+function mapSourceColumnToTargets(raw, columnIndex) {
+  if (Object.prototype.hasOwnProperty.call(HEADER_MAP, raw)) {
+    return HEADER_MAP[raw];
+  }
+  if (raw !== "filler") return null;
+  const ord = FILLER_TEMPLATE_INDICES.indexOf(columnIndex);
+  if (ord === 0) return "NETRATE";
+  if (ord === 1) return "Net_Amount";
+  return null;
+}
 
 /** Must be yyyy-mm-dd when the cell is not blank / null / 0-like. */
 const REQUIRED_DATE_COLUMNS = ["DATEPUR_ACQUI", "SETDATE"];
@@ -182,8 +272,8 @@ function targetsForHeader(mapped) {
 }
 
 /**
- * Rewrites CSV for bulk insert: maps template headers (HEADER_MAP) to Transaction column names;
- * one source column can fill multiple DB columns. Unmapped template columns (e.g. SETDATEFLAG, MKTRATE) dropped.
+ * Rewrites CSV for bulk insert: maps template headers to Transaction column names;
+ * one source column can fill multiple DB columns. Unmapped template columns (e.g. SETDATEFLAG, MKTRATE, third filler) dropped.
  */
 function normalizeCsvForBulkUpload(fileBuffer) {
   const text = stripBom(fileBuffer.toString("utf8"));
@@ -199,7 +289,7 @@ function normalizeCsvForBulkUpload(fileBuffer) {
   const headerMappings = [];
   for (let i = 0; i < originalHeaders.length; i++) {
     const raw = originalHeaders[i];
-    const mapped = HEADER_MAP[raw];
+    const mapped = mapSourceColumnToTargets(raw, i);
     if (mapped) {
       headerMappings.push({ idx: i, targets: targetsForHeader(mapped) });
     }
@@ -277,14 +367,18 @@ function parseTempTransactionSampleRows(fileBuffer) {
 
 /**
  * POST /api/transaction-uploader/upload-temp-file
- * 1. Validates row 1 matches EXPECTED_HEADERS_IN_ORDER (count + order + exact names).
+ * 1. Validates row 1 matches EXPECTED_HEADERS_IN_ORDER (26 columns, count + order + exact names).
  * 2. Validates the CSV parses and has at least one data row.
  * 3. Validates date columns on the first 3 data rows (blank / 0 / null allowed when empty).
  * 4. Rewrites CSV: maps template headers to Transaction columns (HEADER_MAP), tab → comma, trim cells.
  * 5. Uploads rewritten CSV to Stratus bucket client-transaction-files under transactions/.
- * 6. Triggers a Catalyst Bulk Write Job to insert into the Transaction table.
+ * 6. Inserts `Jobs` (RUNNING), runs Datastore bulk write → `Transaction`, polls to completion,
+ *    then sets `Jobs` to COMPLETED (or FAILED). `jobName` is `TxnCsv_<ms>` matching `TxnUpload-<ms>-` in objectKey.
  */
 export const uploadTempTransaction = async (req, res) => {
+  let pipelineJobName = null;
+  let zcqlForJob = null;
+
   try {
     /* ─── 1. VALIDATE REQUEST ─────────────────────────────────────── */
     const catalystApp = req.catalystApp;
@@ -378,8 +472,11 @@ export const uploadTempTransaction = async (req, res) => {
     /* ─── 2. NORMALIZE CSV & UPLOAD TO STRATUS ───────────────────── */
     const rewrittenCsv = normalizeCsvForBulkUpload(file.data);
 
+    const uploadMs = Date.now();
+    const objectKey = `transactions/TxnUpload-${uploadMs}-${file.name}`;
+    pipelineJobName = `TxnCsv_${uploadMs}`.slice(0, 48);
+
     const bucket = catalystApp.stratus().bucket(BUCKET_NAME);
-    const objectKey = `transactions/TxnUpload-${Date.now()}-${file.name}`;
 
     const passThrough = new PassThrough();
     const uploadPromise = bucket.putObject(objectKey, passThrough, {
@@ -390,39 +487,63 @@ export const uploadTempTransaction = async (req, res) => {
     passThrough.end(rewrittenCsv);
     await uploadPromise;
 
-    /* ─── 3. TRIGGER BULK WRITE JOB → Transaction TABLE ──────────── */
-    const bulkJob = await catalystApp
-      .datastore()
-      .table(TABLE_NAME)
-      .bulkJob("write")
-      .createJob(
+    /* ─── 3. Jobs row + bulk write → Transaction (poll to completion) ─ */
+    zcqlForJob = catalystApp.zcql();
+    await ensureJobsRow(zcqlForJob, pipelineJobName, "RUNNING");
+
+    const datastore = catalystApp.datastore();
+    const bulkWrite = datastore.table(TABLE_NAME).bulkJob("write");
+
+    let bulkJob;
+    try {
+      bulkJob = await bulkWrite.createJob(
         {
           bucket_name: BUCKET_NAME,
           object_key: objectKey,
         },
         {
           operation: "insert",
-        }
+        },
       );
+    } catch (bulkCreateErr) {
+      await updateJobsStatus(zcqlForJob, pipelineJobName, "FAILED");
+      throw bulkCreateErr;
+    }
+
+    try {
+      await pollTransactionBulkWriteJob(bulkWrite, bulkJob.job_id);
+    } catch (pollErr) {
+      await updateJobsStatus(zcqlForJob, pipelineJobName, "FAILED");
+      throw pollErr;
+    }
+
+    await updateJobsStatus(zcqlForJob, pipelineJobName, "COMPLETED");
 
     /* ─── 4. RESPOND ──────────────────────────────────────────────── */
     return res.status(200).json({
       success: true,
-      message: "File uploaded to Stratus and bulk insert job started for Transaction table",
+      message:
+        "Transaction bulk import finished. Jobs row is COMPLETED — bind a Signals rule on Jobs (status COMPLETED, jobName TxnCsv_*) to run downstream work.",
+      pipelineJobName,
       fileName: file.name,
       objectKey,
       bucket: BUCKET_NAME,
       table: TABLE_NAME,
-      jobId: bulkJob.job_id,
-      jobStatus: bulkJob.status,
+      bulkJobId: bulkJob.job_id,
+      bulkJobStatus: "COMPLETED",
     });
   } catch (error) {
     console.error(`[TempTransactionUpload] [Error] [${new Date().toISOString()}] :`, error);
 
+    if (pipelineJobName && zcqlForJob) {
+      await updateJobsStatus(zcqlForJob, pipelineJobName, "FAILED");
+    }
+
     return res.status(500).json({
       success: false,
-      message: "Failed to upload file or start bulk insert job",
+      message: "Failed to upload file or complete bulk insert into Transaction",
       error: error.message,
+      ...(pipelineJobName ? { pipelineJobName } : {}),
     });
   }
 };
