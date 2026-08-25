@@ -1,0 +1,51 @@
+# PMS backend served by the Catalyst CLI inside the container.
+#
+# Why this exists: `node index.js` alone cannot serve data, because
+# catalyst.initialize(req) needs the x-zc-* headers that only the AppSail
+# gateway or `catalyst serve` injects. Running the CLI in the container makes
+# it inject them, reusing the host's existing `catalyst login` (mounted at
+# /root/.config/zcatalyst-cli-nodejs) — so no project key or access token is
+# needed, and the CLI refreshes the credential itself.
+#
+# The CLI credential is AES-encrypted with a static key, not a machine-bound
+# one, so a Windows login file decrypts fine in this Linux container.
+#
+# BUILD CONTEXT IS THE REPO ROOT (catalyst.json and .catalystrc must be present).
+
+FROM node:20-alpine
+WORKDIR /app
+
+# socat bridges the CLI's loopback-only proxy to a published port; netcat is
+# used by the entrypoint to wait for that proxy to bind.
+RUN apk add --no-cache socat netcat-openbsd \
+    && npm install -g zcatalyst-cli --no-fund --no-audit \
+    && npm cache clean --force
+
+# Catalyst project metadata — the CLI refuses to serve without these.
+COPY catalyst.json .catalystrc ./
+
+COPY appsail-nodejs/package.json appsail-nodejs/package-lock.json ./appsail-nodejs/
+RUN cd appsail-nodejs && npm ci --omit=dev && npm cache clean --force
+
+COPY appsail-nodejs/index.js ./appsail-nodejs/
+COPY appsail-nodejs/controller ./appsail-nodejs/controller
+COPY appsail-nodejs/router ./appsail-nodejs/router
+COPY appsail-nodejs/util ./appsail-nodejs/util
+COPY appsail-nodejs/app-config.json ./appsail-nodejs/
+
+# app-config.json declares stack node16, and `catalyst serve` refuses to run
+# without a node16 binary on PATH. This image ships node20, so rewrite the
+# stack in the IMAGE'S COPY ONLY — the repo file is untouched, so AppSail
+# deploys still go out as node16.
+RUN sed -i 's/"node16"/"node20"/' appsail-nodejs/app-config.json
+
+COPY appsail-nodejs/docker/catalyst-serve-entrypoint.sh /usr/local/bin/
+RUN chmod +x /usr/local/bin/catalyst-serve-entrypoint.sh
+
+ENV X_ZOHO_CATALYST_LISTEN_PORT=9000
+EXPOSE 9000
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=90s --retries=5 \
+  CMD wget -qO- "http://127.0.0.1:${X_ZOHO_CATALYST_LISTEN_PORT}/" >/dev/null 2>&1 || exit 1
+
+CMD ["catalyst-serve-entrypoint.sh"]

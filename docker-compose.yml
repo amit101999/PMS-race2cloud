@@ -2,8 +2,8 @@
 #
 #   docker compose up --build
 #     frontend -> http://localhost:3000
-#     backend  -> http://localhost:3001  (kept on 3001 so the non-Docker
-#                 `npm start` default in src/constant.js still works)
+#     backend  -> http://localhost:3001  (matches the non-Docker default in
+#                 react-app/src/constant.js and `catalyst serve`)
 #
 # Catalyst Functions (functions/) are NOT part of this stack — they are
 # serverless targets deployed with `catalyst deploy --only functions` and have
@@ -12,23 +12,23 @@
 services:
   backend:
     build:
-      context: ./appsail-nodejs
+      # Context is the repo root — the CLI needs catalyst.json and .catalystrc.
+      context: .
+      dockerfile: appsail-nodejs/Dockerfile.cli
     image: pms-backend:local
     container_name: pms-backend
     restart: unless-stopped
     ports:
       - "${BACKEND_PORT:-3001}:9000"
+    volumes:
+      # Reuses the host's existing `catalyst login`. The CLI inside the
+      # container injects the x-zc-* headers and refreshes the credential
+      # itself, so no project key or access token is needed.
+      # Only the credential FILE is mounted, so the container's own CLI
+      # settings never touch the host's config directory.
+      - "${CATALYST_CLI_CONFIG:-${APPDATA}/zcatalyst-cli-nodejs/Config/zcatalyst-cli.json}:/root/.config/zcatalyst-cli-nodejs/zcatalyst-cli.json"
     environment:
-      NODE_ENV: production
       X_ZOHO_CATALYST_LISTEN_PORT: "9000"
-      # Off by default. Set to "true" plus the four CATALYST_* values below to
-      # let the container talk to real Catalyst data (see docs/DOCKER.md).
-      CATALYST_INJECT_HEADERS: "${CATALYST_INJECT_HEADERS:-false}"
-      CATALYST_PROJECT_ID: "${CATALYST_PROJECT_ID:-}"
-      CATALYST_PROJECT_KEY: "${CATALYST_PROJECT_KEY:-}"
-      CATALYST_ENVIRONMENT: "${CATALYST_ENVIRONMENT:-Development}"
-      CATALYST_PROJECT_DOMAIN: "${CATALYST_PROJECT_DOMAIN:-}"
-      CATALYST_ACCESS_TOKEN: "${CATALYST_ACCESS_TOKEN:-}"
 
   frontend:
     build:
@@ -42,7 +42,12 @@ services:
     ports:
       - "${FRONTEND_PORT:-3000}:80"
     environment:
-      API_UPSTREAM: http://backend:9000
+      # Default: the backend container. Override to
+      # http://host.docker.internal:3001 to proxy to a host-side
+      # `catalyst serve` instead, which needs no credentials.
+      API_UPSTREAM: "${API_UPSTREAM:-http://backend:9000}"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       backend:
         condition: service_started
