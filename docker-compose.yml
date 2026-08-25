@@ -1,0 +1,48 @@
+# PMS local/self-hosted stack: Express backend + nginx-served React build.
+#
+#   docker compose up --build
+#     frontend -> http://localhost:3000
+#     backend  -> http://localhost:3001  (kept on 3001 so the non-Docker
+#                 `npm start` default in src/constant.js still works)
+#
+# Catalyst Functions (functions/) are NOT part of this stack — they are
+# serverless targets deployed with `catalyst deploy --only functions` and have
+# no container form. See docs/DOCKER.md.
+
+services:
+  backend:
+    build:
+      context: ./appsail-nodejs
+    image: pms-backend:local
+    container_name: pms-backend
+    restart: unless-stopped
+    ports:
+      - "${BACKEND_PORT:-3001}:9000"
+    environment:
+      NODE_ENV: production
+      X_ZOHO_CATALYST_LISTEN_PORT: "9000"
+      # Off by default. Set to "true" plus the four CATALYST_* values below to
+      # let the container talk to real Catalyst data (see docs/DOCKER.md).
+      CATALYST_INJECT_HEADERS: "${CATALYST_INJECT_HEADERS:-false}"
+      CATALYST_PROJECT_ID: "${CATALYST_PROJECT_ID:-}"
+      CATALYST_PROJECT_KEY: "${CATALYST_PROJECT_KEY:-}"
+      CATALYST_ENVIRONMENT: "${CATALYST_ENVIRONMENT:-Development}"
+      CATALYST_PROJECT_DOMAIN: "${CATALYST_PROJECT_DOMAIN:-}"
+      CATALYST_ACCESS_TOKEN: "${CATALYST_ACCESS_TOKEN:-}"
+
+  frontend:
+    build:
+      context: ./react-app
+      args:
+        # Same-origin path; nginx proxies it to the backend service.
+        REACT_APP_API_BASE_URL: "${REACT_APP_API_BASE_URL:-/api}"
+    image: pms-frontend:local
+    container_name: pms-frontend
+    restart: unless-stopped
+    ports:
+      - "${FRONTEND_PORT:-3000}:80"
+    environment:
+      API_UPSTREAM: http://backend:9000
+    depends_on:
+      backend:
+        condition: service_started

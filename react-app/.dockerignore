@@ -1,0 +1,15 @@
+node_modules
+build
+npm-debug.log*
+*.log
+
+.git
+.gitignore
+.vscode
+
+Dockerfile
+.dockerignore
+README.md
+
+# Catalyst-only deploy metadata
+client-package.json
