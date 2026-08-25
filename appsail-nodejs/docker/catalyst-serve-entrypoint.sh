@@ -11,7 +11,18 @@ set -e
 SERVE_PORT="${CATALYST_SERVE_PORT:-3001}"
 LISTEN_PORT="${X_ZOHO_CATALYST_LISTEN_PORT:-9000}"
 
-catalyst serve --only appsail --no-open --ignore-scripts &
+# Auth comes from either CATALYST_TOKEN (portable: works on any machine,
+# generate it with `catalyst token:generate`) or, if unset, a catalyst
+# login config mounted into the image.
+set -- --only appsail --no-open --ignore-scripts
+if [ -n "${CATALYST_TOKEN:-}" ]; then
+  echo "[entrypoint] authenticating with CATALYST_TOKEN"
+  set -- "$@" --token "${CATALYST_TOKEN}"
+else
+  echo "[entrypoint] no CATALYST_TOKEN set; relying on a mounted catalyst login"
+fi
+
+catalyst serve "$@" &
 SERVE_PID=$!
 
 # Bail out if the CLI dies during startup rather than hanging forever.

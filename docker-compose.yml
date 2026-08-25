@@ -20,15 +20,14 @@ services:
     restart: unless-stopped
     ports:
       - "${BACKEND_PORT:-3001}:9000"
-    volumes:
-      # Reuses the host's existing `catalyst login`. The CLI inside the
-      # container injects the x-zc-* headers and refreshes the credential
-      # itself, so no project key or access token is needed.
-      # Only the credential FILE is mounted, so the container's own CLI
-      # settings never touch the host's config directory.
-      - "${CATALYST_CLI_CONFIG:-${APPDATA}/zcatalyst-cli-nodejs/Config/zcatalyst-cli.json}:/root/.config/zcatalyst-cli-nodejs/zcatalyst-cli.json"
+    # No credential volume by default. Mounting a catalyst login file that
+    # does not exist makes Docker silently create a DIRECTORY there, which
+    # the CLI then fails to read ("haven't logged in yet"). CATALYST_TOKEN
+    # is portable and needs no host files — see docs/DOCKER.md.
     environment:
       X_ZOHO_CATALYST_LISTEN_PORT: "9000"
+      # From `catalyst token:generate` (or `--current` for the existing one).
+      CATALYST_TOKEN: "${CATALYST_TOKEN:-}"
 
   frontend:
     build:
