@@ -1,0 +1,11 @@
+# Shell scripts and Docker files must keep LF endings. A CRLF checkout on
+# Windows breaks the shebang inside Linux containers ("/bin/sh\r: not found",
+# exit 127), which is invisible until the container starts.
+*.sh            text eol=lf
+Dockerfile      text eol=lf
+Dockerfile.*    text eol=lf
+*.dockerfile    text eol=lf
+.dockerignore   text eol=lf
+docker-compose*.yml text eol=lf
+*.conf          text eol=lf
+*.template      text eol=lf
