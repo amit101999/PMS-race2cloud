@@ -4,6 +4,3 @@ clientids.csv
 catalyst-debug.log
 text.txt
 node_modules/
-
-# docker compose env — may hold CATALYST_ACCESS_TOKEN
-.env
