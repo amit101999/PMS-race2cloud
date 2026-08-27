@@ -2,6 +2,24 @@ import { buildVirtualToActualMap } from "../../util/mapVirtualToActualCodes.js";
 
 const HOLDINGS_BATCH = 250;
 
+/**
+ * The date a Holdings row takes effect for an as-on-date view.
+ * Every type is dated by its transaction date, with one exception: `OPI`
+ * ("Security in") is dated by its settlement date, because an inward transfer
+ * is not owned until it actually settles.
+ *
+ * Deliberately local to this controller: the Split module owns this rule for
+ * its own preview and must not depend on another module's copy, which may
+ * still be on the older settlement-date rule.
+ */
+const splitEffectiveDate = (h) => {
+  const setD = String(h.SETTLEMENT_DATE || "").slice(0, 10);
+  const txD  = String(h.TRANSACTION_DATE || "").slice(0, 10);
+  return String(h.TYPE || "").trim().toUpperCase() === "OPI"
+    ? setD || txD
+    : txD || setD;
+};
+
 export const getAllSecuritiesISINs = async (req, res) => {
   try {
     const app = req.catalystApp;
@@ -103,7 +121,7 @@ export const previewStockSplit = async (req, res) => {
     while (true) {
       const batch = await zcql.executeZCQLQuery(`
         SELECT WS_Account_code, HOLDING, WAP, HOLDING_VALUE,
-               SETTLEMENT_DATE, TRANSACTION_DATE
+               TYPE, SETTLEMENT_DATE, TRANSACTION_DATE
         FROM Holdings
         WHERE ISIN = '${isin}'
           AND (SETTLEMENT_DATE < '${cutoff}' OR TRANSACTION_DATE < '${cutoff}')
@@ -117,6 +135,12 @@ export const previewStockSplit = async (req, res) => {
         const h = row.Holdings || row;
         const acc = String(h.WS_Account_code || "").trim();
         if (!acc) continue;
+        // The SQL clause above deliberately ORs both dates — it cannot express
+        // the OPI exception on its own. Apply the per-type rule here BEFORE the
+        // row can become this account's "latest" snapshot, otherwise a row that
+        // is not yet effective overwrites (and then wrongly drops) the real one.
+        const eff = splitEffectiveDate(h);
+        if (eff && eff >= cutoff) continue;
         latestByAccount.set(acc, h); // last row per account wins
       }
 
