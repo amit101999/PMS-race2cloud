@@ -22,15 +22,26 @@ function isHoldingsBuyType(type) {
   return /^BY-|SQB|OPI/i.test(String(type || ""));
 }
 
+function isHoldingsOpiType(type) {
+  return String(type || "").trim().toUpperCase() === "OPI";
+}
+
 /**
  * The date a Holdings row should be filtered on for an as-on-date view.
- * Mirrors the rebuild job's `getEffectiveDate`: buys (BY-/SQB/OPI) settle on
- * SETTLEMENT_DATE, everything else takes effect on TRANSACTION_DATE.
+ *
+ * SETTLEMENT-DATE RULE (disabled for BY-/SQB buys — kept for future restore):
+ * Buys used to settle on SETTLEMENT_DATE, everything else took effect on
+ * TRANSACTION_DATE (mirrors the rebuild job's old `getEffectiveDate`):
+ *
+ *   return isHoldingsBuyType(row.TYPE) ? setD || txD : txD || setD;
+ *
+ * Current rule: effective date is Transaction Date for everything EXCEPT
+ * OPI (opening/initial-position) rows, which keep using Settlement Date.
  */
 function holdingsEffectiveDate(row) {
   const setD = String(row.SETTLEMENT_DATE || "").slice(0, 10);
   const txD = String(row.TRANSACTION_DATE || "").slice(0, 10);
-  return isHoldingsBuyType(row.TYPE) ? setD || txD : txD || setD;
+  return isHoldingsOpiType(row.TYPE) ? setD || txD : txD || setD;
 }
 
 /**
