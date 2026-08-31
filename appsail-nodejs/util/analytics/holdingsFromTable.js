@@ -31,15 +31,33 @@ export function isHoldingsSellType(type) {
   return /^SL[+-]|SQS|OPO|NF-/i.test(String(type || "").trim());
 }
 
-/**
- * The date a Holdings row should be filtered on for an as-on-date view.
- * Mirrors the rebuild job's `getEffectiveDate`: buys (BY-/SQB/OPI) settle on
- * SETTLEMENT_DATE, everything else takes effect on TRANSACTION_DATE.
- */
+/** Only OPI is settlement-dated — see `holdingsEffectiveDate` for why. */
+export function isHoldingsOpiType(type) {
+  return /^OPI/i.test(String(type || "").trim());
+}
+
+/* ===== TRADE_DATE_MIGRATION: OLD (settlement basis for ALL buys) — retained, do not delete =====
 export function holdingsEffectiveDate(row) {
   const setD = String(row.SETTLEMENT_DATE || "").slice(0, 10);
   const txD = String(row.TRANSACTION_DATE || "").slice(0, 10);
   return isHoldingsBuyType(row.TYPE) ? setD || txD : txD || setD;
+}
+   ============================================================================================= */
+
+/**
+ * The date a Holdings row should be filtered on for an as-on-date view.
+ * Mirrors the rebuild job's `getEffectiveDate` (RebuildHoldingtable): every type
+ * takes effect on TRANSACTION_DATE, except OPI. OPI rows are inception / opening
+ * positions where TRANDATE is the original acquisition date and SETDATE is the
+ * PMS onboarding date — genuinely different events, so OPI stays settlement-dated.
+ *
+ * `isHoldingsBuyType` is deliberately NOT used here: it still classifies buy/sell
+ * direction for quantity maths and must keep matching BY-/SQB/OPI.
+ */
+export function holdingsEffectiveDate(row) {
+  const setD = String(row.SETTLEMENT_DATE || "").slice(0, 10);
+  const txD = String(row.TRANSACTION_DATE || "").slice(0, 10);
+  return isHoldingsOpiType(row.TYPE) ? setD || txD : txD || setD;
 }
 
 /**
@@ -199,6 +217,115 @@ export function rollupLastSnapshotByIsin(sortedHoldingsRows) {
       isin,
       lastRow: row,
     });
+  }
+  return out;
+}
+
+const QTY_EPS = 1e-6;
+
+/**
+ * Re-derive HOLDING / WAP / HOLDING_VALUE from the rows themselves.
+ *
+ * WHY THIS EXISTS
+ * The `HOLDING` column is a running balance frozen at rebuild time, accumulated
+ * in *insert* order — which is settlement order for any table built before the
+ * trade-date migration. Simply filtering rows by the new effective date picks a
+ * different "last row", but that row's stored total was still accumulated the old
+ * way, so it can include a trade that the new rule should have excluded.
+ *
+ * Re-walking the rows in effective-date order fixes the numbers without touching
+ * the database. Once `RebuildHoldingtable` has been re-run, the stored column and
+ * this function agree and the caller can go back to reading `HOLDING` directly.
+ *
+ * ACCURACY: exact for buys and sells (the migration's target). BONUS / MERGER /
+ * DEMERGER quantities are deltas and accumulate correctly too. SPLIT restates the
+ * position rather than adding to it, so a split re-anchors the running lots on that
+ * row's stored snapshot and accumulation resumes from there — accurate after the
+ * split, and inherently only as good as the stored value at the split itself.
+ *
+ * `rows` must already be effective-date filtered by the caller.
+ */
+export function recomputeHoldingsSnapshot(rows) {
+  const ordered = rows
+    .map((r, i) => ({ r, i }))
+    .sort((a, b) => {
+      const da = holdingsEffectiveDate(a.r) || "";
+      const db = holdingsEffectiveDate(b.r) || "";
+      if (da !== db) return da < db ? -1 : 1;
+      const pa = holdingsTypePriority(a.r.TYPE);
+      const pb = holdingsTypePriority(b.r.TYPE);
+      if (pa !== pb) return pa - pb;
+      return a.i - b.i; // stable: keep original insert order within a day
+    })
+    .map((x) => x.r);
+
+  let lots = []; // FIFO queue of { qty, price }
+
+  for (const h of ordered) {
+    const typ = String(h.TYPE || "").trim().toUpperCase();
+    const qty = Math.abs(Number(h.QUANTITY) || 0);
+
+    if (typ === "SPLIT") {
+      // Non-additive: QUANTITY is the post-split total, not a delta.
+      const anchorQty = Number(h.HOLDING) || 0;
+      const anchorWap = Number(h.WAP) || 0;
+      lots = anchorQty > QTY_EPS ? [{ qty: anchorQty, price: anchorWap }] : [];
+      continue;
+    }
+
+    if (typ === "DIV" || typ === "DIV+") continue; // cash only, no quantity effect
+
+    if (isHoldingsSellType(typ)) {
+      let remaining = qty;
+      while (remaining > QTY_EPS && lots.length) {
+        const lot = lots[0];
+        const used = Math.min(lot.qty, remaining);
+        lot.qty -= used;
+        remaining -= used;
+        if (lot.qty <= QTY_EPS) lots.shift();
+      }
+      continue;
+    }
+
+    // Everything else adds: BY-/SQB/OPI, BONUS, MERGER, DEMERGER.
+    if (qty > QTY_EPS) {
+      let price = Number(h.PRICE) || 0;
+      const total = Number(h.TOTAL_AMOUNT) || 0;
+      if (!price && total) price = total / qty;
+      lots.push({ qty, price });
+    }
+  }
+
+  const holding = lots.reduce((s, l) => s + l.qty, 0);
+  const cost = lots.reduce((s, l) => s + l.qty * l.price, 0);
+  const wap = holding > QTY_EPS ? cost / holding : 0;
+
+  return {
+    HOLDING: holding <= QTY_EPS ? 0 : holding,
+    WAP: Math.round(wap * 100) / 100,
+    HOLDING_VALUE: Math.round(cost * 100) / 100,
+  };
+}
+
+/**
+ * Same contract as `rollupLastSnapshotByIsin`, but `lastRow` carries re-derived
+ * HOLDING / WAP / HOLDING_VALUE instead of the frozen settlement-order values.
+ * Callers need no other change.
+ */
+export function rollupRecomputedSnapshotByIsin(sortedHoldingsRows) {
+  const rowsByIsin = new Map();
+  for (const h of sortedHoldingsRows) {
+    const isin = String(h.ISIN || "").trim();
+    if (!isin) continue;
+    if (!rowsByIsin.has(isin)) rowsByIsin.set(isin, []);
+    rowsByIsin.get(isin).push(h);
+  }
+
+  const out = [];
+  for (const [isin, rows] of rowsByIsin) {
+    const snap = recomputeHoldingsSnapshot(rows);
+    if (snap.HOLDING <= QTY_EPS) continue; // closed position
+    out.push({ isin, lastRow: { ...rows[rows.length - 1], ...snap } });
   }
   return out;
 }
