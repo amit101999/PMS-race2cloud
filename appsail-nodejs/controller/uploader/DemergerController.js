@@ -53,8 +53,23 @@ const upperEq = (a, b) => String(a || "").trim().toUpperCase() === b;
    ROWID order, so each account's slice is re-sorted in memory afterwards
    into the `CREATEDTIME ASC, ROWID ASC` order the lot replay expects.
    ==================================================================== */
+/* ===== TRADE_DATE_MIGRATION =====
+   Record-date eligibility used to be a single hard `SETTLEMENT_DATE <= recordDate`
+   filter, correct while every buy type was settlement-dated. OPI now stays on
+   SETTLEMENT_DATE while BY-/SQB move to TRANSACTION_DATE, and ZCQL has no CASE,
+   so the SQL widens to an OR superset and this predicate applies the precise cut.
+   NOTE: this filter decides which lots are ELIGIBLE for the demerger, so it moves
+   entitlement quantities — not just dates. Keep in sync with the twin in
+   functions/DemergerFn/demergerApplyCore.js. */
+const holdingsEligibilityDate = (row) => {
+  const setD = String(row.SETTLEMENT_DATE || "").slice(0, 10);
+  const txD = String(row.TRANSACTION_DATE || "").slice(0, 10);
+  return /^OPI/i.test(String(row.TYPE || "").trim()) ? setD || txD : txD || setD;
+};
+
 async function fetchHoldingRowsByAccountForIsin(zcql, isin, recordDateISO) {
   const byAccount = new Map();
+  const cut = String(recordDateISO || "").slice(0, 10);
   let lastRowId = "0";
   while (true) {
     const batch = await zcql.executeZCQLQuery(`
@@ -62,7 +77,7 @@ async function fetchHoldingRowsByAccountForIsin(zcql, isin, recordDateISO) {
              QUANTITY, PRICE, TOTAL_AMOUNT, HOLDING, WAP, HOLDING_VALUE, STATUS, CREATEDTIME
       FROM Holdings
       WHERE ISIN = '${escSql(isin)}'
-        AND SETTLEMENT_DATE <= '${escSql(recordDateISO)}'
+        AND (TRANSACTION_DATE <= '${escSql(recordDateISO)}' OR SETTLEMENT_DATE <= '${escSql(recordDateISO)}')
         AND ROWID > ${lastRowId}
       ORDER BY ROWID ASC
       LIMIT ${ZCQL_ROW_LIMIT}
@@ -72,6 +87,7 @@ async function fetchHoldingRowsByAccountForIsin(zcql, isin, recordDateISO) {
       const h = r.Holdings || r;
       const code = String(h.WS_Account_code ?? "").trim();
       if (!code) continue;
+      if (cut && holdingsEligibilityDate(h) > cut) continue;
       let list = byAccount.get(code);
       if (!list) {
         list = [];

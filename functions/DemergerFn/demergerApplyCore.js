@@ -154,8 +154,23 @@ async function fetchAccountsHoldingIsin(zcql, isin) {
   return [...accounts].sort((a, b) => a.localeCompare(b));
 }
 
+/* ===== TRADE_DATE_MIGRATION =====
+   Record-date eligibility used to be a single hard `SETTLEMENT_DATE <= recordDate`
+   filter, correct while every buy type was settlement-dated. OPI now stays on
+   SETTLEMENT_DATE while BY-/SQB move to TRANSACTION_DATE, and ZCQL has no CASE,
+   so the SQL widens to an OR superset and this predicate applies the precise cut.
+   NOTE: this filter decides which lots are ELIGIBLE for the demerger, so it moves
+   entitlement quantities — not just dates. Keep in sync with the twin in
+   appsail-nodejs/controller/uploader/DemergerController.js. */
+const holdingsEligibilityDate = (row) => {
+  const setD = String(row.SETTLEMENT_DATE || "").slice(0, 10);
+  const txD = String(row.TRANSACTION_DATE || "").slice(0, 10);
+  return /^OPI/i.test(String(row.TYPE || "").trim()) ? setD || txD : txD || setD;
+};
+
 async function fetchHoldingRowsForPair(zcql, accountCode, isin, recordDateISO) {
   const rows = [];
+  const cut = String(recordDateISO || "").slice(0, 10);
   let offset = 0;
   while (true) {
     const batch = await zcql.executeZCQLQuery(`
@@ -164,12 +179,15 @@ async function fetchHoldingRowsForPair(zcql, accountCode, isin, recordDateISO) {
       FROM Holdings
       WHERE WS_Account_code = '${esc(accountCode)}'
         AND ISIN = '${esc(isin)}'
-        AND SETTLEMENT_DATE <= '${esc(recordDateISO)}'
+        AND (TRANSACTION_DATE <= '${esc(recordDateISO)}' OR SETTLEMENT_DATE <= '${esc(recordDateISO)}')
       ORDER BY CREATEDTIME ASC, ROWID ASC
       LIMIT ${ZCQL_ROW_LIMIT} OFFSET ${offset}
     `);
     if (!batch || batch.length === 0) break;
-    for (const r of batch) rows.push(r.Holdings || r);
+    for (const r of batch) {
+      const h = r.Holdings || r;
+      if (!cut || holdingsEligibilityDate(h) <= cut) rows.push(h);
+    }
     if (batch.length < ZCQL_ROW_LIMIT) break;
     offset += ZCQL_ROW_LIMIT;
   }
