@@ -30,6 +30,21 @@ const ZCQL_ROW_LIMIT = 270;
 const esc = (s) => String(s ?? "").replace(/'/g, "''");
 
 /**
+ * OPI (opening/initial-position) rows keep the settlement-date eligibility
+ * rule; every other transaction type now uses Transaction Date. Mirrors the
+ * isOpi() used inside runFifoEngine()'s getTxnEventDate().
+ */
+const isOpiType = (type) => String(type || "").trim().toUpperCase() === "OPI";
+
+/** Effective date used to test a transaction against the RecordDate cutoff. */
+const txnEffectiveDate = (t) => {
+  const tradeDate = t.TRANDATE || t.trandate;
+  const setDate = t.SETDATE || t.setdate;
+  const tranType = t.Tran_Type || t.tranType;
+  return isOpiType(tranType) ? setDate || tradeDate : tradeDate || setDate;
+};
+
+/**
  * Quantity epsilon for normal (non-corporate-action) FIFO math. Snaps tiny
  * floating-point residue to exactly zero so fully-sold positions end at 0 and
  * consumed lots leave the queue. Genuine fractional quantities are preserved.
@@ -102,11 +117,26 @@ function runFifoEngine(
 
   const isBuy = (type) => /^BY-|SQB|OPI/.test(String(type || "").toUpperCase());
   const isSell = (t) => /^SL\+|SQS|OPO|NF-/.test(String(t).toUpperCase());
+  const isOpi = (type) => String(type || "").trim().toUpperCase() === "OPI";
 
   const getTxnEventDate = (t) => {
-    const setDate = t.SETDATE || t.setdate;
     const tradeDate = t.TRANDATE || t.trandate;
-    return isBuy(t.Tran_Type || t.tranType) ? setDate || tradeDate : tradeDate || setDate;
+    const setDate = t.SETDATE || t.setdate;
+    const tranType = t.Tran_Type || t.tranType;
+    /*
+     * SETTLEMENT-DATE RULE (disabled for BY-/SQB buys and all sells — kept
+     * for future restore):
+     * Buys used to be keyed by their settlement date (SETDATE) rather than
+     * trade date, since a buy only makes you the beneficial owner once it
+     * settles.
+     *
+     * return isBuy(tranType) ? setDate || tradeDate : tradeDate || setDate;
+     *
+     * Current rule: dividend eligibility is based on Transaction Date for
+     * everything EXCEPT OPI (opening/initial-position) entries, which keep
+     * using Settlement Date.
+     */
+    return isOpi(tranType) ? setDate || tradeDate : tradeDate || setDate;
   };
 
   const events = [
@@ -674,15 +704,25 @@ module.exports = async (jobRequest, context) => {
       return;
     }
 
-    /* ---- 5. Fetch Transactions ≤ recordDate for ISIN ---- */
+    /* ---- 5. Fetch Transactions ≤ recordDate for ISIN ----
+     * The WHERE clause below is intentionally widened with an OR so no
+     * eligible row is excluded before the exact per-row cutoff check runs
+     * (below). Buys/sells are eligible by TRANDATE now; only OPI rows still
+     * need SETDATE, so both columns have to be considered at fetch time.
+     *
+     * SETTLEMENT-DATE RULE (disabled — kept for future restore):
+     * `WHERE ISIN='${esc(isin)}' AND SETDATE <= '${recordDateISO}'
+     *  ORDER BY SETDATE ASC, ROWID ASC`
+     */
     const txRows = [];
     const seenTxnRowIds = new Set();
     let txOffset = 0;
     while (true) {
       const batch = await zcql.executeZCQLQuery(`
         SELECT * FROM Transaction
-        WHERE ISIN='${esc(isin)}' AND SETDATE <= '${recordDateISO}'
-        ORDER BY SETDATE ASC, ROWID ASC
+        WHERE ISIN='${esc(isin)}'
+          AND (TRANDATE <= '${recordDateISO}' OR SETDATE <= '${recordDateISO}')
+        ORDER BY TRANDATE ASC, ROWID ASC
         LIMIT ${ZCQL_ROW_LIMIT} OFFSET ${txOffset}
       `);
       if (!batch || batch.length === 0) break;
@@ -690,6 +730,9 @@ module.exports = async (jobRequest, context) => {
         const t = row.Transaction || row;
         if (t.ROWID != null && seenTxnRowIds.has(t.ROWID)) continue;
         if (t.ROWID != null) seenTxnRowIds.add(t.ROWID);
+        // Exact cutoff: the OR above is a widened net, this is the real rule.
+        const effDate = txnEffectiveDate(t);
+        if (effDate && effDate > recordDateISO) continue;
         txRows.push(row);
       }
       if (batch.length < ZCQL_ROW_LIMIT) break;
