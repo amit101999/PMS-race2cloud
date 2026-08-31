@@ -73,11 +73,26 @@ function runFifoForLots(transactions, bonuses, splits, demergers, mergers, mode)
   const isBuy = (type) => /^BY-|SQB|OPI/.test(String(type || "").toUpperCase());
   const isSell = (t) => /^SL\+|SQS|OPO|NF-/.test(String(t || "").toUpperCase());
 
-  /** Buy → settlement date (SETDATE); Sell → transaction date (TRANDATE). */
+  // ===== TRADE_DATE_MIGRATION: OLD — retained, do not delete =====
+  // /** Buy → settlement date (SETDATE); Sell → transaction date (TRANDATE). */
+  // const getTxnEventDate = (t) => {
+  //   const setDate = t.SETDATE || t.setdate;
+  //   const tradeDate = t.TRANDATE || t.trandate;
+  //   return isBuy(t.Tran_Type || t.tranType) ? setDate || tradeDate : tradeDate || setDate;
+  // };
+  // ================================================================
+
+  /** TRADE_DATE_MIGRATION: OPI → settlement date (SETDATE); every other type
+   *  (BY-, SQB and all sells) → transaction date (TRANDATE).
+   *  Keep in sync with the twin in appsail-nodejs/util/merger/lotFifo.js. */
+  const isOpiType = (type) => /^OPI/i.test(String(type || ""));
+
   const getTxnEventDate = (t) => {
     const setDate = t.SETDATE || t.setdate;
     const tradeDate = t.TRANDATE || t.trandate;
-    return isBuy(t.Tran_Type || t.tranType) ? setDate || tradeDate : tradeDate || setDate;
+    return isOpiType(t.Tran_Type || t.tranType)
+      ? setDate || tradeDate
+      : tradeDate || setDate;
   };
 
   const events = [
