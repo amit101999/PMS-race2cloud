@@ -1,5 +1,3 @@
-
-
 /**
  * Tie-breaker for events that share the same date.
  * SPLIT must be processed BEFORE BONUS so that bonus shares (which are stored
@@ -64,17 +62,35 @@ export const runFifoEngine = (
     const fullYear = y < 100 ? 2000 + y : y;
     return `${fullYear}-${String(m).padStart(2, "0")}-${String(d).padStart(
       2,
-      "0"
+      "0",
     )}`;
   };
 
   const isBuy = (type) => /^BY-|SQB|OPI/.test(String(type || "").toUpperCase());
 
-  /** Buy → settlement date (SETDATE); Sell → transaction date (TRANDATE). */
+  // ===== TRADE_DATE_MIGRATION: OLD — retained, do not delete =====
+  // /** Buy → settlement date (SETDATE); Sell → transaction date (TRANDATE). */
+  // const getTxnEventDate = (t) => {
+  //   const setDate = t.SETDATE || t.setdate;
+  //   const tradeDate = t.TRANDATE || t.trandate;
+  //   return isBuy(t.Tran_Type || t.tranType)
+  //     ? setDate || tradeDate
+  //     : tradeDate || setDate;
+  // };
+  // ================================================================
+
+  /** TRADE_DATE_MIGRATION: OPI → settlement date (SETDATE); every other type
+   *  (BY-, SQB and all sells) → transaction date (TRANDATE).
+   *  NOTE: this module has no importers — it is dead code kept for reference.
+   *  Migrated only so it cannot be copied forward with the stale rule. */
+  const isOpiType = (type) => /^OPI/i.test(String(type || ""));
+
   const getTxnEventDate = (t) => {
     const setDate = t.SETDATE || t.setdate;
     const tradeDate = t.TRANDATE || t.trandate;
-    return isBuy(t.Tran_Type || t.tranType) ? setDate || tradeDate : tradeDate || setDate;
+    return isOpiType(t.Tran_Type || t.tranType)
+      ? setDate || tradeDate
+      : tradeDate || setDate;
   };
 
   const events = [
@@ -132,8 +148,9 @@ export const runFifoEngine = (
             qty: d.QTY ?? d.qty,
             price: d.PRICE ?? d.price,
             totalAmount:
-              Number(d.TOTAL_AMOUNT ?? d.total_amount ?? d.HOLDING_VALUE ?? 0) ||
-              0,
+              Number(
+                d.TOTAL_AMOUNT ?? d.total_amount ?? d.HOLDING_VALUE ?? 0,
+              ) || 0,
             trandate: td,
             setdate: d.SETDATE || d.setdate || td,
             isin: d.ISIN || d.isin,
@@ -151,7 +168,9 @@ export const runFifoEngine = (
           data: {
             qty: Number(m.Quantity ?? m.quantity ?? m.Holding ?? 0) || 0,
             price: Number(m.WAP ?? m.wap ?? 0) || 0,
-            totalAmount: Number(m.Total_Amount ?? m.total_amount ?? m.HoldingValue ?? 0) || 0,
+            totalAmount:
+              Number(m.Total_Amount ?? m.total_amount ?? m.HoldingValue ?? 0) ||
+              0,
             trandate: td,
             setdate: m.SETDATE || m.setdate || td,
             isin: m.ISIN || m.isin,
@@ -162,7 +181,9 @@ export const runFifoEngine = (
   ].sort((a, b) => {
     const dateDiff = new Date(a.date) - new Date(b.date);
     if (dateDiff !== 0) return dateDiff;
-    return (EVENT_TYPE_PRIORITY[a.type] ?? 99) - (EVENT_TYPE_PRIORITY[b.type] ?? 99);
+    return (
+      (EVENT_TYPE_PRIORITY[a.type] ?? 99) - (EVENT_TYPE_PRIORITY[b.type] ?? 99)
+    );
   });
 
   /* ---------------- HELPERS ---------------- */
@@ -265,7 +286,6 @@ export const runFifoEngine = (
 
     /* ========== BONUS ========== */
     if (e.type === "BONUS") {
-
       const qty = Number(e.data.bonusShare) || 0;
       if (!qty) continue;
 
@@ -315,7 +335,9 @@ export const runFifoEngine = (
       // Mark old lots inactive
       for (const oldLot of activeLots) {
         oldLot.isActive = false;
-        const oldRow = output.find((r) => r.lotId === oldLot.lotId && r.isActive);
+        const oldRow = output.find(
+          (r) => r.lotId === oldLot.lotId && r.isActive,
+        );
         if (oldRow) oldRow.isActive = false;
       }
       buyQueue.length = 0;
@@ -340,7 +362,8 @@ export const runFifoEngine = (
 
         runningHoldings += newQty;
         runningCost += newQty * newPrice;
-        const runningWAP = runningHoldings > 0 ? runningCost / runningHoldings : 0;
+        const runningWAP =
+          runningHoldings > 0 ? runningCost / runningHoldings : 0;
 
         const buyRowIndex = output.findIndex((r) => r.lotId === oldLot.lotId);
         let insertIndex = output.length;
@@ -383,7 +406,9 @@ export const runFifoEngine = (
       const activeLots = buyQueue.filter((l) => l.isActive);
       for (const oldLot of activeLots) {
         oldLot.isActive = false;
-        const oldRow = output.find((r) => r.lotId === oldLot.lotId && r.isActive);
+        const oldRow = output.find(
+          (r) => r.lotId === oldLot.lotId && r.isActive,
+        );
         if (oldRow) oldRow.isActive = false;
       }
       buyQueue.length = 0;
@@ -435,7 +460,9 @@ export const runFifoEngine = (
         const activeLots = buyQueue.filter((l) => l.isActive);
         for (const oldLot of activeLots) {
           oldLot.isActive = false;
-          const oldRow = output.find((r) => r.lotId === oldLot.lotId && r.isActive);
+          const oldRow = output.find(
+            (r) => r.lotId === oldLot.lotId && r.isActive,
+          );
           if (oldRow) oldRow.isActive = false;
         }
         buyQueue.length = 0;
@@ -492,7 +519,6 @@ export const runFifoEngine = (
       holdingValue: last.costOfHoldings || 0,
       averageCostOfHoldings: last.averageCostOfHoldings || 0,
     };
-
   }
 
   return output;

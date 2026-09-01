@@ -5,6 +5,21 @@ const { runFifoEngine } = require("./fifo.js");
 const BATCH_SIZE = 270;
 
 /**
+ * OPI (opening/initial-position) rows keep the settlement-date eligibility
+ * rule; every other transaction type now uses Transaction Date. Mirrors the
+ * isOpi() used inside fifo.js's getTxnEventDate().
+ */
+const isOpiType = (type) => String(type || "").trim().toUpperCase() === "OPI";
+
+/** Effective date used to test a transaction against the RecordDate cutoff. */
+const txnEffectiveDate = (t) => {
+  const tradeDate = t.TRANDATE || t.trandate;
+  const setDate = t.SETDATE || t.setdate;
+  const tranType = t.Tran_Type || t.tranType;
+  return isOpiType(tranType) ? setDate || tradeDate : tradeDate || setDate;
+};
+
+/**
  * @param {import("./types/job").JobRequest} jobRequest
  * @param {import("./types/job").Context} context
  */
@@ -104,7 +119,38 @@ module.exports = async (jobRequest, context) => {
       return out;
     };
 
-    const txRows = await fetchAll("Transaction", "SETDATE");
+    /*
+     * Transaction fetch needs its own query instead of the generic fetchAll()
+     * above: the WHERE clause is widened with an OR so no eligible row is
+     * excluded before the exact per-row cutoff check runs below (buys/sells
+     * are eligible by TRANDATE now; OPI rows still need SETDATE, so both
+     * columns have to be considered at fetch time).
+     *
+     * SETTLEMENT-DATE RULE (disabled — kept for future restore):
+     * const txRows = await fetchAll("Transaction", "SETDATE");
+     */
+    const txRowsRaw = [];
+    {
+      let off = 0;
+      while (true) {
+        const r = await zcql.executeZCQLQuery(`
+          SELECT *
+          FROM Transaction
+          WHERE ISIN='${isin}'
+            AND (TRANDATE <='${recordDateISO}' OR SETDATE <='${recordDateISO}')
+          LIMIT ${BATCH_SIZE} OFFSET ${off}
+        `);
+        if (!r || r.length === 0) break;
+        txRowsRaw.push(...r);
+        if (r.length < BATCH_SIZE) break;
+        off += BATCH_SIZE;
+      }
+    }
+    const txRows = txRowsRaw.filter((row) => {
+      const t = row.Transaction || row;
+      const effDate = txnEffectiveDate(t);
+      return !effDate || effDate <= recordDateISO;
+    });
     const bonusRows = await fetchAll("Bonus", "ExDate");
     const splitRows = await fetchAll("Split", "Issue_Date");
 

@@ -55,12 +55,26 @@ exports.runFifoEngine = (
   };
 
   const isBuy = (type) => /^BY-|SQB|OPI/.test(String(type || "").toUpperCase());
+  const isOpi = (type) => String(type || "").trim().toUpperCase() === "OPI";
 
-  /** Buy → settlement date (SETDATE); Sell → transaction date (TRANDATE). */
   const getTxnEventDate = (t) => {
-    const setDate = t.SETDATE || t.setdate;
     const tradeDate = t.TRANDATE || t.trandate;
-    return isBuy(t.Tran_Type || t.tranType) ? setDate || tradeDate : tradeDate || setDate;
+    const setDate = t.SETDATE || t.setdate;
+    const tranType = t.Tran_Type || t.tranType;
+    /*
+     * SETTLEMENT-DATE RULE (disabled for BY-/SQB buys and all sells — kept
+     * for future restore):
+     * Buys used to be keyed by their settlement date (SETDATE) rather than
+     * trade date, since a buy only makes you the beneficial owner once it
+     * settles.
+     *
+     * return isBuy(tranType) ? setDate || tradeDate : tradeDate || setDate;
+     *
+     * Current rule: dividend eligibility is based on Transaction Date for
+     * everything EXCEPT OPI (opening/initial-position) entries, which keep
+     * using Settlement Date.
+     */
+    return isOpi(tranType) ? setDate || tradeDate : tradeDate || setDate;
   };
 
   const events = [
