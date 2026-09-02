@@ -144,4 +144,5 @@ module.exports = {
   loadPendingBuffer,
   savePendingBuffer,
   deleteExportArtifacts,
+  deleteStratusObjectSafe,
 };

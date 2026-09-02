@@ -1,7 +1,7 @@
 const {
-  escHoldingsSql,
   fetchHoldingsRowsPaged,
   fetchSecurityListByIsins,
+  fetchLatestPricesByIsins,
   rollupLastSnapshotByIsin,
 } = require("./holdingsFromTable.js");
 
@@ -29,30 +29,7 @@ exports.calculateHoldingsSummary = async ({
   const priceDate = asOnDate && asOnDate < todayStr ? asOnDate : todayStr;
 
   const priceMap = sharedPriceMap || {};
-
-  for (const isin of isinList) {
-    if (isin in priceMap) continue;
-    try {
-      const priceRows = await zcql.executeZCQLQuery(`
-        SELECT ISIN, ClsPric, TradDt
-        FROM Bhav_Copy
-        WHERE ISIN = '${escHoldingsSql(isin)}'
-          AND TradDt <= '${escHoldingsSql(priceDate)}'
-        ORDER BY TradDt DESC
-        LIMIT 1
-      `);
-
-      if (priceRows.length) {
-        const row = priceRows[0].Bhav_Copy || priceRows[0];
-        priceMap[isin] = row.ClsPric || 0;
-      } else {
-        priceMap[isin] = 0;
-      }
-    } catch (err) {
-      console.error(`Error fetching price for ISIN ${isin}:`, err);
-      priceMap[isin] = 0;
-    }
-  }
+  await fetchLatestPricesByIsins(zcql, isinList, priceDate, priceMap);
 
   const result = [];
   for (const { isin, lastRow } of snapshots) {

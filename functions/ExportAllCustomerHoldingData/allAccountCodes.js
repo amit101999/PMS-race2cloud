@@ -1,3 +1,5 @@
+const { queryWithTimeout } = require("./zcqlTimeout.js");
+
 exports.getAllAccountCodesFromDatabase = async (zcql, tableName) => {
   try {
     let offset = 0;
@@ -7,7 +9,7 @@ exports.getAllAccountCodesFromDatabase = async (zcql, tableName) => {
     const rawRows = [];
     while (hasNext) {
       const query = `SELECT WS_Account_code FROM ${tableName} LIMIT ${limit} OFFSET ${offset}`;
-      const result = await zcql.executeZCQLQuery(query);
+      const result = await queryWithTimeout(zcql, query);
       rawRows.push(...result);
       offset = offset + limit;
       if (result.length <= 0) {
@@ -50,7 +52,7 @@ exports.getAccountActualMapFromDatabase = async (zcql, tableName) => {
 
   while (hasNext) {
     const query = `SELECT WS_Account_code, Actual_Code FROM ${tableName} LIMIT ${limit} OFFSET ${offset}`;
-    const result = await zcql.executeZCQLQuery(query);
+    const result = await queryWithTimeout(zcql, query);
     rawRows.push(...result);
     offset = offset + limit;
     if (result.length <= 0) {
@@ -93,7 +95,7 @@ exports.getVirtualToActualMapFromDatabase = async (zcql, tableName) => {
 
   while (hasNext) {
     const query = `SELECT WS_Account_code, Actual_Code FROM ${tableName} LIMIT ${limit} OFFSET ${offset}`;
-    const result = await zcql.executeZCQLQuery(query);
+    const result = await queryWithTimeout(zcql, query);
     if (!result.length) break;
 
     for (const row of result) {

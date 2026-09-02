@@ -41,7 +41,9 @@ const {
   loadPendingBuffer,
   savePendingBuffer,
   deleteExportArtifacts,
+  deleteStratusObjectSafe,
 } = require("./checkpoint.js");
+const { queryWithTimeout } = require("./zcqlTimeout.js");
 
 /** Stratus multipart requires >=5MB for all non-final parts; keep headroom above that. */
 const MIN_FLUSH_BYTES = 8 * 1024 * 1024;
@@ -50,6 +52,32 @@ const MIN_FLUSH_BYTES = 8 * 1024 * 1024;
 const TIME_BUFFER_MS = 90_000;
 
 const esc = (s) => String(s ?? "").replace(/'/g, "''");
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Retry a flaky async op with capped exponential backoff (500ms, 1s).
+ * Re-throws the last error if every attempt fails — the caller then handles it
+ * exactly as before (group/client counted in errorCount and skipped).
+ */
+async function withRetry(fn, label, maxTries = 3) {
+  let lastErr;
+  for (let attempt = 1; attempt <= maxTries; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastErr = err;
+      if (attempt < maxTries) {
+        const backoffMs = 500 * 2 ** (attempt - 1);
+        console.warn(
+          `Retry ${attempt}/${maxTries - 1} for ${label}: ${err.message} (waiting ${backoffMs}ms)`
+        );
+        await sleep(backoffMs);
+      }
+    }
+  }
+  throw lastErr;
+}
 
 const CONSOLIDATED_HEADER =
   "GENERATED_AT,AS_ON_DATE,ACCOUNT_CODE,SECURITY_NAME,SECURITY_CODE,ISIN,HOLDING\n";
@@ -99,12 +127,14 @@ function buildSchemeRow(generatedAt, reportDate, accountCode, actualCode, row) {
 
 async function ensureJobsRowRunning(zcql, jobName) {
   try {
-    await zcql.executeZCQLQuery(
+    await queryWithTimeout(
+      zcql,
       `INSERT INTO Jobs (jobName, status) VALUES ('${esc(jobName)}', 'RUNNING')`
     );
   } catch (insertErr) {
     try {
-      await zcql.executeZCQLQuery(
+      await queryWithTimeout(
+        zcql,
         `UPDATE Jobs SET status = 'RUNNING' WHERE jobName = '${esc(jobName)}'`
       );
     } catch (upErr) {
@@ -125,13 +155,21 @@ async function buildConsolidatedGroupCsv({
   const { actualCode, virtualCodes } = group;
   const byIsin = new Map();
 
+  // Sequential — one sub-account at a time. The Catalyst ZCQL client does not
+  // tolerate concurrent calls (observed to hang rather than error), so
+  // sub-accounts are no longer batched in parallel. `withRetry` still gives
+  // each one a few attempts before the group is marked errored.
   for (const virtualCode of virtualCodes) {
-    const rows = await calculateHoldingsSummary({
-      catalystApp,
-      accountCode: virtualCode,
-      asOnDate,
-      sharedPriceMap,
-    });
+    const rows = await withRetry(
+      () =>
+        calculateHoldingsSummary({
+          catalystApp,
+          accountCode: virtualCode,
+          asOnDate,
+          sharedPriceMap,
+        }),
+      `virtual code ${virtualCode} (group ${actualCode})`
+    );
     if (!Array.isArray(rows)) continue;
 
     for (const row of rows) {
@@ -173,12 +211,16 @@ async function buildSchemeClientCsv({
   sharedPriceMap,
 }) {
   const { accountCode, actualCode } = entry;
-  const rows = await calculateHoldingsSummary({
-    catalystApp,
-    accountCode,
-    asOnDate,
-    sharedPriceMap,
-  });
+  const rows = await withRetry(
+    () =>
+      calculateHoldingsSummary({
+        catalystApp,
+        accountCode,
+        asOnDate,
+        sharedPriceMap,
+      }),
+    `client ${accountCode}`
+  );
   if (!Array.isArray(rows) || !rows.length) return "";
 
   let text = "";
@@ -241,7 +283,8 @@ module.exports = async (jobRequest, context) => {
 
       if (!manifest.length) {
         console.log("No clients found");
-        await zcql.executeZCQLQuery(
+        await queryWithTimeout(
+          zcql,
           `UPDATE Jobs SET status = 'COMPLETED' WHERE jobName = '${esc(jobName)}'`
         );
         context.closeWithSuccess();
@@ -249,6 +292,12 @@ module.exports = async (jobRequest, context) => {
       }
 
       await saveManifest(bucket, jobName, manifest);
+
+      // Stratus won't re-key an existing object (409 key_already_exists) and a
+      // prior run's output for this fileName is never cleaned up. A fresh run
+      // must fully replace it, so drop any existing object before starting the
+      // new multipart upload. No-ops safely if the key isn't there.
+      await deleteStratusObjectSafe(bucket, fileName);
 
       const initRes = await bucket.initiateMultipartUpload(fileName);
       const uploadId = String(initRes.upload_id);
@@ -389,7 +438,8 @@ module.exports = async (jobRequest, context) => {
     await deleteExportArtifacts(bucket, jobName);
 
     try {
-      await zcql.executeZCQLQuery(
+      await queryWithTimeout(
+        zcql,
         `UPDATE Jobs SET status = 'COMPLETED' WHERE jobName = '${esc(jobName)}'`
       );
     } catch (statusErr) {
@@ -404,7 +454,8 @@ module.exports = async (jobRequest, context) => {
 
     if (jobName) {
       try {
-        await zcql.executeZCQLQuery(
+        await queryWithTimeout(
+          zcql,
           `UPDATE Jobs SET status = 'FAILED' WHERE jobName = '${esc(jobName)}'`
         );
       } catch (updateErr) {
