@@ -1,3 +1,5 @@
+import catalyst from "zcatalyst-sdk-node";
+
 const parseCatalystTime = (ct) => {
   if (!ct) return 0;
   // Catalyst CREATEDTIME is an IST (UTC+05:30) wall-clock string like
@@ -61,25 +63,35 @@ export const exportAllData = async (req, res) => {
         });
       }
 
-      // COMPLETED, FAILED, or stale — delete old job, old file, so we can re-export
+      // COMPLETED, FAILED, or stale — clear this date's old Jobs row and give
+      // Stratus a best-effort head start on cleanup.
+      //
+      // The actual guarantee that the new upload won't collide with
+      // whatever this old run left behind (a finished file, a dangling
+      // multipart upload, a stale checkpoint) now lives entirely in
+      // ExportAllCustomerHoldingData/index.js: on every invocation it
+      // verifies any checkpoint's uploadId is still valid before trusting
+      // it, and does a verified delete-then-recreate of the target fileName.
+      // That runs under the function's own execution credentials, which is
+      // reliable — whereas Stratus calls made from here (an HTTP request,
+      // even admin-scoped) have shown intermittent permission/timing
+      // failures. So this block no longer needs to succeed for a re-export
+      // to work correctly; it's just a courtesy to avoid leaving obviously
+      // dead objects lying around between runs.
       try {
         await zcql.executeZCQLQuery(`DELETE FROM Jobs WHERE ROWID = ${oldRowId}`);
       } catch (delErr) {
         console.error("Error deleting old job:", delErr);
       }
 
-      // Delete old CSV file from Stratus (try both new and old file name formats)
       try {
-        const stratus = catalystApp.stratus();
-        const bucket = stratus.bucket("upload-data-bucket");
-        // Current (mode-aware) file
+        const adminApp = catalyst.initialize(req, { scope: "admin" });
+        const bucket = adminApp.stratus().bucket("upload-data-bucket");
+
         try { await bucket.deleteObject(fileName); } catch (_) { }
-        // Old format file (scheme-wise only)
         if (!isConsolidated(mode)) {
           try { await bucket.deleteObject(`all-clients-export-${dateStr}.csv`); } catch (_) { }
         }
-        // Baton-pass checkpoint/manifest/pending-buffer artifacts for this job
-        // (see functions/ExportAllCustomerHoldingData/checkpoint.js key naming)
         const metaKeys = [
           `exports-meta/${jobName}-manifest.json`,
           `exports-meta/${jobName}-checkpoint.json`,
@@ -89,7 +101,7 @@ export const exportAllData = async (req, res) => {
           try { await bucket.deleteObject(key); } catch (_) { }
         }
       } catch (stratusErr) {
-        console.error("Error deleting old file from Stratus:", stratusErr);
+        console.error("Best-effort Stratus cleanup failed (non-fatal, the job will self-heal):", stratusErr);
       }
     }
 

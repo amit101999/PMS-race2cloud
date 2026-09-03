@@ -41,7 +41,8 @@ const {
   loadPendingBuffer,
   savePendingBuffer,
   deleteExportArtifacts,
-  deleteStratusObjectSafe,
+  releaseStaleUpload,
+  ensureObjectDeleted,
 } = require("./checkpoint.js");
 const { queryWithTimeout } = require("./zcqlTimeout.js");
 
@@ -241,6 +242,7 @@ module.exports = async (jobRequest, context) => {
   const bucket = catalystApp.stratus().bucket("upload-data-bucket");
 
   let jobName = "";
+  let checkpoint = null;
 
   try {
     const jobDetails = jobRequest.getAllJobParams();
@@ -250,9 +252,29 @@ module.exports = async (jobRequest, context) => {
 
     console.log(`Export job invocation started: ${jobName}`);
 
-    let checkpoint = await loadCheckpoint(bucket, jobName);
+    checkpoint = await loadCheckpoint(bucket, jobName);
     let manifest;
     let buffer;
+
+    // A checkpoint can be left pointing at an upload that no longer really
+    // exists — completed/aborted by a self-heal, cleaned up out of band, or
+    // just stale — regardless of whether the caller's own cleanup (e.g. the
+    // AppSail re-export endpoint) succeeded. Rather than trust it blindly and
+    // fail deep inside a resume, verify it up front: if Stratus doesn't
+    // recognize the uploadId, discard the checkpoint and fall through to a
+    // clean first invocation. This makes this function self-sufficient no
+    // matter what state a previous attempt left behind.
+    if (checkpoint?.uploadId && checkpoint?.fileName) {
+      try {
+        await bucket.getMultipartUploadSummary(checkpoint.fileName, checkpoint.uploadId);
+      } catch (err) {
+        console.warn(
+          `Checkpoint for ${jobName} references a no-longer-valid upload (${err.message}); discarding and starting fresh.`
+        );
+        await deleteExportArtifacts(bucket, jobName);
+        checkpoint = null;
+      }
+    }
 
     if (!checkpoint) {
       /* ---------------- FIRST INVOCATION ---------------- */
@@ -296,8 +318,11 @@ module.exports = async (jobRequest, context) => {
       // Stratus won't re-key an existing object (409 key_already_exists) and a
       // prior run's output for this fileName is never cleaned up. A fresh run
       // must fully replace it, so drop any existing object before starting the
-      // new multipart upload. No-ops safely if the key isn't there.
-      await deleteStratusObjectSafe(bucket, fileName);
+      // new multipart upload. Unlike a fire-and-forget delete, this confirms
+      // the key is actually gone (retrying briefly if needed) and throws a
+      // clear error instead of silently continuing into an initiate call
+      // that would otherwise fail with an opaque 409 later.
+      await ensureObjectDeleted(bucket, fileName);
 
       const initRes = await bucket.initiateMultipartUpload(fileName);
       const uploadId = String(initRes.upload_id);
@@ -316,11 +341,17 @@ module.exports = async (jobRequest, context) => {
         errorCount: 0,
       };
 
+      // Persist the checkpoint (and its uploadId) right away, not just after
+      // the first flush — if this process dies before any data is buffered,
+      // the catch block below still needs the uploadId to close the upload
+      // it just opened, instead of leaving it dangling on this fileName.
+      await saveCheckpoint(bucket, jobName, checkpoint);
+
       buffer = consolidated ? CONSOLIDATED_HEADER : SCHEME_HEADER;
 
       console.log(
         `Export job initialized: ${manifest.length} ${consolidated ? "group(s)" : "client(s)"} ` +
-          `mode=${checkpoint.mode} uploadId=${uploadId}`
+        `mode=${checkpoint.mode} uploadId=${uploadId}`
       );
     } else {
       /* ---------------- RESUME ---------------- */
@@ -334,7 +365,7 @@ module.exports = async (jobRequest, context) => {
 
       console.log(
         `Export job resumed: cursor=${checkpoint.cursor}/${manifest.length} ` +
-          `part=${checkpoint.nextPartNumber} bufferBytes=${Buffer.byteLength(buffer, "utf8")}`
+        `part=${checkpoint.nextPartNumber} bufferBytes=${Buffer.byteLength(buffer, "utf8")}`
       );
     }
 
@@ -348,27 +379,27 @@ module.exports = async (jobRequest, context) => {
       try {
         const text = consolidatedMode
           ? await buildConsolidatedGroupCsv({
-              catalystApp,
-              group: entry,
-              asOnDate: checkpoint.asOnDate,
-              generatedAt: checkpoint.generatedAt,
-              reportDate: checkpoint.reportDate,
-              sharedPriceMap: checkpoint.priceMap,
-            })
+            catalystApp,
+            group: entry,
+            asOnDate: checkpoint.asOnDate,
+            generatedAt: checkpoint.generatedAt,
+            reportDate: checkpoint.reportDate,
+            sharedPriceMap: checkpoint.priceMap,
+          })
           : await buildSchemeClientCsv({
-              catalystApp,
-              entry,
-              asOnDate: checkpoint.asOnDate,
-              generatedAt: checkpoint.generatedAt,
-              reportDate: checkpoint.reportDate,
-              sharedPriceMap: checkpoint.priceMap,
-            });
+            catalystApp,
+            entry,
+            asOnDate: checkpoint.asOnDate,
+            generatedAt: checkpoint.generatedAt,
+            reportDate: checkpoint.reportDate,
+            sharedPriceMap: checkpoint.priceMap,
+          });
         buffer += text;
       } catch (entryErr) {
         checkpoint.errorCount++;
         console.error(
           `Error processing ${consolidatedMode ? "group" : "client"} ` +
-            `${checkpoint.cursor + 1}/${manifest.length}:`,
+          `${checkpoint.cursor + 1}/${manifest.length}:`,
           entryErr.message
         );
       }
@@ -402,7 +433,7 @@ module.exports = async (jobRequest, context) => {
         await saveCheckpoint(bucket, jobName, checkpoint);
         console.log(
           `Export job: ${remainingMs}ms remaining (< ${TIME_BUFFER_MS}ms buffer); ` +
-            `baton-pass at cursor=${checkpoint.cursor}/${manifest.length}`
+          `baton-pass at cursor=${checkpoint.cursor}/${manifest.length}`
         );
         break;
       }
@@ -432,7 +463,7 @@ module.exports = async (jobRequest, context) => {
 
     console.log(
       `Export job completed: ${checkpoint.processedCount} processed, ` +
-        `${checkpoint.errorCount} error(s), ${checkpoint.nextPartNumber - 1} part(s)`
+      `${checkpoint.errorCount} error(s), ${checkpoint.nextPartNumber - 1} part(s)`
     );
 
     await deleteExportArtifacts(bucket, jobName);
@@ -451,6 +482,20 @@ module.exports = async (jobRequest, context) => {
     context.closeWithSuccess();
   } catch (error) {
     console.error("Export job failed:", error);
+
+    // This run may have opened a multipart upload (recorded in `checkpoint`)
+    // that will now never be completed. Left alone, that upload keeps its
+    // fileName "reserved" and every future attempt for this date/mode will
+    // fail with 409 key_already_exists — so close it out now instead of
+    // leaving it for a retry to trip over.
+    if (checkpoint?.uploadId && checkpoint?.fileName) {
+      try {
+        await releaseStaleUpload(bucket, checkpoint.fileName, checkpoint.uploadId, checkpoint.nextPartNumber);
+        console.log(`Released dangling upload for ${checkpoint.fileName} after failure`);
+      } catch (releaseErr) {
+        console.error(`Failed to release dangling upload for ${checkpoint.fileName}:`, releaseErr);
+      }
+    }
 
     if (jobName) {
       try {
