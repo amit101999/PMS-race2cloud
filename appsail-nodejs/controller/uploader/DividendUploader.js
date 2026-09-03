@@ -1,4 +1,9 @@
-import { fetchHoldingsRowsForAccountIsin } from "../../util/analytics/holdingsFromTable.js";
+import {
+  escHoldingsSql,
+  holdingsDateFilterClause,
+  holdingsEffectiveDate,
+  HOLDINGS_FIFO_ORDER_BY_SQL,
+} from "../../util/analytics/holdingsFromTable.js";
 import { parseCustodianCsv } from "../../util/custodian/parseCustodianCsv.js";
 import { buildVirtualToActualMap } from "../../util/mapVirtualToActualCodes.js";
 
@@ -301,7 +306,6 @@ export const getAllSecuritiesISINs = async (req, res) => {
         holdOffset += ZCQL_ROW_LIMIT;
       }
 
-      const eligibleAccounts = Array.from(accountSet);
       // We don't early-return on empty FIFO here: the file may carry rows
       // we need to surface as "missing_in_system" for ops to investigate.
 
@@ -313,21 +317,57 @@ export const getAllSecuritiesISINs = async (req, res) => {
          FIFO from the source tables. The last row in FIFO order carries the
          running HOLDING (holding as of that date), and corporate actions
          already applied (incl. demerger/merger) are reflected automatically.
+
+         ONE paginated query against Holdings for the whole ISIN — no
+         per-account fan-out. The previous implementation re-queried Holdings
+         once per eligible account, which was fast locally but blew past
+         Catalyst's ~30s request limit on deployed environments (408 Request
+         Timeout) once an ISIN had enough holders — the same issue Bonus/
+         Split hit before switching to this bulk-query shape. The in-memory
+         holdingsEffectiveDate() refine below reproduces the same buy-vs-sell
+         cutoff that fetchHoldingsRowsPaged applied per-account, so a
+         not-yet-settled buy (e.g. OPI) still can't leak into the count.
          ====================================================== */
+      const HOLDINGS_BATCH = 250;
+      const nextDayObj = new Date(recordDateISO);
+      nextDayObj.setDate(nextDayObj.getDate() + 1);
+      const recordDateCutoff = nextDayObj.toISOString().split("T")[0];
+
+      const latestByAccount = new Map();
+      let hOffset = 0;
+
+      while (true) {
+        const batch = await zcql.executeZCQLQuery(`
+          SELECT WS_Account_code, HOLDING, SETTLEMENT_DATE, TRANSACTION_DATE, TYPE, CREATEDTIME
+          FROM Holdings
+          WHERE ISIN = '${escHoldingsSql(isin)}'
+          ${holdingsDateFilterClause(recordDateISO)}
+          ORDER BY ${HOLDINGS_FIFO_ORDER_BY_SQL}
+          LIMIT ${HOLDINGS_BATCH} OFFSET ${hOffset}
+        `);
+
+        if (!batch || batch.length === 0) break;
+
+        for (const row of batch) {
+          const h = row.Holdings || row;
+          const acc = String(h.WS_Account_code || "").trim();
+          if (!acc || !accountSet.has(acc)) continue;
+
+          const eff = holdingsEffectiveDate(h);
+          if (eff && eff >= recordDateCutoff) continue;
+
+          latestByAccount.set(acc, h); // last row in FIFO order wins
+        }
+
+        if (batch.length < HOLDINGS_BATCH) break;
+        hOffset += HOLDINGS_BATCH;
+      }
+
       const preview = [];
       const fifoByAccount = new Map();
 
-      for (const accountCode of eligibleAccounts) {
-        const holdingRows = await fetchHoldingsRowsForAccountIsin(
-          zcql,
-          accountCode,
-          isin,
-          recordDateISO,
-        );
-        if (!holdingRows.length) continue;
-
-        const holdingAsOnRecordDate =
-          Number(holdingRows[holdingRows.length - 1].HOLDING) || 0;
+      for (const [accountCode, h] of latestByAccount) {
+        const holdingAsOnRecordDate = Number(h.HOLDING) || 0;
         if (holdingAsOnRecordDate <= 1e-6) continue;
 
         const dividendAmount = round2(holdingAsOnRecordDate * rateNum);

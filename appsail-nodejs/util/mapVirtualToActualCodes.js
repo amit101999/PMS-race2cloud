@@ -1,30 +1,13 @@
 const CLIENT_IDS_BATCH = 270;
-
-/**
- * Resolve Actual_Code for one virtual code (WS_Account_code).
- * Mirrors the working lookup in exportSingleClientHolding.js.
- */
-async function lookupActualForVirtual(zcql, virtualCode) {
-  const esc = String(virtualCode ?? "").replace(/'/g, "''");
-  if (!esc) return "";
-
-  const rows = await zcql.executeZCQLQuery(
-    `SELECT Actual_Code FROM clientIds WHERE WS_Account_code = '${esc}' LIMIT 5`,
-  );
-  if (!rows?.length) return "";
-
-  // Prefer the first non-empty Actual_Code if duplicate clientIds rows exist.
-  for (const r of rows) {
-    const row = r.clientIds || r;
-    const actual = String(row?.Actual_Code ?? "").trim();
-    if (actual) return actual;
-  }
-  return "";
-}
+const VIRTUAL_CODES_LOOKUP_BATCH = 50;
 
 /**
  * Build WS_Account_code (virtual) → Actual_Code map from clientIds.
- * When `virtualCodes` is provided, looks up only those codes (reliable + fast).
+ * When `virtualCodes` is provided, looks up only those codes in IN-list
+ * batches (one query per 50 codes, not one query per code — a per-code loop
+ * here previously reintroduced the same per-account fan-out that caused CA
+ * preview endpoints to 408 on deployed environments once an ISIN had enough
+ * holders, even after their Holdings-query loops were fixed).
  * Otherwise pages the full clientIds table.
  */
 export async function buildVirtualToActualMap(zcql, virtualCodes = null) {
@@ -36,16 +19,34 @@ export async function buildVirtualToActualMap(zcql, virtualCodes = null) {
         virtualCodes.map((c) => String(c ?? "").trim()).filter(Boolean),
       ),
     ];
-    for (const code of unique) {
+
+    for (let i = 0; i < unique.length; i += VIRTUAL_CODES_LOOKUP_BATCH) {
+      const slice = unique.slice(i, i + VIRTUAL_CODES_LOOKUP_BATCH);
+      const inList = slice
+        .map((c) => `'${c.replace(/'/g, "''")}'`)
+        .join(",");
+      let rows = [];
       try {
-        const actual = await lookupActualForVirtual(zcql, code);
-        map.set(code, actual);
+        rows = await zcql.executeZCQLQuery(
+          `SELECT WS_Account_code, Actual_Code FROM clientIds WHERE WS_Account_code IN (${inList})`,
+        );
       } catch (err) {
         console.error(
-          `[mapVirtualToActualCodes] lookup failed for ${code}:`,
+          "[mapVirtualToActualCodes] batch lookup failed:",
           err.message,
         );
-        map.set(code, "");
+        for (const code of slice) map.set(code, "");
+        continue;
+      }
+
+      for (const code of slice) map.set(code, "");
+      for (const r of rows || []) {
+        const row = r.clientIds || r;
+        const virtual = String(row.WS_Account_code ?? "").trim();
+        if (!virtual) continue;
+        const actual = String(row.Actual_Code ?? "").trim();
+        // Prefer the first non-empty Actual_Code if duplicate clientIds rows exist.
+        if (!map.get(virtual) && actual) map.set(virtual, actual);
       }
     }
     return map;
