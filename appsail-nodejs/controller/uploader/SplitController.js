@@ -1,6 +1,4 @@
-import { buildVirtualToActualMap } from "../../util/mapVirtualToActualCodes.js";
-
-const HOLDINGS_BATCH = 250;
+import { computeSplitPreviewRows } from "../../util/analytics/splitPreviewCalc.js";
 
 export const getAllSecuritiesISINs = async (req, res) => {
   try {
@@ -57,8 +55,6 @@ export const getAllSecuritiesISINs = async (req, res) => {
   }
 };
 
-const ZCQL_ROW_LIMIT = 270;
-
 export const previewStockSplit = async (req, res) => {
   try {
     if (!req.catalystApp) {
@@ -84,94 +80,14 @@ export const previewStockSplit = async (req, res) => {
     issueDateObj.setHours(0, 0, 0, 0);
     const issueDateISO = issueDateObj.toISOString().split("T")[0];
 
-    // cutoff = day AFTER issueDate for the date filter
-    const cutoffObj = new Date(issueDateISO);
-    cutoffObj.setDate(cutoffObj.getDate() + 1);
-    const cutoff = cutoffObj.toISOString().split("T")[0];
-
     const zcql = req.catalystApp.zcql();
 
-    /* ======================================================
-       STEP 1: READ Holdings AS OF issueDate
-       Fetch all Holdings rows for this ISIN with date filter.
-       Walk in FIFO order (CREATEDTIME ASC, ROWID ASC) and keep
-       updating per account — last row per account = state on issueDate.
-       ====================================================== */
-    const latestByAccount = new Map(); // accountCode → last Holdings row
-    let offset = 0;
-
-    while (true) {
-      const batch = await zcql.executeZCQLQuery(`
-        SELECT WS_Account_code, HOLDING, WAP, HOLDING_VALUE,
-               SETTLEMENT_DATE, TRANSACTION_DATE
-        FROM Holdings
-        WHERE ISIN = '${isin}'
-          AND (SETTLEMENT_DATE < '${cutoff}' OR TRANSACTION_DATE < '${cutoff}')
-        ORDER BY CREATEDTIME ASC, ROWID ASC
-        LIMIT ${HOLDINGS_BATCH} OFFSET ${offset}
-      `);
-
-      if (!batch || batch.length === 0) break;
-
-      for (const row of batch) {
-        const h = row.Holdings || row;
-        const acc = String(h.WS_Account_code || "").trim();
-        if (!acc) continue;
-        latestByAccount.set(acc, h); // last row per account wins
-      }
-
-      if (batch.length < HOLDINGS_BATCH) break;
-      offset += HOLDINGS_BATCH;
-    }
-
-    if (latestByAccount.size === 0) {
-      return res.json({ success: true, data: [] });
-    }
-
-    /* ======================================================
-       STEP 2: CALCULATE SPLIT PREVIEW (simple arithmetic)
-       Holdings table already has HOLDING, WAP, HOLDING_VALUE
-       computed by FIFO. No need to re-run FIFO engine.
-
-       Split logic:
-         newHolding      = floor(currentHolding × ratio2 / ratio1)
-         holdingValue    = unchanged (same total cost)
-         newWAP          = holdingValue / newHolding (price per share halves)
-       ====================================================== */
-    const virtualToActual = await buildVirtualToActualMap(
-      zcql,
-      [...latestByAccount.keys()],
-    );
-    const preview = [];
-    const splitMultiplier = r2 / r1;
-
-    for (const [accountCode, h] of latestByAccount) {
-      const currentHolding = Number(h.HOLDING) || 0;
-      if (currentHolding <= 0) continue; // fully sold before issueDate
-
-      const holdingValue = Number(h.HOLDING_VALUE) || 0;
-      const currentWAP   = Number(h.WAP) || 0;
-
-      const newHolding = Math.floor(currentHolding * splitMultiplier);
-      if (newHolding <= 0) continue;
-
-      // Cost is unchanged — more shares at same total cost → WAP goes down
-      const newWAP = newHolding > 0
-        ? Math.round((holdingValue / newHolding) * 100) / 100
-        : 0;
-
-      preview.push({
-        isin,
-        accountCode, // WS_Account_code (virtual)
-        actualCode: virtualToActual.get(accountCode) || "",
-        currentHolding,
-        currentWAP,
-        holdingValue,
-        newHolding,
-        newWAP,
-        delta: newHolding - currentHolding,
-      });
-    }
+    const preview = await computeSplitPreviewRows(zcql, {
+      isin,
+      r1,
+      r2,
+      issueDateISO,
+    });
 
     return res.json({ success: true, data: preview });
   } catch (error) {
