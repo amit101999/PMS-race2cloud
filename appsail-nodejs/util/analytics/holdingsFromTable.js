@@ -120,6 +120,109 @@ export async function fetchHoldingsRowsPaged(zcql, accountCode, asOnDate, extraS
   return rows;
 }
 
+/**
+ * BULK: every Holdings row for ONE ISIN across ALL accounts, grouped by account.
+ *
+ * Same result as calling `fetchHoldingsRowsForAccountIsin` once per account, but
+ * in a handful of queries instead of one per account. The per-account loop
+ * overran the deployed AppSail request budget for widely-held ISINs (hundreds of
+ * sequential round trips) while passing locally, where no such limit applies.
+ * `DemergerController.fetchHoldingRowsByAccountForIsin` already solved this the
+ * same way — keep the two in sync.
+ *
+ * Keyset (`ROWID > cursor`) rather than LIMIT/OFFSET: with OFFSET each page
+ * re-scans and re-sorts the whole ISIN match (≈ O(n²)); keyset walks the ROWID
+ * primary-key index forward exactly once (~O(n)).
+ *
+ * Rows arrive in global ROWID order, so each account's slice is re-sorted in
+ * memory into `CREATEDTIME ASC, ROWID ASC` — the FIFO materialisation order the
+ * running `HOLDING`/`WAP` columns assume.
+ *
+ * @returns {Promise<Map<string, object[]>>} account code → its rows, FIFO order.
+ */
+export async function fetchHoldingsRowsByAccountForIsin(zcql, isin, asOnDate) {
+  const byAccount = new Map();
+  const isinTrim = String(isin ?? "").trim();
+  if (!isinTrim) return byAccount;
+
+  const clause = holdingsDateFilterClause(asOnDate);
+  let lastRowId = "0";
+
+  while (true) {
+    const batch = await zcql.executeZCQLQuery(`
+      SELECT ROWID, WS_Account_code, TRANSACTION_DATE, SETTLEMENT_DATE, TYPE, ISIN,
+             QUANTITY, PRICE, TOTAL_AMOUNT, HOLDING, WAP, HOLDING_VALUE, P_L, STATUS,
+             CA_DATE, CREATEDTIME
+      FROM Holdings
+      WHERE ISIN = '${escHoldingsSql(isinTrim)}'
+        AND ROWID > ${lastRowId}
+      ${clause}
+      ORDER BY ROWID ASC
+      LIMIT ${BATCH}
+    `);
+    if (!batch || batch.length === 0) break;
+
+    let maxRowId = lastRowId;
+    for (const r of batch) {
+      const h = r.Holdings || r;
+      const rowId = String(h.ROWID ?? "");
+      // Track the cursor across ALL rows, including ones the refine drops —
+      // filtering first could stall the cursor and loop forever.
+      if (rowId && (rowId.length > maxRowId.length || (rowId.length === maxRowId.length && rowId > maxRowId))) {
+        maxRowId = rowId;
+      }
+      const code = String(h.WS_Account_code ?? "").trim();
+      if (!code) continue;
+      let list = byAccount.get(code);
+      if (!list) {
+        list = [];
+        byAccount.set(code, list);
+      }
+      list.push(h);
+    }
+
+    // Guard against a non-advancing cursor (non-numeric / duplicate ROWIDs).
+    if (maxRowId === lastRowId) break;
+    lastRowId = maxRowId;
+    if (batch.length < BATCH) break;
+  }
+
+  // Refine the loose SQL date clause exactly as `fetchHoldingsRowsPaged` does,
+  // then restore FIFO order within each account.
+  const trimmed = String(asOnDate ?? "").trim();
+  const cutoff = /^\d{4}-\d{2}-\d{2}$/.test(trimmed)
+    ? (() => {
+        const nextDay = new Date(trimmed);
+        nextDay.setDate(nextDay.getDate() + 1);
+        return nextDay.toISOString().split("T")[0];
+      })()
+    : "";
+
+  for (const [code, rows] of byAccount) {
+    const kept = cutoff
+      ? rows.filter((r) => {
+          const d = holdingsEffectiveDate(r);
+          return !d || d < cutoff;
+        })
+      : rows;
+
+    kept.sort((a, b) => {
+      const ta = String(a.CREATEDTIME ?? "");
+      const tb = String(b.CREATEDTIME ?? "");
+      if (ta !== tb) return ta < tb ? -1 : 1;
+      const ra = String(a.ROWID ?? "0");
+      const rb = String(b.ROWID ?? "0");
+      if (ra.length !== rb.length) return ra.length - rb.length;
+      return ra < rb ? -1 : ra > rb ? 1 : 0;
+    });
+
+    if (kept.length) byAccount.set(code, kept);
+    else byAccount.delete(code);
+  }
+
+  return byAccount;
+}
+
 /** One ISIN only — fifo materialisation order (same ORDER BY as `fetchHoldingsRowsPaged`). */
 export async function fetchHoldingsRowsForAccountIsin(
   zcql,
