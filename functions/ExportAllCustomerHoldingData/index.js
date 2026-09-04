@@ -54,6 +54,21 @@ const TIME_BUFFER_MS = 90_000;
 
 const esc = (s) => String(s ?? "").replace(/'/g, "''");
 
+const parseCatalystTime = (ct) => {
+  if (!ct) return 0;
+  // Catalyst CREATEDTIME is an IST (UTC+05:30) wall-clock string like
+  // "2026-06-19 17:41:28:675" — parse it explicitly as IST.
+  const iso = String(ct).trim().replace(" ", "T").replace(/:(\d{3})$/, ".$1");
+  const ms = new Date(`${iso}+05:30`).getTime();
+  return isNaN(ms) ? 0 : ms;
+};
+
+const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
+// Date-only (no time) string in IST — used to tell "already generated
+// today" apart from "generated on an earlier day".
+const toISTDateStr = (epochMs) =>
+  new Date(epochMs + IST_OFFSET_MS).toISOString().split("T")[0];
+
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /**
@@ -278,6 +293,42 @@ module.exports = async (jobRequest, context) => {
 
     if (!checkpoint) {
       /* ---------------- FIRST INVOCATION ---------------- */
+
+      // Before touching the Jobs row (which would overwrite its status and
+      // lose this signal), check whether the prior run for this exact
+      // jobName already completed earlier *today* (IST, date-only). If so,
+      // and the file it produced is still sitting in Stratus, reuse it
+      // as-is instead of rebuilding from scratch. A different day (or any
+      // non-COMPLETED status) falls through to the normal rebuild below,
+      // which deletes and recreates fileName via ensureObjectDeleted.
+      try {
+        const priorRows = await queryWithTimeout(
+          zcql,
+          `SELECT status, CREATEDTIME FROM Jobs WHERE jobName = '${esc(jobName)}' LIMIT 1`
+        );
+        if (priorRows.length) {
+          const priorStatus = priorRows[0].Jobs.status;
+          const priorCreatedTime = priorRows[0].Jobs.CREATEDTIME;
+          const generatedOn = priorCreatedTime ? toISTDateStr(parseCatalystTime(priorCreatedTime)) : null;
+
+          if (priorStatus === "COMPLETED" && generatedOn === toISTDateStr(Date.now())) {
+            const fileStillThere = await bucket.headObject(fileName, { throwErr: false });
+            if (fileStillThere) {
+              console.log(`Export ${jobName} already generated today; reusing existing file, skipping rebuild.`);
+              await queryWithTimeout(
+                zcql,
+                `UPDATE Jobs SET status = 'COMPLETED' WHERE jobName = '${esc(jobName)}'`
+              );
+              context.closeWithSuccess();
+              return;
+            }
+            console.warn(`Jobs row for ${jobName} says COMPLETED today but ${fileName} is missing from Stratus; regenerating.`);
+          }
+        }
+      } catch (lookupErr) {
+        console.warn(`Failed to check prior Jobs row for ${jobName}, proceeding to regenerate:`, lookupErr.message);
+      }
+
       await ensureJobsRowRunning(zcql, jobName);
 
       const reportDate = asOnDate || new Date().toISOString().split("T")[0];

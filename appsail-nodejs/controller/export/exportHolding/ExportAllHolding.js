@@ -1,5 +1,3 @@
-import catalyst from "zcatalyst-sdk-node";
-
 const parseCatalystTime = (ct) => {
   if (!ct) return 0;
   // Catalyst CREATEDTIME is an IST (UTC+05:30) wall-clock string like
@@ -42,7 +40,6 @@ export const exportAllData = async (req, res) => {
 
     if (existing.length) {
       const oldStatus = existing[0].Jobs.status;
-      const oldRowId = existing[0].Jobs.ROWID;
       const createdTime = existing[0].Jobs.CREATEDTIME;
 
       const STALE_TIMEOUT_MS = 60 * 60 * 1000;
@@ -63,46 +60,17 @@ export const exportAllData = async (req, res) => {
         });
       }
 
-      // COMPLETED, FAILED, or stale — clear this date's old Jobs row and give
-      // Stratus a best-effort head start on cleanup.
+      // COMPLETED, FAILED, or stale — do NOT clear the Jobs row or Stratus
+      // file here. ExportAllCustomerHoldingData/index.js needs to see them
+      // still in place on its first invocation so it can decide for itself:
+      // if this date's file was already generated earlier *today*, reuse it
+      // as-is; otherwise delete-and-rebuild. Deleting them here would erase
+      // that evidence before the function ever gets to look at it.
       //
-      // The actual guarantee that the new upload won't collide with
-      // whatever this old run left behind (a finished file, a dangling
-      // multipart upload, a stale checkpoint) now lives entirely in
-      // ExportAllCustomerHoldingData/index.js: on every invocation it
-      // verifies any checkpoint's uploadId is still valid before trusting
-      // it, and does a verified delete-then-recreate of the target fileName.
-      // That runs under the function's own execution credentials, which is
-      // reliable — whereas Stratus calls made from here (an HTTP request,
-      // even admin-scoped) have shown intermittent permission/timing
-      // failures. So this block no longer needs to succeed for a re-export
-      // to work correctly; it's just a courtesy to avoid leaving obviously
-      // dead objects lying around between runs.
-      try {
-        await zcql.executeZCQLQuery(`DELETE FROM Jobs WHERE ROWID = ${oldRowId}`);
-      } catch (delErr) {
-        console.error("Error deleting old job:", delErr);
-      }
-
-      try {
-        const adminApp = catalyst.initialize(req, { scope: "admin" });
-        const bucket = adminApp.stratus().bucket("upload-data-bucket");
-
-        try { await bucket.deleteObject(fileName); } catch (_) { }
-        if (!isConsolidated(mode)) {
-          try { await bucket.deleteObject(`all-clients-export-${dateStr}.csv`); } catch (_) { }
-        }
-        const metaKeys = [
-          `exports-meta/${jobName}-manifest.json`,
-          `exports-meta/${jobName}-checkpoint.json`,
-          `exports-meta/${jobName}-pending.csv`,
-        ];
-        for (const key of metaKeys) {
-          try { await bucket.deleteObject(key); } catch (_) { }
-        }
-      } catch (stratusErr) {
-        console.error("Best-effort Stratus cleanup failed (non-fatal, the job will self-heal):", stratusErr);
-      }
+      // The function's own verified delete-then-recreate of fileName (see
+      // ensureObjectDeleted in checkpoint.js) is what actually guarantees a
+      // rebuild never collides with a prior run's leftovers, so nothing is
+      // lost by not cleaning up here.
     }
 
     // Submit a fresh job
