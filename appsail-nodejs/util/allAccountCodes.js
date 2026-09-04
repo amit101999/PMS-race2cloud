@@ -10,7 +10,9 @@ export const getAllAccountCodesFromDatabase = async (zcql, tableName) => {
       const result = await zcql.executeZCQLQuery(query);
       rawRows.push(...result);
       offset = offset + limit;
-      if (result.length <= 0) {
+      // Stop on a short page, not just an empty one — otherwise every load
+      // spends one extra query confirming the end of the table.
+      if (result.length < limit) {
         hasNext = false;
       }
     }
