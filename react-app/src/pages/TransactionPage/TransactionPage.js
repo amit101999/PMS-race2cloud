@@ -1,6 +1,10 @@
 import React, { useState, useEffect } from "react";
 import "./TransactionPage.css";
 import { BASE_URL } from "../../constant.js";
+import { Pagination } from "../../components/common/CommonComponents";
+
+/** Rows of Transaction History shown per page. */
+const PAGE_SIZE = 10;
 
 function TransactionPage({ stock, accountCode, asOnDate, onClose }) {
   const [transactions, setTransactions] = useState([]);
@@ -8,6 +12,7 @@ function TransactionPage({ stock, accountCode, asOnDate, onClose }) {
   const [totalSell, setTotalSell] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [currentPage, setCurrentPage] = useState(1);
 
   useEffect(() => {
     if (stock && accountCode && stock.isin) {
@@ -22,6 +27,8 @@ function TransactionPage({ stock, accountCode, asOnDate, onClose }) {
     try {
       setLoading(true);
       setError(null);
+      // A different stock (or as-on date) is a different list — start at page 1.
+      setCurrentPage(1);
 
       const baseUrl = `${BASE_URL}/transaction`;
       const params = new URLSearchParams({
@@ -33,24 +40,20 @@ function TransactionPage({ stock, accountCode, asOnDate, onClose }) {
         params.set("asOnDate", asOnDate);
       }
 
-      const [historyRes, buyRes, sellRes] = await Promise.all([
-        fetch(`${baseUrl}/getStockTransactionHistory?${params.toString()}`),
-        fetch(`${baseUrl}/getAllBuys?${params.toString()}`),
-        fetch(`${baseUrl}/getAllSells?${params.toString()}`),
-      ]);
+      // One request: the history endpoint returns the buy/sell totals alongside
+      // the rows, all three derived from a single Holdings scan. This used to be
+      // three calls that each re-ran the same query.
+      const historyRes = await fetch(
+        `${baseUrl}/getStockTransactionHistory?${params.toString()}`
+      );
+      const payload = await historyRes.json();
 
-      const historyData = await historyRes.json();
-      const buyData = await buyRes.json();
-      const sellData = await sellRes.json();
+      // Older deploys returned a bare array from this endpoint.
+      const rows = Array.isArray(payload) ? payload : payload?.rows;
+      setTransactions(Array.isArray(rows) ? rows : []);
 
-      if (Array.isArray(historyData)) {
-        setTransactions(historyData);
-      } else {
-        setTransactions([]);
-      }
-
-      setTotalBuy(buyData.totalBuyQty || 0);
-      setTotalSell(sellData.totalSellQty || 0);
+      setTotalBuy(Number(payload?.totalBuyQty) || 0);
+      setTotalSell(Number(payload?.totalSellQty) || 0);
     } catch (err) {
       setError(err.message);
       setTransactions([]);
@@ -115,6 +118,9 @@ function TransactionPage({ stock, accountCode, asOnDate, onClose }) {
       : snapped.toLocaleString("en-IN", { maximumFractionDigits: 3 });
   };
 
+  // Everything below is deliberately derived from the FULL list, not the visible
+  // page: the summary cards, the P/L total and the optional corporate-action
+  // columns must stay identical whichever page you are on.
   const lastTransaction = transactions[transactions.length - 1];
   const currentHolding = lastTransaction?.holdings ?? 0;
   const totalProfitLoss = transactions.reduce(
@@ -138,6 +144,17 @@ function TransactionPage({ stock, accountCode, asOnDate, onClose }) {
   // Base table has 11 columns; each optional corporate-action date adds one.
   const tableColSpan =
     11 + (showMergerDate ? 1 : 0) + (showDemergerDate ? 1 : 0);
+
+  // Paging is applied to the display only. The rows arrive in one call because
+  // Holding / WAP / Holding Value / P L are running totals down the ordered
+  // list — slicing them server-side would break every figure after row 10.
+  const totalRows = transactions.length;
+  const totalPages = Math.max(1, Math.ceil(totalRows / PAGE_SIZE));
+  // Clamp instead of trusting state: a shorter list can arrive while a later
+  // page is selected, which would otherwise render an empty table.
+  const safePage = Math.min(currentPage, totalPages);
+  const startIndex = (safePage - 1) * PAGE_SIZE;
+  const pageTransactions = transactions.slice(startIndex, startIndex + PAGE_SIZE);
 
   return (
     <div className="hd-overlay">
@@ -190,6 +207,7 @@ function TransactionPage({ stock, accountCode, asOnDate, onClose }) {
             Error: {error}
           </div>
         ) : (
+          <>
           <div className="hd-table-wrapper">
             <table className="hd-table">
               <thead>
@@ -224,8 +242,11 @@ function TransactionPage({ stock, accountCode, asOnDate, onClose }) {
                     </td>
                   </tr>
                 ) : (
-                  transactions.map((tx, idx) => (
-                    <tr key={idx} className={getRowClass(tx.tranType)}>
+                  pageTransactions.map((tx, idx) => (
+                    <tr
+                      key={startIndex + idx}
+                      className={getRowClass(tx.tranType)}
+                    >
                       <td>{tx.originalTrandate || tx.trandate || "-"}</td>
                       <td>{tx.setdate || "-"}</td>
                       {showMergerDate && <td>{tx.caDate || "-"}</td>}
@@ -266,6 +287,22 @@ function TransactionPage({ stock, accountCode, asOnDate, onClose }) {
               </tbody>
             </table>
           </div>
+
+          {totalRows > 0 && (
+            <div className="hd-pagination">
+              <span className="hd-pagination-info">
+                Showing {startIndex + 1}–
+                {Math.min(startIndex + PAGE_SIZE, totalRows)} of {totalRows}
+              </span>
+              <Pagination
+                currentPage={safePage}
+                pageSize={PAGE_SIZE}
+                totalRows={totalRows}
+                onPageChange={setCurrentPage}
+              />
+            </div>
+          )}
+          </>
         )}
       </div>
     </div>

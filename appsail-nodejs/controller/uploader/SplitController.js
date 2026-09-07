@@ -1,4 +1,55 @@
 import { computeSplitPreviewRows } from "../../util/analytics/splitPreviewCalc.js";
+import { buildVirtualToActualMap } from "../../util/mapVirtualToActualCodes.js";
+// Shared FIFO re-derivation only — the effective-date rule below stays local so
+// this module's preview cannot be silently changed by another module's copy.
+import { recomputeHoldingsSnapshot } from "../../util/analytics/holdingsFromTable.js";
+
+const HOLDINGS_BATCH = 250;
+
+/**
+ * The date a Holdings row takes effect for an as-on-date view.
+ * Every type is dated by its transaction date, with one exception: `OPI`
+ * ("Security in") is dated by its settlement date, because an inward transfer
+ * is not owned until it actually settles.
+ *
+ * Deliberately local to this controller: the Split module owns this rule for
+ * its own preview and must not depend on another module's copy, which may
+ * still be on the older settlement-date rule.
+ */
+const splitEffectiveDate = (h) => {
+  const setD = String(h.SETTLEMENT_DATE || "").slice(0, 10);
+  const txD  = String(h.TRANSACTION_DATE || "").slice(0, 10);
+  return String(h.TYPE || "").trim().toUpperCase() === "OPI"
+    ? setD || txD
+    : txD || setD;
+};
+
+/**
+ * Normalise an incoming date to `YYYY-MM-DD` without ever crossing a timezone
+ * boundary.
+ *
+ * The old `new Date(v).setHours(0,0,0,0)` + `toISOString()` moved the date back
+ * a day in any zone ahead of UTC (IST included): local midnight on the 28th is
+ * 18:30Z on the 27th, so the chosen date silently became the previous one. It
+ * only looked correct because the deployed runtime is UTC, where setHours(0…) is
+ * a no-op — which is why this reproduced locally but not on Catalyst.
+ */
+const toISODateOnly = (v) => {
+  const s = String(v ?? "").trim();
+  const m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (m) return `${m[1]}-${m[2]}-${m[3]}`; // ISO date or datetime — take the date part
+  const d = new Date(s);
+  if (Number.isNaN(d.getTime())) return "";
+  const p = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+};
+
+/** Exclusive next-day cutoff, stepped in UTC so the local zone cannot shift it. */
+const nextISODate = (isoDate) => {
+  const d = new Date(`${isoDate}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + 1);
+  return d.toISOString().split("T")[0];
+};
 
 export const getAllSecuritiesISINs = async (req, res) => {
   try {
@@ -76,9 +127,10 @@ export const previewStockSplit = async (req, res) => {
       });
     }
 
-    const issueDateObj = new Date(issueDate);
-    issueDateObj.setHours(0, 0, 0, 0);
-    const issueDateISO = issueDateObj.toISOString().split("T")[0];
+    const issueDateISO = toISODateOnly(issueDate);
+    if (!issueDateISO) {
+      return res.status(400).json({ success: false, message: "Invalid date" });
+    }
 
     const zcql = req.catalystApp.zcql();
 
@@ -88,6 +140,120 @@ export const previewStockSplit = async (req, res) => {
       r2,
       issueDateISO,
     });
+    // cutoff = day AFTER issueDate for the date filter (exclusive upper bound)
+    const cutoff = nextISODate(issueDateISO);
+
+    const zcql = req.catalystApp.zcql();
+
+    /* ======================================================
+       STEP 1: READ Holdings AS OF issueDate
+       Fetch all Holdings rows for this ISIN with date filter.
+       Walk in FIFO order (CREATEDTIME ASC, ROWID ASC) and keep
+       updating per account — last row per account = state on issueDate.
+       ====================================================== */
+    const latestByAccount = new Map(); // accountCode → last Holdings row
+    const rowsByAccount = new Map(); // accountCode → every effective row, for re-derivation
+    let offset = 0;
+
+    while (true) {
+      const batch = await zcql.executeZCQLQuery(`
+        SELECT WS_Account_code, HOLDING, WAP, HOLDING_VALUE,
+               QUANTITY, PRICE, TOTAL_AMOUNT,
+               TYPE, SETTLEMENT_DATE, TRANSACTION_DATE
+        FROM Holdings
+        WHERE ISIN = '${isin}'
+          AND (SETTLEMENT_DATE < '${cutoff}' OR TRANSACTION_DATE < '${cutoff}')
+        ORDER BY CREATEDTIME ASC, ROWID ASC
+        LIMIT ${HOLDINGS_BATCH} OFFSET ${offset}
+      `);
+
+      if (!batch || batch.length === 0) break;
+
+      for (const row of batch) {
+        const h = row.Holdings || row;
+        const acc = String(h.WS_Account_code || "").trim();
+        if (!acc) continue;
+        // The SQL clause above deliberately ORs both dates — it cannot express
+        // the OPI exception on its own. Apply the per-type rule here BEFORE the
+        // row can become this account's "latest" snapshot, otherwise a row that
+        // is not yet effective overwrites (and then wrongly drops) the real one.
+        const eff = splitEffectiveDate(h);
+        if (eff && eff >= cutoff) continue;
+        latestByAccount.set(acc, h); // last row per account wins
+        if (!rowsByAccount.has(acc)) rowsByAccount.set(acc, []);
+        rowsByAccount.get(acc).push(h);
+      }
+
+      if (batch.length < HOLDINGS_BATCH) break;
+      offset += HOLDINGS_BATCH;
+    }
+
+    if (latestByAccount.size === 0) {
+      return res.json({ success: true, data: [] });
+    }
+
+    /* The stored HOLDING is a running balance frozen in settlement order at
+       rebuild time, so it can contradict the rows the trade-date rule selected
+       above — it may include a buy that is not yet effective on the issue date.
+       Re-derive the position from the rows themselves. Once the Holdings table
+       has been rebuilt on the new basis this becomes a no-op. */
+    for (const [acc, accRows] of rowsByAccount) {
+      const snap = recomputeHoldingsSnapshot(accRows);
+      if (snap.HOLDING <= 0) {
+        latestByAccount.delete(acc); // fully sold as at the issue date
+        continue;
+      }
+      latestByAccount.set(acc, { ...latestByAccount.get(acc), ...snap });
+    }
+
+    if (latestByAccount.size === 0) {
+      return res.json({ success: true, data: [] });
+    }
+
+    /* ======================================================
+       STEP 2: CALCULATE SPLIT PREVIEW (simple arithmetic)
+       Holdings table already has HOLDING, WAP, HOLDING_VALUE
+       computed by FIFO. No need to re-run FIFO engine.
+
+       Split logic:
+         newHolding      = floor(currentHolding × ratio2 / ratio1)
+         holdingValue    = unchanged (same total cost)
+         newWAP          = holdingValue / newHolding (price per share halves)
+       ====================================================== */
+    const virtualToActual = await buildVirtualToActualMap(
+      zcql,
+      [...latestByAccount.keys()],
+    );
+    const preview = [];
+    const splitMultiplier = r2 / r1;
+
+    for (const [accountCode, h] of latestByAccount) {
+      const currentHolding = Number(h.HOLDING) || 0;
+      if (currentHolding <= 0) continue; // fully sold before issueDate
+
+      const holdingValue = Number(h.HOLDING_VALUE) || 0;
+      const currentWAP   = Number(h.WAP) || 0;
+
+      const newHolding = Math.floor(currentHolding * splitMultiplier);
+      if (newHolding <= 0) continue;
+
+      // Cost is unchanged — more shares at same total cost → WAP goes down
+      const newWAP = newHolding > 0
+        ? Math.round((holdingValue / newHolding) * 100) / 100
+        : 0;
+
+      preview.push({
+        isin,
+        accountCode, // WS_Account_code (virtual)
+        actualCode: virtualToActual.get(accountCode) || "",
+        currentHolding,
+        currentWAP,
+        holdingValue,
+        newHolding,
+        newWAP,
+        delta: newHolding - currentHolding,
+      });
+    }
 
     return res.json({ success: true, data: preview });
   } catch (error) {

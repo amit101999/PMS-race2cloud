@@ -33,10 +33,26 @@ const sqlDate = (v) => {
 
 const isBuyType = (type) => /^BY-|SQB|OPI/i.test(String(type || ""));
 
+/* ===== TRADE_DATE_MIGRATION: OLD (settlement basis for ALL buys) — retained, do not delete =====
 const getEffectiveDate = (r) => {
   const setDate = r.SETDATE || r.setdate;
   const tradeDate = r.TRANDATE || r.trandate;
   return isBuyType(r.Tran_Type || r.tranType)
+    ? setDate || tradeDate
+    : tradeDate || setDate;
+};
+   ============================================================================================= */
+
+/* ===== TRADE_DATE_MIGRATION: NEW (trade basis; OPI keeps settlement) =====
+   OPI rows are inception/opening positions: TRANDATE is the original acquisition
+   date, SETDATE is the PMS onboarding date. Those are different events, so OPI
+   stays settlement-dated. BY-/SQB move to TRANDATE. Sells unchanged. */
+const isOpiType = (type) => /^OPI/i.test(String(type || ""));
+
+const getEffectiveDate = (r) => {
+  const setDate = r.SETDATE || r.setdate;
+  const tradeDate = r.TRANDATE || r.trandate;
+  return isOpiType(r.Tran_Type || r.tranType)
     ? setDate || tradeDate
     : tradeDate || setDate;
 };
@@ -293,10 +309,21 @@ function runFifoEngine(
 
   const isBuy = (type) => /^BY-|SQB|OPI/.test(String(type || "").toUpperCase());
 
+  /* ===== TRADE_DATE_MIGRATION: OLD — retained, do not delete =====
   const getTxnEventDate = (t) => {
     const setDate = t.SETDATE || t.setdate;
     const tradeDate = t.TRANDATE || t.trandate;
     return isBuy(t.Tran_Type || t.tranType) ? setDate || tradeDate : tradeDate || setDate;
+  };
+     ============================================================== */
+
+  /* ===== TRADE_DATE_MIGRATION: NEW (OPI keeps settlement) ===== */
+  const getTxnEventDate = (t) => {
+    const setDate = t.SETDATE || t.setdate;
+    const tradeDate = t.TRANDATE || t.trandate;
+    return isOpiType(t.Tran_Type || t.tranType)
+      ? setDate || tradeDate
+      : tradeDate || setDate;
   };
 
   const events = [

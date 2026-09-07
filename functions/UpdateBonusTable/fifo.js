@@ -26,6 +26,28 @@ const snapQty = (n) => {
   return Math.abs(v) < QTY_EPS ? 0 : v;
 };
 
+/**
+ * Types whose holdings impact is dated by SETDATE rather than TRANDATE.
+ * OPI ("Security in") is the only one — an inward transfer is not owned until
+ * it actually settles. BY-/SQB and every sell type take effect on their trade
+ * date.
+ */
+const isSettlementBasedType = (type) =>
+  String(type || "").trim().toUpperCase() === "OPI";
+
+/**
+ * The date a transaction takes effect for holdings purposes.
+ * Exported so `index.js` can apply the same rule to its entitlement window
+ * without duplicating it.
+ */
+exports.txnEffectiveDate = (t) => {
+  const setDate = t.SETDATE || t.setdate;
+  const tradeDate = t.TRANDATE || t.trandate;
+  return isSettlementBasedType(t.Tran_Type || t.tranType)
+    ? setDate || tradeDate
+    : tradeDate || setDate;
+};
+
 exports.runFifoEngine = (
   transactions = [],
   bonuses = [],
@@ -59,12 +81,17 @@ exports.runFifoEngine = (
 
   const isBuy = (type) => /^BY-|SQB|OPI/.test(String(type || "").toUpperCase());
 
-  /** Buy → settlement date (SETDATE); Sell → transaction date (TRANDATE). */
+  /* ===== OLD LOGIC — every buy dated by SETDATE. Kept for rollback. =====
   const getTxnEventDate = (t) => {
     const setDate = t.SETDATE || t.setdate;
     const tradeDate = t.TRANDATE || t.trandate;
     return isBuy(t.Tran_Type || t.tranType) ? setDate || tradeDate : tradeDate || setDate;
   };
+  ===== END OLD LOGIC ===== */
+
+  /** OPI → settlement date (SETDATE); everything else → transaction date (TRANDATE). */
+  const getTxnEventDate = (t) =>
+    exports.txnEffectiveDate(t);
 
   const events = [
     ...transactions

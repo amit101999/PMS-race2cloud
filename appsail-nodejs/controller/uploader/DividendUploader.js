@@ -4,6 +4,7 @@ import {
   holdingsEffectiveDate,
   HOLDINGS_FIFO_ORDER_BY_SQL,
 } from "../../util/analytics/holdingsFromTable.js";
+import { fetchHoldingsRowsByAccountForIsin } from "../../util/analytics/holdingsFromTable.js";
 import { parseCustodianCsv } from "../../util/custodian/parseCustodianCsv.js";
 import { buildVirtualToActualMap } from "../../util/mapVirtualToActualCodes.js";
 
@@ -368,6 +369,23 @@ export const getAllSecuritiesISINs = async (req, res) => {
 
       for (const [accountCode, h] of latestByAccount) {
         const holdingAsOnRecordDate = Number(h.HOLDING) || 0;
+      /* One bulk keyset read for the whole ISIN instead of a query per account.
+         The per-account loop was one sequential round trip per holder, which
+         overruns the deployed AppSail request budget for a widely-held ISIN
+         (locally there is no such limit, so it only fails once deployed).
+         Same fix as the Split/Bonus exports and DemergerController. */
+      const rowsByAccount = await fetchHoldingsRowsByAccountForIsin(
+        zcql,
+        isin,
+        recordDateISO,
+      );
+
+      for (const accountCode of eligibleAccounts) {
+        const holdingRows = rowsByAccount.get(accountCode) || [];
+        if (!holdingRows.length) continue;
+
+        const holdingAsOnRecordDate =
+          Number(holdingRows[holdingRows.length - 1].HOLDING) || 0;
         if (holdingAsOnRecordDate <= 1e-6) continue;
 
         const dividendAmount = round2(holdingAsOnRecordDate * rateNum);

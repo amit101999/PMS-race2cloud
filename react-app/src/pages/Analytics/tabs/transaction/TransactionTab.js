@@ -116,13 +116,23 @@ const TransactionTab = ({ accountCode, asOnDate }) => {
     [currentPage, fetchPage, loading, loadingMore, totalPages]
   );
 
-  // Fetch security options (on open/typing, debounce 400ms)
+  /*
+   * Fetch the account's securities once per account/date — NOT per keystroke.
+   * Each call scans the whole Transaction ledger plus the Holdings corp-action
+   * rows, and the list is narrowed client-side by `filteredSecOptions` anyway,
+   * so re-querying as the user types bought nothing. The short timeout only
+   * coalesces rapid account/date switches.
+   */
   useEffect(() => {
+    if (!accountCode || !accountCode.trim()) {
+      setSecOptions([]);
+      return;
+    }
+    let cancelled = false;
     const id = setTimeout(async () => {
       try {
         const params = new URLSearchParams({
-          ...(secSearch ? { search: secSearch } : {}),
-          ...(accountCode ? { accountCode } : {}),
+          accountCode,
           ...(asOnDate ? { asOnDate } : {}),
         });
         const res = await fetch(
@@ -130,11 +140,14 @@ const TransactionTab = ({ accountCode, asOnDate }) => {
         );
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const json = await res.json();
-        setSecOptions(json.data || []);
+        if (!cancelled) setSecOptions(json.data || []);
       } catch {}
-    }, 500);
-    return () => clearTimeout(id);
-  }, [secSearch, accountCode, asOnDate]);
+    }, 150);
+    return () => {
+      cancelled = true;
+      clearTimeout(id);
+    };
+  }, [accountCode, asOnDate]);
 
   // Client-side contains filter over fetched options — matches Security Name OR ISIN.
   const filteredSecOptions = useMemo(() => {

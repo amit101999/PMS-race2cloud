@@ -29,8 +29,27 @@ export const getStockTransactionHistory = async (req, res) => {
       asOnDate,
     );
 
+    // Buy/sell totals come from these same rows, so they ride along instead of
+    // making the client re-request the identical scan through getAllBuys /
+    // getAllSells. Those routes stay for other callers; the predicates below are
+    // the shared ones, so all three endpoints keep reporting the same figures.
+    // Deliberately two independent `if`s, not else-if — matching the standalone
+    // endpoints, where a type could satisfy both tests.
+    let totalBuyQty = 0;
+    let totalSellQty = 0;
+    for (const h of rows) {
+      const typ = h.TYPE || h.type;
+      const qty = Math.abs(Number(h.QUANTITY) || 0);
+      if (isHoldingsBuyType(typ) || String(typ || "").toUpperCase() === "BONUS") {
+        totalBuyQty += qty;
+      }
+      if (isHoldingsSellType(typ)) {
+        totalSellQty += qty;
+      }
+    }
+
     const result = rows.map((h) => mapHoldingsRowToStockHistoryDto(h, isin));
-    return res.json(result);
+    return res.json({ rows: result, totalBuyQty, totalSellQty });
   } catch (err) {
     return res.status(500).json({ error: err.message });
   }

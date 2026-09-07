@@ -138,3 +138,22 @@
 .pl.negative {
   color: #dc2626;
 }
+
+/* Transaction History paging bar — sits under the table, inside the modal. */
+.hd-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+  padding: 4px 4px 4px 16px;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  background: #f9fafb;
+}
+
+.hd-pagination-info {
+  font-size: 12px;
+  color: #6b7280;
+}

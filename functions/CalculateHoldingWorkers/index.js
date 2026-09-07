@@ -370,10 +370,27 @@ function createdTimeFloorFromMs(ms) {
   );
 }
 
+/* ===== TRADE_DATE_MIGRATION: OLD (settlement basis for ALL buys) — retained, do not delete =====
 const getEffectiveDate = (r) => {
   const setDate = r.SETDATE || r.setdate;
   const tradeDate = r.TRANDATE || r.trandate;
   return isBuyType(r.Tran_Type || r.tranType)
+    ? setDate || tradeDate
+    : tradeDate || setDate;
+};
+   ============================================================================================= */
+
+/* ===== TRADE_DATE_MIGRATION: NEW (trade basis; OPI keeps settlement) =====
+   OPI rows are inception/opening positions: TRANDATE is the client's original
+   acquisition date (can be years earlier), SETDATE is the date the position was
+   onboarded into PMS. Those are two different events, so OPI stays on SETDATE.
+   Real broker buys (BY-, SQB) settle T+1 and move to TRANDATE. Sells unchanged. */
+const isOpiType = (type) => /^OPI/i.test(String(type || ""));
+
+const getEffectiveDate = (r) => {
+  const setDate = r.SETDATE || r.setdate;
+  const tradeDate = r.TRANDATE || r.trandate;
+  return isOpiType(r.Tran_Type || r.tranType)
     ? setDate || tradeDate
     : tradeDate || setDate;
 };
@@ -587,8 +604,21 @@ async function appendBuyRowsCheap(zcql, accountCode, isin, newBuyTxns, counters)
   let holding = Number(tail?.HOLDING) || 0;
   let cost = Number(tail?.HOLDING_VALUE) || 0;
 
+  /* ===== TRADE_DATE_MIGRATION =====
+     Previously this loop consumed the SQL `ORDER BY SETDATE ASC` order directly,
+     which was correct only because every buy type was settlement-dated. Buys are
+     now split (OPI -> SETDATE, BY-/SQB -> TRANDATE) and no single SQL column can
+     order a mixed batch, so the authoritative sort happens here instead. The SQL
+     ORDER BY is now only a stable pre-sort. */
+  const sortedBuyTxns = [...newBuyTxns].sort((a, b) => {
+    const eA = String(getEffectiveDate(a) || "");
+    const eB = String(getEffectiveDate(b) || "");
+    if (eA !== eB) return eA.localeCompare(eB);
+    return String(a.ROWID || "").localeCompare(String(b.ROWID || ""));
+  });
+
   let appended = 0;
-  for (const t of newBuyTxns) {
+  for (const t of sortedBuyTxns) {
     const tranType = t.Tran_Type;
     const qty = Math.abs(Number(t.QTY) || 0);
     if (!qty) continue;

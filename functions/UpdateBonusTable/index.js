@@ -1,5 +1,5 @@
 const catalyst = require("zcatalyst-sdk-node");
-const { runFifoEngine } = require("./fifo.js");
+const { runFifoEngine, txnEffectiveDate } = require("./fifo.js");
 
 const ZCQL_ROW_LIMIT = 270;
 const REBUILD_BATCH = 400;
@@ -254,15 +254,24 @@ module.exports = async (jobRequest, context) => {
 
     STEP 2: FETCH TX / BONUS / SPLIT (ROWID dedupe — matches preview API)
        ====================================================== */
-    const fetchAllDeduped = async (table, dateCol, operator, orderBySql) => {
+    const fetchAllDeduped = async (
+      table,
+      dateCol,
+      operator,
+      orderBySql,
+      whereDateOverride = null,
+      rowFilter = null,
+    ) => {
       const out = [];
       const seenRowIds = new Set();
       let off = 0;
       while (true) {
+        const whereDate =
+          whereDateOverride || `${dateCol} ${operator} '${esc(exDateISO)}'`;
         const r = await zcql.executeZCQLQuery(`
           SELECT *
           FROM ${table}
-          WHERE ISIN='${esc(isin)}' AND ${dateCol} ${operator} '${esc(exDateISO)}'
+          WHERE ISIN='${esc(isin)}' AND ${whereDate}
           ORDER BY ${orderBySql}
           LIMIT ${ZCQL_ROW_LIMIT} OFFSET ${off}
         `);
@@ -272,6 +281,7 @@ module.exports = async (jobRequest, context) => {
           const rowId = rec.ROWID;
           if (rowId != null && seenRowIds.has(rowId)) continue;
           if (rowId != null) seenRowIds.add(rowId);
+          if (rowFilter && !rowFilter(rec)) continue;
           out.push(row);
         }
         if (r.length < ZCQL_ROW_LIMIT) break;
@@ -280,11 +290,28 @@ module.exports = async (jobRequest, context) => {
       return out;
     };
 
+    /* ===== OLD LOGIC — settlement-date only entitlement window. Kept for rollback. =====
     const txRows = await fetchAllDeduped(
       "Transaction",
       "SETDATE",
       "<=",
       "SETDATE ASC, ROWID ASC"
+    );
+    ===== END OLD LOGIC ===== */
+
+    // The FIFO engine has no internal date cutoff — whatever is fetched here IS
+    // the entitlement window. OPI is dated by SETDATE and every other type by
+    // TRANDATE, so no single column expresses it: fetch on both, filter per row.
+    const txRows = await fetchAllDeduped(
+      "Transaction",
+      "TRANDATE",
+      "<=",
+      "TRANDATE ASC, ROWID ASC",
+      `(TRANDATE <= '${esc(exDateISO)}' OR SETDATE <= '${esc(exDateISO)}')`,
+      (rec) => {
+        const eff = String(txnEffectiveDate(rec) || "").slice(0, 10);
+        return !eff || eff <= exDateISO;
+      },
     );
     const bonusRows = await fetchAllDeduped(
       "Bonus",
