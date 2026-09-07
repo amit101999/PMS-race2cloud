@@ -1,4 +1,7 @@
-import { fetchHoldingsRowsByAccountForIsin } from "../../util/analytics/holdingsFromTable.js";
+import {
+  fetchHoldingsRowsByAccountForIsin,
+  recomputeHoldingsSnapshot,
+} from "../../util/analytics/holdingsFromTable.js";
 import { parseCustodianCsv } from "../../util/custodian/parseCustodianCsv.js";
 import { buildVirtualToActualMap } from "../../util/mapVirtualToActualCodes.js";
 
@@ -310,9 +313,8 @@ export const getAllSecuritiesISINs = async (req, res) => {
          ------------------------------------------------------
          Read the stored Holdings ledger — the same source of truth as the
          rebuild / upload worker — as of the record date, instead of replaying
-         FIFO from the source tables. The last row in FIFO order carries the
-         running HOLDING (holding as of that date), and corporate actions
-         already applied (incl. demerger/merger) are reflected automatically.
+         FIFO from the source tables. Corporate actions already applied (incl.
+         demerger/merger) are reflected automatically.
          ====================================================== */
       const preview = [];
       const fifoByAccount = new Map();
@@ -332,8 +334,14 @@ export const getAllSecuritiesISINs = async (req, res) => {
         const holdingRows = rowsByAccount.get(accountCode) || [];
         if (!holdingRows.length) continue;
 
+        /* Re-derive rather than reading the last row's stored HOLDING. That
+           running balance was frozen in settlement order at rebuild time, so it
+           can already include a buy the trade-date filter above just dropped —
+           the kept row is right, but the total written on it is not. Same
+           re-derivation Split and Bonus previews apply; a no-op once the
+           Holdings table has been rebuilt on the trade-date basis. */
         const holdingAsOnRecordDate =
-          Number(holdingRows[holdingRows.length - 1].HOLDING) || 0;
+          recomputeHoldingsSnapshot(holdingRows).HOLDING;
         if (holdingAsOnRecordDate <= 1e-6) continue;
 
         const dividendAmount = round2(holdingAsOnRecordDate * rateNum);
