@@ -1,10 +1,7 @@
 import {
-  escHoldingsSql,
-  holdingsDateFilterClause,
-  holdingsEffectiveDate,
-  HOLDINGS_FIFO_ORDER_BY_SQL,
+  fetchHoldingsRowsByAccountForIsin,
+  recomputeHoldingsSnapshot,
 } from "../../util/analytics/holdingsFromTable.js";
-import { fetchHoldingsRowsByAccountForIsin } from "../../util/analytics/holdingsFromTable.js";
 import { parseCustodianCsv } from "../../util/custodian/parseCustodianCsv.js";
 import { buildVirtualToActualMap } from "../../util/mapVirtualToActualCodes.js";
 
@@ -307,6 +304,7 @@ export const getAllSecuritiesISINs = async (req, res) => {
         holdOffset += ZCQL_ROW_LIMIT;
       }
 
+      const eligibleAccounts = Array.from(accountSet);
       // We don't early-return on empty FIFO here: the file may carry rows
       // we need to surface as "missing_in_system" for ops to investigate.
 
@@ -315,60 +313,12 @@ export const getAllSecuritiesISINs = async (req, res) => {
          ------------------------------------------------------
          Read the stored Holdings ledger — the same source of truth as the
          rebuild / upload worker — as of the record date, instead of replaying
-         FIFO from the source tables. The last row in FIFO order carries the
-         running HOLDING (holding as of that date), and corporate actions
-         already applied (incl. demerger/merger) are reflected automatically.
-
-         ONE paginated query against Holdings for the whole ISIN — no
-         per-account fan-out. The previous implementation re-queried Holdings
-         once per eligible account, which was fast locally but blew past
-         Catalyst's ~30s request limit on deployed environments (408 Request
-         Timeout) once an ISIN had enough holders — the same issue Bonus/
-         Split hit before switching to this bulk-query shape. The in-memory
-         holdingsEffectiveDate() refine below reproduces the same buy-vs-sell
-         cutoff that fetchHoldingsRowsPaged applied per-account, so a
-         not-yet-settled buy (e.g. OPI) still can't leak into the count.
+         FIFO from the source tables. Corporate actions already applied (incl.
+         demerger/merger) are reflected automatically.
          ====================================================== */
-      const HOLDINGS_BATCH = 250;
-      const nextDayObj = new Date(recordDateISO);
-      nextDayObj.setDate(nextDayObj.getDate() + 1);
-      const recordDateCutoff = nextDayObj.toISOString().split("T")[0];
-
-      const latestByAccount = new Map();
-      let hOffset = 0;
-
-      while (true) {
-        const batch = await zcql.executeZCQLQuery(`
-          SELECT WS_Account_code, HOLDING, SETTLEMENT_DATE, TRANSACTION_DATE, TYPE, CREATEDTIME
-          FROM Holdings
-          WHERE ISIN = '${escHoldingsSql(isin)}'
-          ${holdingsDateFilterClause(recordDateISO)}
-          ORDER BY ${HOLDINGS_FIFO_ORDER_BY_SQL}
-          LIMIT ${HOLDINGS_BATCH} OFFSET ${hOffset}
-        `);
-
-        if (!batch || batch.length === 0) break;
-
-        for (const row of batch) {
-          const h = row.Holdings || row;
-          const acc = String(h.WS_Account_code || "").trim();
-          if (!acc || !accountSet.has(acc)) continue;
-
-          const eff = holdingsEffectiveDate(h);
-          if (eff && eff >= recordDateCutoff) continue;
-
-          latestByAccount.set(acc, h); // last row in FIFO order wins
-        }
-
-        if (batch.length < HOLDINGS_BATCH) break;
-        hOffset += HOLDINGS_BATCH;
-      }
-
       const preview = [];
       const fifoByAccount = new Map();
 
-      for (const [accountCode, h] of latestByAccount) {
-        const holdingAsOnRecordDate = Number(h.HOLDING) || 0;
       /* One bulk keyset read for the whole ISIN instead of a query per account.
          The per-account loop was one sequential round trip per holder, which
          overruns the deployed AppSail request budget for a widely-held ISIN
@@ -384,8 +334,14 @@ export const getAllSecuritiesISINs = async (req, res) => {
         const holdingRows = rowsByAccount.get(accountCode) || [];
         if (!holdingRows.length) continue;
 
+        /* Re-derive rather than reading the last row's stored HOLDING. That
+           running balance was frozen in settlement order at rebuild time, so it
+           can already include a buy the trade-date filter above just dropped —
+           the kept row is right, but the total written on it is not. Same
+           re-derivation Split and Bonus previews apply; a no-op once the
+           Holdings table has been rebuilt on the trade-date basis. */
         const holdingAsOnRecordDate =
-          Number(holdingRows[holdingRows.length - 1].HOLDING) || 0;
+          recomputeHoldingsSnapshot(holdingRows).HOLDING;
         if (holdingAsOnRecordDate <= 1e-6) continue;
 
         const dividendAmount = round2(holdingAsOnRecordDate * rateNum);
