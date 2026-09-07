@@ -49,7 +49,7 @@ export async function computeSplitPreviewRows(zcql, { isin, r1, r2, issueDateISO
     const batch = await zcql.executeZCQLQuery(`
       SELECT WS_Account_code, HOLDING, WAP, HOLDING_VALUE,
              QUANTITY, PRICE, TOTAL_AMOUNT,
-             TYPE, SETTLEMENT_DATE, TRANSACTION_DATE
+             TYPE, SETTLEMENT_DATE, TRANSACTION_DATE, CA_DATE
       FROM Holdings
       WHERE ISIN = '${isin}'
         AND (SETTLEMENT_DATE < '${cutoff}' OR TRANSACTION_DATE < '${cutoff}')

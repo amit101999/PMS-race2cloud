@@ -19,9 +19,18 @@ const HOLDINGS_BATCH  = 250;
 const bonusEffectiveDate = (h) => {
   const setD = String(h.SETTLEMENT_DATE || "").slice(0, 10);
   const txD  = String(h.TRANSACTION_DATE || "").slice(0, 10);
-  return String(h.TYPE || "").trim().toUpperCase() === "OPI"
-    ? setD || txD
-    : txD || setD;
+  const typ  = String(h.TYPE || "").trim().toUpperCase();
+  // MERGER / DEMERGER rows keep each lot's ORIGINAL trade date in
+  // TRANSACTION_DATE and carry the event's record date on CA_DATE. Date them by
+  // the event, or one corporate action scatters across the timeline at dates
+  // years before it happened. Mirrors `holdingsEffectiveDate` in
+  // util/analytics/holdingsFromTable.js — `recomputeHoldingsSnapshot` below
+  // groups on the same rule, so the two must agree.
+  if (typ === "MERGER" || typ === "DEMERGER") {
+    const caD = String(h.CA_DATE || "").slice(0, 10);
+    if (caD) return caD;
+  }
+  return typ === "OPI" ? setD || txD : txD || setD;
 };
 
 /**
@@ -155,7 +164,7 @@ export const previewStockBonus = async (req, res) => {
       const batch = await zcql.executeZCQLQuery(`
         SELECT WS_Account_code, HOLDING, WAP, HOLDING_VALUE,
                QUANTITY, PRICE, TOTAL_AMOUNT,
-               TYPE, SETTLEMENT_DATE, TRANSACTION_DATE
+               TYPE, SETTLEMENT_DATE, TRANSACTION_DATE, CA_DATE
         FROM Holdings
         WHERE ISIN = '${isin}'
           AND (SETTLEMENT_DATE < '${cutoff}' OR TRANSACTION_DATE < '${cutoff}')
