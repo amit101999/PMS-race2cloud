@@ -193,7 +193,7 @@ export const calculateHoldingsByIsin = async ({
     const batch = await zcql.executeZCQLQuery(`
       SELECT ROWID, CREATEDTIME, WS_Account_code, HOLDING, WAP, HOLDING_VALUE,
              QUANTITY, PRICE, TOTAL_AMOUNT,
-             TYPE, TRANSACTION_DATE, SETTLEMENT_DATE
+             TYPE, TRANSACTION_DATE, SETTLEMENT_DATE, CA_DATE
       FROM Holdings
       WHERE ISIN = '${escHoldingsSql(isinTrim)}'
       ${clause}

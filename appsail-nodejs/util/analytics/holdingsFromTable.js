@@ -44,6 +44,12 @@ export function holdingsEffectiveDate(row) {
 }
    ============================================================================================= */
 
+/** MERGER / DEMERGER rows are dated by the corporate action, not the lot. */
+export function isHoldingsReplaceType(type) {
+  const t = String(type || "").trim().toUpperCase();
+  return t === "MERGER" || t === "DEMERGER";
+}
+
 /**
  * The date a Holdings row should be filtered on for an as-on-date view.
  * Mirrors the rebuild job's `getEffectiveDate` (RebuildHoldingtable): every type
@@ -51,12 +57,29 @@ export function holdingsEffectiveDate(row) {
  * positions where TRANDATE is the original acquisition date and SETDATE is the
  * PMS onboarding date — genuinely different events, so OPI stays settlement-dated.
  *
+ * MERGER / DEMERGER are the second exception. The rebuild emits one row per
+ * surviving lot and deliberately preserves each lot's ORIGINAL trade date in
+ * TRANSACTION_DATE, stamping the event's record date on CA_DATE instead — see
+ * the `date: normalizeDate(recDate || td)` comments in
+ * RebuildHoldingtable/holdingsRebuildFromSources.js. Dating those rows by
+ * TRANSACTION_DATE scatters one event across the timeline at dates years before
+ * it happened, so the position appears restated in the past. CA_DATE is the date
+ * the event actually took effect; fall back to the lot date only for legacy rows
+ * written before CA_DATE was stamped (the rebuild's own `recDate || td`).
+ *
  * `isHoldingsBuyType` is deliberately NOT used here: it still classifies buy/sell
  * direction for quantity maths and must keep matching BY-/SQB/OPI.
+ *
+ * NOTE: callers must SELECT CA_DATE for this to apply — without the column the
+ * fallback silently restores the old lot-date behaviour.
  */
 export function holdingsEffectiveDate(row) {
   const setD = String(row.SETTLEMENT_DATE || "").slice(0, 10);
   const txD = String(row.TRANSACTION_DATE || "").slice(0, 10);
+  if (isHoldingsReplaceType(row.TYPE)) {
+    const caD = String(row.CA_DATE || "").slice(0, 10);
+    if (caD) return caD;
+  }
   return isHoldingsOpiType(row.TYPE) ? setD || txD : txD || setD;
 }
 
@@ -340,13 +363,19 @@ const QTY_EPS = 1e-6;
  * the database. Once `RebuildHoldingtable` has been re-run, the stored column and
  * this function agree and the caller can go back to reading `HOLDING` directly.
  *
- * ACCURACY: exact for buys and sells (the migration's target). BONUS / MERGER /
- * DEMERGER quantities are deltas and accumulate correctly too. SPLIT restates the
- * position rather than adding to it, so a split re-anchors the running lots on that
- * row's stored snapshot and accumulation resumes from there — accurate after the
- * split, and inherently only as good as the stored value at the split itself.
+ * ACCURACY: exact for buys and sells (the migration's target). BONUS quantities
+ * are deltas and accumulate correctly too. SPLIT restates the position rather
+ * than adding to it, so a split re-anchors the running lots on that row's stored
+ * snapshot and accumulation resumes from there — accurate after the split, and
+ * inherently only as good as the stored value at the split itself. MERGER and
+ * DEMERGER likewise restate: the first row of an event clears the prior lots and
+ * the remaining rows of that event accumulate onto the empty queue, matching the
+ * rebuild job. That restatement is exact — the per-lot rows carry the full
+ * post-event position, so nothing is inherited from a stored snapshot.
  *
- * `rows` must already be effective-date filtered by the caller.
+ * `rows` must already be effective-date filtered by the caller, and must include
+ * CA_DATE so merger / demerger rows date and group by their event rather than by
+ * each lot's original trade date.
  */
 export function recomputeHoldingsSnapshot(rows) {
   const ordered = rows
@@ -363,6 +392,9 @@ export function recomputeHoldingsSnapshot(rows) {
     .map((x) => x.r);
 
   let lots = []; // FIFO queue of { qty, price }
+  // First row of a MERGER / DEMERGER event closes the prior position; the rest
+  // of that same event accumulate onto it. See the replace branch below.
+  let lastReplaceEventKey = null;
 
   for (const h of ordered) {
     const typ = String(h.TYPE || "").trim().toUpperCase();
@@ -390,7 +422,50 @@ export function recomputeHoldingsSnapshot(rows) {
       continue;
     }
 
-    // Everything else adds: BY-/SQB/OPI, BONUS, MERGER, DEMERGER.
+    /*
+     * MERGER / DEMERGER RESTATE the position — they do not add to it.
+     *
+     * The rebuild emits one row per surviving lot and, on the FIRST row of an
+     * event, closes every prior lot and resets the running holding to 0 before
+     * accumulating the new lots (`buyQueue.length = 0; holdings = 0;` in the
+     * DEMERGER / MERGER branches of holdingsRebuildFromSources.js). The same
+     * rule is in DemergerController's `computeSurvivingLotsFromHoldingRows`.
+     *
+     * Treating these rows as additive double-counted the position: a demerger's
+     * old-ISIN side carries the UNCHANGED quantity (only its cost is reduced),
+     * so adding it on top of the lots it was meant to replace roughly doubled
+     * the holding for every demerged security.
+     *
+     * Rows of one event are grouped by effective date — which is CA_DATE for
+     * these types (see `holdingsEffectiveDate`), so every lot of one event
+     * shares a key and lands together in the sort above.
+     *
+     * LEGACY ROWS (no CA_DATE): the key falls back to each lot's trade date, so
+     * a multi-lot event splits into one "event" per lot and only the last lot
+     * survives — an undercount. That is deliberate: the rebuild keys on the same
+     * `recordDate || trandate` fallback (holdingsRebuildFromSources.js, the
+     * `demergerDate` / `mergerDate` event keys) and undercounts identically, so
+     * re-derived and stored HOLDING still agree, which is the point of this
+     * function. Do NOT "fix" only this side — that reintroduces the mismatch.
+     * The real fix is backfilling Record_Date on legacy Demerger_Record /
+     * Merger rows and re-running the rebuild so CA_DATE is populated.
+     */
+    if (isHoldingsReplaceType(typ)) {
+      const eventKey = `${typ}|${holdingsEffectiveDate(h)}`;
+      if (eventKey !== lastReplaceEventKey) {
+        lots = [];
+        lastReplaceEventKey = eventKey;
+      }
+      if (qty > QTY_EPS) {
+        let price = Number(h.PRICE) || 0;
+        const total = Number(h.TOTAL_AMOUNT) || 0;
+        if (!price && total) price = total / qty;
+        lots.push({ qty, price });
+      }
+      continue;
+    }
+
+    // Everything else adds: BY-/SQB/OPI, BONUS.
     if (qty > QTY_EPS) {
       let price = Number(h.PRICE) || 0;
       const total = Number(h.TOTAL_AMOUNT) || 0;
