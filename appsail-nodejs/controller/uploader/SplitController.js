@@ -1,4 +1,7 @@
 import { buildVirtualToActualMap } from "../../util/mapVirtualToActualCodes.js";
+// Shared FIFO re-derivation only — the effective-date rule below stays local so
+// this module's preview cannot be silently changed by another module's copy.
+import { recomputeHoldingsSnapshot } from "../../util/analytics/holdingsFromTable.js";
 
 const HOLDINGS_BATCH = 250;
 
@@ -18,6 +21,33 @@ const splitEffectiveDate = (h) => {
   return String(h.TYPE || "").trim().toUpperCase() === "OPI"
     ? setD || txD
     : txD || setD;
+};
+
+/**
+ * Normalise an incoming date to `YYYY-MM-DD` without ever crossing a timezone
+ * boundary.
+ *
+ * The old `new Date(v).setHours(0,0,0,0)` + `toISOString()` moved the date back
+ * a day in any zone ahead of UTC (IST included): local midnight on the 28th is
+ * 18:30Z on the 27th, so the chosen date silently became the previous one. It
+ * only looked correct because the deployed runtime is UTC, where setHours(0…) is
+ * a no-op — which is why this reproduced locally but not on Catalyst.
+ */
+const toISODateOnly = (v) => {
+  const s = String(v ?? "").trim();
+  const m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (m) return `${m[1]}-${m[2]}-${m[3]}`; // ISO date or datetime — take the date part
+  const d = new Date(s);
+  if (Number.isNaN(d.getTime())) return "";
+  const p = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+};
+
+/** Exclusive next-day cutoff, stepped in UTC so the local zone cannot shift it. */
+const nextISODate = (isoDate) => {
+  const d = new Date(`${isoDate}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + 1);
+  return d.toISOString().split("T")[0];
 };
 
 export const getAllSecuritiesISINs = async (req, res) => {
@@ -98,14 +128,13 @@ export const previewStockSplit = async (req, res) => {
       });
     }
 
-    const issueDateObj = new Date(issueDate);
-    issueDateObj.setHours(0, 0, 0, 0);
-    const issueDateISO = issueDateObj.toISOString().split("T")[0];
+    const issueDateISO = toISODateOnly(issueDate);
+    if (!issueDateISO) {
+      return res.status(400).json({ success: false, message: "Invalid date" });
+    }
 
-    // cutoff = day AFTER issueDate for the date filter
-    const cutoffObj = new Date(issueDateISO);
-    cutoffObj.setDate(cutoffObj.getDate() + 1);
-    const cutoff = cutoffObj.toISOString().split("T")[0];
+    // cutoff = day AFTER issueDate for the date filter (exclusive upper bound)
+    const cutoff = nextISODate(issueDateISO);
 
     const zcql = req.catalystApp.zcql();
 
@@ -116,11 +145,13 @@ export const previewStockSplit = async (req, res) => {
        updating per account — last row per account = state on issueDate.
        ====================================================== */
     const latestByAccount = new Map(); // accountCode → last Holdings row
+    const rowsByAccount = new Map(); // accountCode → every effective row, for re-derivation
     let offset = 0;
 
     while (true) {
       const batch = await zcql.executeZCQLQuery(`
         SELECT WS_Account_code, HOLDING, WAP, HOLDING_VALUE,
+               QUANTITY, PRICE, TOTAL_AMOUNT,
                TYPE, SETTLEMENT_DATE, TRANSACTION_DATE
         FROM Holdings
         WHERE ISIN = '${isin}'
@@ -142,10 +173,30 @@ export const previewStockSplit = async (req, res) => {
         const eff = splitEffectiveDate(h);
         if (eff && eff >= cutoff) continue;
         latestByAccount.set(acc, h); // last row per account wins
+        if (!rowsByAccount.has(acc)) rowsByAccount.set(acc, []);
+        rowsByAccount.get(acc).push(h);
       }
 
       if (batch.length < HOLDINGS_BATCH) break;
       offset += HOLDINGS_BATCH;
+    }
+
+    if (latestByAccount.size === 0) {
+      return res.json({ success: true, data: [] });
+    }
+
+    /* The stored HOLDING is a running balance frozen in settlement order at
+       rebuild time, so it can contradict the rows the trade-date rule selected
+       above — it may include a buy that is not yet effective on the issue date.
+       Re-derive the position from the rows themselves. Once the Holdings table
+       has been rebuilt on the new basis this becomes a no-op. */
+    for (const [acc, accRows] of rowsByAccount) {
+      const snap = recomputeHoldingsSnapshot(accRows);
+      if (snap.HOLDING <= 0) {
+        latestByAccount.delete(acc); // fully sold as at the issue date
+        continue;
+      }
+      latestByAccount.set(acc, { ...latestByAccount.get(acc), ...snap });
     }
 
     if (latestByAccount.size === 0) {

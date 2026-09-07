@@ -1,4 +1,4 @@
-import { fetchHoldingsRowsForAccountIsin } from "../../util/analytics/holdingsFromTable.js";
+import { fetchHoldingsRowsByAccountForIsin } from "../../util/analytics/holdingsFromTable.js";
 import { parseCustodianCsv } from "../../util/custodian/parseCustodianCsv.js";
 import { buildVirtualToActualMap } from "../../util/mapVirtualToActualCodes.js";
 
@@ -317,13 +317,19 @@ export const getAllSecuritiesISINs = async (req, res) => {
       const preview = [];
       const fifoByAccount = new Map();
 
+      /* One bulk keyset read for the whole ISIN instead of a query per account.
+         The per-account loop was one sequential round trip per holder, which
+         overruns the deployed AppSail request budget for a widely-held ISIN
+         (locally there is no such limit, so it only fails once deployed).
+         Same fix as the Split/Bonus exports and DemergerController. */
+      const rowsByAccount = await fetchHoldingsRowsByAccountForIsin(
+        zcql,
+        isin,
+        recordDateISO,
+      );
+
       for (const accountCode of eligibleAccounts) {
-        const holdingRows = await fetchHoldingsRowsForAccountIsin(
-          zcql,
-          accountCode,
-          isin,
-          recordDateISO,
-        );
+        const holdingRows = rowsByAccount.get(accountCode) || [];
         if (!holdingRows.length) continue;
 
         const holdingAsOnRecordDate =

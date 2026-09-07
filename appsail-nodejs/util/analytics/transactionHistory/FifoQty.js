@@ -29,11 +29,26 @@ const normalizeDate = (rawDate) => {
   return `${fullYear}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
 };
 
-/** Buy → settlement date (SETDATE); Sell → transaction date (TRANDATE). */
+/* ===== TRADE_DATE_MIGRATION: OLD (settlement basis for ALL buys) — retained, do not delete =====
 const getTxnEventDate = (t) => {
   const setDate = t.SETDATE || t.setdate;
   const tradeDate = t.TRANDATE || t.trandate;
   return isBuy(t.Tran_Type || t.tranType) ? setDate || tradeDate : tradeDate || setDate;
+};
+   ============================================================================================= */
+
+/** OPI ("Security in") is an inward transfer — not owned until it settles. */
+const isOpi = (type) => /^OPI/.test(String(type || "").toUpperCase());
+
+/**
+ * OPI → settlement date (SETDATE); everything else → trade date (TRANDATE).
+ * `isBuy` above is left alone on purpose — it drives quantity direction below,
+ * not dating.
+ */
+const getTxnEventDate = (t) => {
+  const setDate = t.SETDATE || t.setdate;
+  const tradeDate = t.TRANDATE || t.trandate;
+  return isOpi(t.Tran_Type || t.tranType) ? setDate || tradeDate : tradeDate || setDate;
 };
 
 export const runFifoEngine = (

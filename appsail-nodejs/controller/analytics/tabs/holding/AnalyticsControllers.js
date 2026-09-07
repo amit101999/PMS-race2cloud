@@ -6,7 +6,10 @@ import {
   holdingsDateFilterClause,
   holdingsEffectiveDate,
   rollupLastSnapshotByIsin,
+  rollupRecomputedSnapshotByIsin,
+  recomputeHoldingsSnapshot,
 } from "../../../../util/analytics/holdingsFromTable.js";
+import { fetchLastPricesByIsin } from "../../../../util/analytics/bhavPrices.js";
 import { buildVirtualToActualMap } from "../../../../util/mapVirtualToActualCodes.js";
 
 export const getAllAccountCodes = async (req, res) => {
@@ -113,7 +116,15 @@ export const calculateHoldingsSummary = async ({
   const zcql = catalystApp.zcql();
 
   const rows = await fetchHoldingsRowsPaged(zcql, accountCode, asOnDate, "");
-  const snapshots = rollupLastSnapshotByIsin(rows);
+
+  // As-on-date views must re-derive their totals: the stored HOLDING column is a
+  // running balance frozen in settlement order, so it can contradict the rows the
+  // trade-date rule actually selected. With no as-on-date every row is included and
+  // the stored final balance is already correct, so keep the cheaper path.
+  const useRecomputed = /^\d{4}-\d{2}-\d{2}$/.test(String(asOnDate ?? "").trim());
+  const snapshots = useRecomputed
+    ? rollupRecomputedSnapshotByIsin(rows)
+    : rollupLastSnapshotByIsin(rows);
   const isinList = snapshots.map((s) => s.isin);
 
   const metaByIsin = await fetchSecurityListByIsins(zcql, isinList);
@@ -121,27 +132,8 @@ export const calculateHoldingsSummary = async ({
   const todayStr = new Date().toISOString().split("T")[0];
   const priceDate = asOnDate && asOnDate < todayStr ? asOnDate : todayStr;
 
-  const priceMap = {};
-  for (const isin of isinList) {
-    try {
-      const priceRows = await zcql.executeZCQLQuery(`
-        SELECT ISIN, ClsPric, TradDt
-        FROM Bhav_Copy
-        WHERE ISIN = '${escHoldingsSql(isin)}'
-          AND TradDt <= '${escHoldingsSql(priceDate)}'
-        ORDER BY TradDt DESC
-        LIMIT 1
-      `);
-
-      if (priceRows?.length) {
-        const row = priceRows[0].Bhav_Copy || priceRows[0];
-        priceMap[isin] = row.ClsPric || 0;
-      } else priceMap[isin] = 0;
-    } catch (err) {
-      console.error(`Error fetching price for ISIN ${isin}:`, err);
-      priceMap[isin] = 0;
-    }
-  }
+  // One batched read instead of a query per ISIN — see `fetchLastPricesByIsin`.
+  const priceMap = await fetchLastPricesByIsin(zcql, isinList, priceDate);
 
   const result = [];
   for (const { isin, lastRow } of snapshots) {
@@ -192,11 +184,15 @@ export const calculateHoldingsByIsin = async ({
   }
 
   const latestByAccount = new Map();
+  // Kept only for the as-on-date path, where the stored running balance is not
+  // trustworthy and the totals have to be re-derived from the rows themselves.
+  const rowsByAccount = new Map();
   let offset = 0;
 
   while (true) {
     const batch = await zcql.executeZCQLQuery(`
       SELECT ROWID, CREATEDTIME, WS_Account_code, HOLDING, WAP, HOLDING_VALUE,
+             QUANTITY, PRICE, TOTAL_AMOUNT,
              TYPE, TRANSACTION_DATE, SETTLEMENT_DATE
       FROM Holdings
       WHERE ISIN = '${escHoldingsSql(isinTrim)}'
@@ -220,6 +216,9 @@ export const calculateHoldingsByIsin = async ({
       if (cutoff) {
         const d = holdingsEffectiveDate(row);
         if (d && d >= cutoff) continue;
+
+        if (!rowsByAccount.has(accountCode)) rowsByAccount.set(accountCode, []);
+        rowsByAccount.get(accountCode).push(row);
       }
 
       latestByAccount.set(accountCode, row);
@@ -230,6 +229,23 @@ export const calculateHoldingsByIsin = async ({
   }
 
   if (latestByAccount.size === 0) return [];
+
+  // Replace the frozen settlement-order totals with ones re-derived in
+  // effective-date order. See `recomputeHoldingsSnapshot` for the reasoning.
+  if (cutoff) {
+    for (const [accountCode, accRows] of rowsByAccount) {
+      const snap = recomputeHoldingsSnapshot(accRows);
+      if (snap.HOLDING <= 0) {
+        latestByAccount.delete(accountCode); // fully closed as at the cutoff
+        continue;
+      }
+      latestByAccount.set(accountCode, {
+        ...latestByAccount.get(accountCode),
+        ...snap,
+      });
+    }
+    if (latestByAccount.size === 0) return [];
+  }
 
   const metaByIsin = await fetchSecurityListByIsins(zcql, [isinTrim]);
   const meta = metaByIsin[isinTrim] || {};

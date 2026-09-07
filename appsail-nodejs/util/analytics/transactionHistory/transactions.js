@@ -1,9 +1,23 @@
 const isBuyType = (type) => /^BY-|SQB|OPI/i.test(String(type || ""));
 
+/* ===== TRADE_DATE_MIGRATION: OLD (settlement basis for ALL buys) — retained, do not delete =====
 const getEffectiveDate = (r) => {
   const setDate = r.SETDATE || r.setdate;
   const tradeDate = r.TRANDATE || r.trandate;
   return isBuyType(r.Tran_Type || r.tranType)
+    ? setDate || tradeDate
+    : tradeDate || setDate;
+};
+   ============================================================================================= */
+
+/** OPI ("Security in") is an inward transfer — not owned until it settles. */
+const isOpiType = (type) => /^OPI/i.test(String(type || "").trim());
+
+/** OPI → SETDATE; everything else → TRANDATE. Matches RebuildHoldingtable. */
+const getEffectiveDate = (r) => {
+  const setDate = r.SETDATE || r.setdate;
+  const tradeDate = r.TRANDATE || r.trandate;
+  return isOpiType(r.Tran_Type || r.tranType)
     ? setDate || tradeDate
     : tradeDate || setDate;
 };
@@ -44,7 +58,7 @@ export const fetchStockTransactions = async ({
         SELECT SETDATE, TRANDATE, Tran_Type, Security_code, QTY, NETRATE, Net_Amount, ISIN, ROWID
         FROM Transaction
         ${where}
-        ORDER BY SETDATE ASC, ROWID ASC
+        ORDER BY TRANDATE ASC, ROWID ASC
         LIMIT ${limit} OFFSET ${offset}
       `;
 

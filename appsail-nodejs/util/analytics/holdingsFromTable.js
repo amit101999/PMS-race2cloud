@@ -31,15 +31,33 @@ export function isHoldingsSellType(type) {
   return /^SL[+-]|SQS|OPO|NF-/i.test(String(type || "").trim());
 }
 
-/**
- * The date a Holdings row should be filtered on for an as-on-date view.
- * Mirrors the rebuild job's `getEffectiveDate`: buys (BY-/SQB/OPI) settle on
- * SETTLEMENT_DATE, everything else takes effect on TRANSACTION_DATE.
- */
+/** Only OPI is settlement-dated — see `holdingsEffectiveDate` for why. */
+export function isHoldingsOpiType(type) {
+  return /^OPI/i.test(String(type || "").trim());
+}
+
+/* ===== TRADE_DATE_MIGRATION: OLD (settlement basis for ALL buys) — retained, do not delete =====
 export function holdingsEffectiveDate(row) {
   const setD = String(row.SETTLEMENT_DATE || "").slice(0, 10);
   const txD = String(row.TRANSACTION_DATE || "").slice(0, 10);
   return isHoldingsBuyType(row.TYPE) ? setD || txD : txD || setD;
+}
+   ============================================================================================= */
+
+/**
+ * The date a Holdings row should be filtered on for an as-on-date view.
+ * Mirrors the rebuild job's `getEffectiveDate` (RebuildHoldingtable): every type
+ * takes effect on TRANSACTION_DATE, except OPI. OPI rows are inception / opening
+ * positions where TRANDATE is the original acquisition date and SETDATE is the
+ * PMS onboarding date — genuinely different events, so OPI stays settlement-dated.
+ *
+ * `isHoldingsBuyType` is deliberately NOT used here: it still classifies buy/sell
+ * direction for quantity maths and must keep matching BY-/SQB/OPI.
+ */
+export function holdingsEffectiveDate(row) {
+  const setD = String(row.SETTLEMENT_DATE || "").slice(0, 10);
+  const txD = String(row.TRANSACTION_DATE || "").slice(0, 10);
+  return isHoldingsOpiType(row.TYPE) ? setD || txD : txD || setD;
 }
 
 /**
@@ -100,6 +118,109 @@ export async function fetchHoldingsRowsPaged(zcql, accountCode, asOnDate, extraS
   }
 
   return rows;
+}
+
+/**
+ * BULK: every Holdings row for ONE ISIN across ALL accounts, grouped by account.
+ *
+ * Same result as calling `fetchHoldingsRowsForAccountIsin` once per account, but
+ * in a handful of queries instead of one per account. The per-account loop
+ * overran the deployed AppSail request budget for widely-held ISINs (hundreds of
+ * sequential round trips) while passing locally, where no such limit applies.
+ * `DemergerController.fetchHoldingRowsByAccountForIsin` already solved this the
+ * same way — keep the two in sync.
+ *
+ * Keyset (`ROWID > cursor`) rather than LIMIT/OFFSET: with OFFSET each page
+ * re-scans and re-sorts the whole ISIN match (≈ O(n²)); keyset walks the ROWID
+ * primary-key index forward exactly once (~O(n)).
+ *
+ * Rows arrive in global ROWID order, so each account's slice is re-sorted in
+ * memory into `CREATEDTIME ASC, ROWID ASC` — the FIFO materialisation order the
+ * running `HOLDING`/`WAP` columns assume.
+ *
+ * @returns {Promise<Map<string, object[]>>} account code → its rows, FIFO order.
+ */
+export async function fetchHoldingsRowsByAccountForIsin(zcql, isin, asOnDate) {
+  const byAccount = new Map();
+  const isinTrim = String(isin ?? "").trim();
+  if (!isinTrim) return byAccount;
+
+  const clause = holdingsDateFilterClause(asOnDate);
+  let lastRowId = "0";
+
+  while (true) {
+    const batch = await zcql.executeZCQLQuery(`
+      SELECT ROWID, WS_Account_code, TRANSACTION_DATE, SETTLEMENT_DATE, TYPE, ISIN,
+             QUANTITY, PRICE, TOTAL_AMOUNT, HOLDING, WAP, HOLDING_VALUE, P_L, STATUS,
+             CA_DATE, CREATEDTIME
+      FROM Holdings
+      WHERE ISIN = '${escHoldingsSql(isinTrim)}'
+        AND ROWID > ${lastRowId}
+      ${clause}
+      ORDER BY ROWID ASC
+      LIMIT ${BATCH}
+    `);
+    if (!batch || batch.length === 0) break;
+
+    let maxRowId = lastRowId;
+    for (const r of batch) {
+      const h = r.Holdings || r;
+      const rowId = String(h.ROWID ?? "");
+      // Track the cursor across ALL rows, including ones the refine drops —
+      // filtering first could stall the cursor and loop forever.
+      if (rowId && (rowId.length > maxRowId.length || (rowId.length === maxRowId.length && rowId > maxRowId))) {
+        maxRowId = rowId;
+      }
+      const code = String(h.WS_Account_code ?? "").trim();
+      if (!code) continue;
+      let list = byAccount.get(code);
+      if (!list) {
+        list = [];
+        byAccount.set(code, list);
+      }
+      list.push(h);
+    }
+
+    // Guard against a non-advancing cursor (non-numeric / duplicate ROWIDs).
+    if (maxRowId === lastRowId) break;
+    lastRowId = maxRowId;
+    if (batch.length < BATCH) break;
+  }
+
+  // Refine the loose SQL date clause exactly as `fetchHoldingsRowsPaged` does,
+  // then restore FIFO order within each account.
+  const trimmed = String(asOnDate ?? "").trim();
+  const cutoff = /^\d{4}-\d{2}-\d{2}$/.test(trimmed)
+    ? (() => {
+        const nextDay = new Date(trimmed);
+        nextDay.setDate(nextDay.getDate() + 1);
+        return nextDay.toISOString().split("T")[0];
+      })()
+    : "";
+
+  for (const [code, rows] of byAccount) {
+    const kept = cutoff
+      ? rows.filter((r) => {
+          const d = holdingsEffectiveDate(r);
+          return !d || d < cutoff;
+        })
+      : rows;
+
+    kept.sort((a, b) => {
+      const ta = String(a.CREATEDTIME ?? "");
+      const tb = String(b.CREATEDTIME ?? "");
+      if (ta !== tb) return ta < tb ? -1 : 1;
+      const ra = String(a.ROWID ?? "0");
+      const rb = String(b.ROWID ?? "0");
+      if (ra.length !== rb.length) return ra.length - rb.length;
+      return ra < rb ? -1 : ra > rb ? 1 : 0;
+    });
+
+    if (kept.length) byAccount.set(code, kept);
+    else byAccount.delete(code);
+  }
+
+  return byAccount;
 }
 
 /** One ISIN only — fifo materialisation order (same ORDER BY as `fetchHoldingsRowsPaged`). */
@@ -199,6 +320,115 @@ export function rollupLastSnapshotByIsin(sortedHoldingsRows) {
       isin,
       lastRow: row,
     });
+  }
+  return out;
+}
+
+const QTY_EPS = 1e-6;
+
+/**
+ * Re-derive HOLDING / WAP / HOLDING_VALUE from the rows themselves.
+ *
+ * WHY THIS EXISTS
+ * The `HOLDING` column is a running balance frozen at rebuild time, accumulated
+ * in *insert* order — which is settlement order for any table built before the
+ * trade-date migration. Simply filtering rows by the new effective date picks a
+ * different "last row", but that row's stored total was still accumulated the old
+ * way, so it can include a trade that the new rule should have excluded.
+ *
+ * Re-walking the rows in effective-date order fixes the numbers without touching
+ * the database. Once `RebuildHoldingtable` has been re-run, the stored column and
+ * this function agree and the caller can go back to reading `HOLDING` directly.
+ *
+ * ACCURACY: exact for buys and sells (the migration's target). BONUS / MERGER /
+ * DEMERGER quantities are deltas and accumulate correctly too. SPLIT restates the
+ * position rather than adding to it, so a split re-anchors the running lots on that
+ * row's stored snapshot and accumulation resumes from there — accurate after the
+ * split, and inherently only as good as the stored value at the split itself.
+ *
+ * `rows` must already be effective-date filtered by the caller.
+ */
+export function recomputeHoldingsSnapshot(rows) {
+  const ordered = rows
+    .map((r, i) => ({ r, i }))
+    .sort((a, b) => {
+      const da = holdingsEffectiveDate(a.r) || "";
+      const db = holdingsEffectiveDate(b.r) || "";
+      if (da !== db) return da < db ? -1 : 1;
+      const pa = holdingsTypePriority(a.r.TYPE);
+      const pb = holdingsTypePriority(b.r.TYPE);
+      if (pa !== pb) return pa - pb;
+      return a.i - b.i; // stable: keep original insert order within a day
+    })
+    .map((x) => x.r);
+
+  let lots = []; // FIFO queue of { qty, price }
+
+  for (const h of ordered) {
+    const typ = String(h.TYPE || "").trim().toUpperCase();
+    const qty = Math.abs(Number(h.QUANTITY) || 0);
+
+    if (typ === "SPLIT") {
+      // Non-additive: QUANTITY is the post-split total, not a delta.
+      const anchorQty = Number(h.HOLDING) || 0;
+      const anchorWap = Number(h.WAP) || 0;
+      lots = anchorQty > QTY_EPS ? [{ qty: anchorQty, price: anchorWap }] : [];
+      continue;
+    }
+
+    if (typ === "DIV" || typ === "DIV+") continue; // cash only, no quantity effect
+
+    if (isHoldingsSellType(typ)) {
+      let remaining = qty;
+      while (remaining > QTY_EPS && lots.length) {
+        const lot = lots[0];
+        const used = Math.min(lot.qty, remaining);
+        lot.qty -= used;
+        remaining -= used;
+        if (lot.qty <= QTY_EPS) lots.shift();
+      }
+      continue;
+    }
+
+    // Everything else adds: BY-/SQB/OPI, BONUS, MERGER, DEMERGER.
+    if (qty > QTY_EPS) {
+      let price = Number(h.PRICE) || 0;
+      const total = Number(h.TOTAL_AMOUNT) || 0;
+      if (!price && total) price = total / qty;
+      lots.push({ qty, price });
+    }
+  }
+
+  const holding = lots.reduce((s, l) => s + l.qty, 0);
+  const cost = lots.reduce((s, l) => s + l.qty * l.price, 0);
+  const wap = holding > QTY_EPS ? cost / holding : 0;
+
+  return {
+    HOLDING: holding <= QTY_EPS ? 0 : holding,
+    WAP: Math.round(wap * 100) / 100,
+    HOLDING_VALUE: Math.round(cost * 100) / 100,
+  };
+}
+
+/**
+ * Same contract as `rollupLastSnapshotByIsin`, but `lastRow` carries re-derived
+ * HOLDING / WAP / HOLDING_VALUE instead of the frozen settlement-order values.
+ * Callers need no other change.
+ */
+export function rollupRecomputedSnapshotByIsin(sortedHoldingsRows) {
+  const rowsByIsin = new Map();
+  for (const h of sortedHoldingsRows) {
+    const isin = String(h.ISIN || "").trim();
+    if (!isin) continue;
+    if (!rowsByIsin.has(isin)) rowsByIsin.set(isin, []);
+    rowsByIsin.get(isin).push(h);
+  }
+
+  const out = [];
+  for (const [isin, rows] of rowsByIsin) {
+    const snap = recomputeHoldingsSnapshot(rows);
+    if (snap.HOLDING <= QTY_EPS) continue; // closed position
+    out.push({ isin, lastRow: { ...rows[rows.length - 1], ...snap } });
   }
   return out;
 }
