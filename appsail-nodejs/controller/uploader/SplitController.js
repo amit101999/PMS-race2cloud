@@ -1,4 +1,3 @@
-import { computeSplitPreviewRows } from "../../util/analytics/splitPreviewCalc.js";
 import { buildVirtualToActualMap } from "../../util/mapVirtualToActualCodes.js";
 // Shared FIFO re-derivation only — the effective-date rule below stays local so
 // this module's preview cannot be silently changed by another module's copy.
@@ -106,6 +105,8 @@ export const getAllSecuritiesISINs = async (req, res) => {
   }
 };
 
+const ZCQL_ROW_LIMIT = 270;
+
 export const previewStockSplit = async (req, res) => {
   try {
     if (!req.catalystApp) {
@@ -132,14 +133,6 @@ export const previewStockSplit = async (req, res) => {
       return res.status(400).json({ success: false, message: "Invalid date" });
     }
 
-    const zcql = req.catalystApp.zcql();
-
-    const preview = await computeSplitPreviewRows(zcql, {
-      isin,
-      r1,
-      r2,
-      issueDateISO,
-    });
     // cutoff = day AFTER issueDate for the date filter (exclusive upper bound)
     const cutoff = nextISODate(issueDateISO);
 
