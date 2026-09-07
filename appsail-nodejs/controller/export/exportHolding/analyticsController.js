@@ -27,6 +27,7 @@ export const calculateHoldingsSummary = async ({
   const priceDate = asOnDate && asOnDate < todayStr ? asOnDate : todayStr;
 
   const priceMap = {};
+
   for (const isin of isinList) {
     try {
       const priceRows = await zcql.executeZCQLQuery(`

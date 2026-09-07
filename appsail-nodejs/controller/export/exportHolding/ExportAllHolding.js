@@ -40,7 +40,6 @@ export const exportAllData = async (req, res) => {
 
     if (existing.length) {
       const oldStatus = existing[0].Jobs.status;
-      const oldRowId = existing[0].Jobs.ROWID;
       const createdTime = existing[0].Jobs.CREATEDTIME;
 
       const STALE_TIMEOUT_MS = 60 * 60 * 1000;
@@ -61,36 +60,17 @@ export const exportAllData = async (req, res) => {
         });
       }
 
-      // COMPLETED, FAILED, or stale — delete old job, old file, so we can re-export
-      try {
-        await zcql.executeZCQLQuery(`DELETE FROM Jobs WHERE ROWID = ${oldRowId}`);
-      } catch (delErr) {
-        console.error("Error deleting old job:", delErr);
-      }
-
-      // Delete old CSV file from Stratus (try both new and old file name formats)
-      try {
-        const stratus = catalystApp.stratus();
-        const bucket = stratus.bucket("upload-data-bucket");
-        // Current (mode-aware) file
-        try { await bucket.deleteObject(fileName); } catch (_) { }
-        // Old format file (scheme-wise only)
-        if (!isConsolidated(mode)) {
-          try { await bucket.deleteObject(`all-clients-export-${dateStr}.csv`); } catch (_) { }
-        }
-        // Baton-pass checkpoint/manifest/pending-buffer artifacts for this job
-        // (see functions/ExportAllCustomerHoldingData/checkpoint.js key naming)
-        const metaKeys = [
-          `exports-meta/${jobName}-manifest.json`,
-          `exports-meta/${jobName}-checkpoint.json`,
-          `exports-meta/${jobName}-pending.csv`,
-        ];
-        for (const key of metaKeys) {
-          try { await bucket.deleteObject(key); } catch (_) { }
-        }
-      } catch (stratusErr) {
-        console.error("Error deleting old file from Stratus:", stratusErr);
-      }
+      // COMPLETED, FAILED, or stale — do NOT clear the Jobs row or Stratus
+      // file here. ExportAllCustomerHoldingData/index.js needs to see them
+      // still in place on its first invocation so it can decide for itself:
+      // if this date's file was already generated earlier *today*, reuse it
+      // as-is; otherwise delete-and-rebuild. Deleting them here would erase
+      // that evidence before the function ever gets to look at it.
+      //
+      // The function's own verified delete-then-recreate of fileName (see
+      // ensureObjectDeleted in checkpoint.js) is what actually guarantees a
+      // rebuild never collides with a prior run's leftovers, so nothing is
+      // lost by not cleaning up here.
     }
 
     // Submit a fresh job

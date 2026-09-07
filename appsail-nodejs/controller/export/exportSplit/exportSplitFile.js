@@ -1,7 +1,4 @@
-import { fetchHoldingsRowsForAccountIsin } from "../../../util/analytics/holdingsFromTable.js";
-import { buildVirtualToActualMap } from "../../../util/mapVirtualToActualCodes.js";
-
-const BATCH_SIZE = 270;
+import { computeSplitPreviewRows } from "../../../util/analytics/splitPreviewCalc.js";
 
 export const exportSplitPreviewFile = async (req, res) => {
   try {
@@ -27,63 +24,26 @@ export const exportSplitPreviewFile = async (req, res) => {
     const zcql = catalystApp.zcql();
     const bucket = catalystApp.stratus().bucket("export-app-data");
 
-    let csv =
-      "ISIN,VIRTUAL_CODE,ACTUAL_CODE,CURRENT_HOLDING,NEW_HOLDING,DELTA\n";
+    /* ================= CALCULATE (same fast path as /split/preview) =================
+       One paginated Holdings query for the whole ISIN — no per-account
+       fan-out. The previous implementation re-queried Holdings once per
+       eligible account, which was fast locally but blew past Catalyst's
+       ~30s request limit on deployed environments (408 Request Timeout). */
+    const preview = await computeSplitPreviewRows(zcql, {
+      isin,
+      r1,
+      r2,
+      issueDateISO,
+    });
 
-    /* ================= FIND ACCOUNTS WITH TRANSACTIONS ================= */
-    const accountSet = new Set();
-    let offset = 0;
-
-    while (true) {
-      const rows = await zcql.executeZCQLQuery(`
-        SELECT WS_Account_code
-        FROM Transaction
-        WHERE ISIN='${isin}'
-        LIMIT ${BATCH_SIZE} OFFSET ${offset}
-      `);
-
-      if (!rows || rows.length === 0) break;
-      rows.forEach((r) => accountSet.add(r.Transaction.WS_Account_code));
-      if (rows.length < BATCH_SIZE) break;
-      offset += BATCH_SIZE;
-    }
-
-    const eligibleAccounts = Array.from(accountSet);
-
-    if (!eligibleAccounts.length) {
+    if (!preview.length) {
       return res.json({ success: false, message: "No eligible accounts" });
     }
 
-    const virtualToActual = await buildVirtualToActualMap(
-      zcql,
-      eligibleAccounts,
-    );
-
-    /* ================= HOLDING AS OF ISSUE DATE (read materialised Holdings) =================
-       Read the stored Holdings ledger — the same source of truth as the
-       rebuild / upload worker — as of the issue date, instead of replaying
-       FIFO from the source tables. The last row in FIFO order carries the
-       running HOLDING (holding as of that date), and corporate actions already
-       applied (incl. demerger/merger) are reflected automatically. */
-    const splitMultiplier = r2 / r1;
-
-    for (const acc of eligibleAccounts) {
-      const holdingRows = await fetchHoldingsRowsForAccountIsin(
-        zcql,
-        acc,
-        isin,
-        issueDateISO,
-      );
-      const beforeHolding = holdingRows.length
-        ? Number(holdingRows[holdingRows.length - 1].HOLDING) || 0
-        : 0;
-      if (beforeHolding <= 1e-6) continue;
-
-      const newHolding = Math.floor(beforeHolding * splitMultiplier);
-      const delta = newHolding - beforeHolding;
-      const actualCode = virtualToActual.get(acc) || "";
-
-      csv += `"${isin}","${acc}","${actualCode}","${beforeHolding}","${newHolding}","${delta}"\n`;
+    let csv =
+      "ISIN,VIRTUAL_CODE,ACTUAL_CODE,CURRENT_HOLDING,NEW_HOLDING,DELTA\n";
+    for (const row of preview) {
+      csv += `"${row.isin}","${row.accountCode}","${row.actualCode}","${row.currentHolding}","${row.newHolding}","${row.delta}"\n`;
     }
 
     /* ================= UPLOAD ================= */

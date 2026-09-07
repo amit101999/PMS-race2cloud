@@ -41,7 +41,10 @@ const {
   loadPendingBuffer,
   savePendingBuffer,
   deleteExportArtifacts,
+  releaseStaleUpload,
+  ensureObjectDeleted,
 } = require("./checkpoint.js");
+const { queryWithTimeout } = require("./zcqlTimeout.js");
 
 /** Stratus multipart requires >=5MB for all non-final parts; keep headroom above that. */
 const MIN_FLUSH_BYTES = 8 * 1024 * 1024;
@@ -50,6 +53,47 @@ const MIN_FLUSH_BYTES = 8 * 1024 * 1024;
 const TIME_BUFFER_MS = 90_000;
 
 const esc = (s) => String(s ?? "").replace(/'/g, "''");
+
+const parseCatalystTime = (ct) => {
+  if (!ct) return 0;
+  // Catalyst CREATEDTIME is an IST (UTC+05:30) wall-clock string like
+  // "2026-06-19 17:41:28:675" — parse it explicitly as IST.
+  const iso = String(ct).trim().replace(" ", "T").replace(/:(\d{3})$/, ".$1");
+  const ms = new Date(`${iso}+05:30`).getTime();
+  return isNaN(ms) ? 0 : ms;
+};
+
+const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
+// Date-only (no time) string in IST — used to tell "already generated
+// today" apart from "generated on an earlier day".
+const toISTDateStr = (epochMs) =>
+  new Date(epochMs + IST_OFFSET_MS).toISOString().split("T")[0];
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Retry a flaky async op with capped exponential backoff (500ms, 1s).
+ * Re-throws the last error if every attempt fails — the caller then handles it
+ * exactly as before (group/client counted in errorCount and skipped).
+ */
+async function withRetry(fn, label, maxTries = 3) {
+  let lastErr;
+  for (let attempt = 1; attempt <= maxTries; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastErr = err;
+      if (attempt < maxTries) {
+        const backoffMs = 500 * 2 ** (attempt - 1);
+        console.warn(
+          `Retry ${attempt}/${maxTries - 1} for ${label}: ${err.message} (waiting ${backoffMs}ms)`
+        );
+        await sleep(backoffMs);
+      }
+    }
+  }
+  throw lastErr;
+}
 
 const CONSOLIDATED_HEADER =
   "GENERATED_AT,AS_ON_DATE,ACCOUNT_CODE,SECURITY_NAME,SECURITY_CODE,ISIN,HOLDING\n";
@@ -99,12 +143,14 @@ function buildSchemeRow(generatedAt, reportDate, accountCode, actualCode, row) {
 
 async function ensureJobsRowRunning(zcql, jobName) {
   try {
-    await zcql.executeZCQLQuery(
+    await queryWithTimeout(
+      zcql,
       `INSERT INTO Jobs (jobName, status) VALUES ('${esc(jobName)}', 'RUNNING')`
     );
   } catch (insertErr) {
     try {
-      await zcql.executeZCQLQuery(
+      await queryWithTimeout(
+        zcql,
         `UPDATE Jobs SET status = 'RUNNING' WHERE jobName = '${esc(jobName)}'`
       );
     } catch (upErr) {
@@ -125,13 +171,21 @@ async function buildConsolidatedGroupCsv({
   const { actualCode, virtualCodes } = group;
   const byIsin = new Map();
 
+  // Sequential — one sub-account at a time. The Catalyst ZCQL client does not
+  // tolerate concurrent calls (observed to hang rather than error), so
+  // sub-accounts are no longer batched in parallel. `withRetry` still gives
+  // each one a few attempts before the group is marked errored.
   for (const virtualCode of virtualCodes) {
-    const rows = await calculateHoldingsSummary({
-      catalystApp,
-      accountCode: virtualCode,
-      asOnDate,
-      sharedPriceMap,
-    });
+    const rows = await withRetry(
+      () =>
+        calculateHoldingsSummary({
+          catalystApp,
+          accountCode: virtualCode,
+          asOnDate,
+          sharedPriceMap,
+        }),
+      `virtual code ${virtualCode} (group ${actualCode})`
+    );
     if (!Array.isArray(rows)) continue;
 
     for (const row of rows) {
@@ -173,12 +227,16 @@ async function buildSchemeClientCsv({
   sharedPriceMap,
 }) {
   const { accountCode, actualCode } = entry;
-  const rows = await calculateHoldingsSummary({
-    catalystApp,
-    accountCode,
-    asOnDate,
-    sharedPriceMap,
-  });
+  const rows = await withRetry(
+    () =>
+      calculateHoldingsSummary({
+        catalystApp,
+        accountCode,
+        asOnDate,
+        sharedPriceMap,
+      }),
+    `client ${accountCode}`
+  );
   if (!Array.isArray(rows) || !rows.length) return "";
 
   let text = "";
@@ -199,6 +257,7 @@ module.exports = async (jobRequest, context) => {
   const bucket = catalystApp.stratus().bucket("upload-data-bucket");
 
   let jobName = "";
+  let checkpoint = null;
 
   try {
     const jobDetails = jobRequest.getAllJobParams();
@@ -208,12 +267,68 @@ module.exports = async (jobRequest, context) => {
 
     console.log(`Export job invocation started: ${jobName}`);
 
-    let checkpoint = await loadCheckpoint(bucket, jobName);
+    checkpoint = await loadCheckpoint(bucket, jobName);
     let manifest;
     let buffer;
 
+    // A checkpoint can be left pointing at an upload that no longer really
+    // exists — completed/aborted by a self-heal, cleaned up out of band, or
+    // just stale — regardless of whether the caller's own cleanup (e.g. the
+    // AppSail re-export endpoint) succeeded. Rather than trust it blindly and
+    // fail deep inside a resume, verify it up front: if Stratus doesn't
+    // recognize the uploadId, discard the checkpoint and fall through to a
+    // clean first invocation. This makes this function self-sufficient no
+    // matter what state a previous attempt left behind.
+    if (checkpoint?.uploadId && checkpoint?.fileName) {
+      try {
+        await bucket.getMultipartUploadSummary(checkpoint.fileName, checkpoint.uploadId);
+      } catch (err) {
+        console.warn(
+          `Checkpoint for ${jobName} references a no-longer-valid upload (${err.message}); discarding and starting fresh.`
+        );
+        await deleteExportArtifacts(bucket, jobName);
+        checkpoint = null;
+      }
+    }
+
     if (!checkpoint) {
       /* ---------------- FIRST INVOCATION ---------------- */
+
+      // Before touching the Jobs row (which would overwrite its status and
+      // lose this signal), check whether the prior run for this exact
+      // jobName already completed earlier *today* (IST, date-only). If so,
+      // and the file it produced is still sitting in Stratus, reuse it
+      // as-is instead of rebuilding from scratch. A different day (or any
+      // non-COMPLETED status) falls through to the normal rebuild below,
+      // which deletes and recreates fileName via ensureObjectDeleted.
+      try {
+        const priorRows = await queryWithTimeout(
+          zcql,
+          `SELECT status, CREATEDTIME FROM Jobs WHERE jobName = '${esc(jobName)}' LIMIT 1`
+        );
+        if (priorRows.length) {
+          const priorStatus = priorRows[0].Jobs.status;
+          const priorCreatedTime = priorRows[0].Jobs.CREATEDTIME;
+          const generatedOn = priorCreatedTime ? toISTDateStr(parseCatalystTime(priorCreatedTime)) : null;
+
+          if (priorStatus === "COMPLETED" && generatedOn === toISTDateStr(Date.now())) {
+            const fileStillThere = await bucket.headObject(fileName, { throwErr: false });
+            if (fileStillThere) {
+              console.log(`Export ${jobName} already generated today; reusing existing file, skipping rebuild.`);
+              await queryWithTimeout(
+                zcql,
+                `UPDATE Jobs SET status = 'COMPLETED' WHERE jobName = '${esc(jobName)}'`
+              );
+              context.closeWithSuccess();
+              return;
+            }
+            console.warn(`Jobs row for ${jobName} says COMPLETED today but ${fileName} is missing from Stratus; regenerating.`);
+          }
+        }
+      } catch (lookupErr) {
+        console.warn(`Failed to check prior Jobs row for ${jobName}, proceeding to regenerate:`, lookupErr.message);
+      }
+
       await ensureJobsRowRunning(zcql, jobName);
 
       const reportDate = asOnDate || new Date().toISOString().split("T")[0];
@@ -241,7 +356,8 @@ module.exports = async (jobRequest, context) => {
 
       if (!manifest.length) {
         console.log("No clients found");
-        await zcql.executeZCQLQuery(
+        await queryWithTimeout(
+          zcql,
           `UPDATE Jobs SET status = 'COMPLETED' WHERE jobName = '${esc(jobName)}'`
         );
         context.closeWithSuccess();
@@ -249,6 +365,15 @@ module.exports = async (jobRequest, context) => {
       }
 
       await saveManifest(bucket, jobName, manifest);
+
+      // Stratus won't re-key an existing object (409 key_already_exists) and a
+      // prior run's output for this fileName is never cleaned up. A fresh run
+      // must fully replace it, so drop any existing object before starting the
+      // new multipart upload. Unlike a fire-and-forget delete, this confirms
+      // the key is actually gone (retrying briefly if needed) and throws a
+      // clear error instead of silently continuing into an initiate call
+      // that would otherwise fail with an opaque 409 later.
+      await ensureObjectDeleted(bucket, fileName);
 
       const initRes = await bucket.initiateMultipartUpload(fileName);
       const uploadId = String(initRes.upload_id);
@@ -267,11 +392,17 @@ module.exports = async (jobRequest, context) => {
         errorCount: 0,
       };
 
+      // Persist the checkpoint (and its uploadId) right away, not just after
+      // the first flush — if this process dies before any data is buffered,
+      // the catch block below still needs the uploadId to close the upload
+      // it just opened, instead of leaving it dangling on this fileName.
+      await saveCheckpoint(bucket, jobName, checkpoint);
+
       buffer = consolidated ? CONSOLIDATED_HEADER : SCHEME_HEADER;
 
       console.log(
         `Export job initialized: ${manifest.length} ${consolidated ? "group(s)" : "client(s)"} ` +
-          `mode=${checkpoint.mode} uploadId=${uploadId}`
+        `mode=${checkpoint.mode} uploadId=${uploadId}`
       );
     } else {
       /* ---------------- RESUME ---------------- */
@@ -285,7 +416,7 @@ module.exports = async (jobRequest, context) => {
 
       console.log(
         `Export job resumed: cursor=${checkpoint.cursor}/${manifest.length} ` +
-          `part=${checkpoint.nextPartNumber} bufferBytes=${Buffer.byteLength(buffer, "utf8")}`
+        `part=${checkpoint.nextPartNumber} bufferBytes=${Buffer.byteLength(buffer, "utf8")}`
       );
     }
 
@@ -299,27 +430,27 @@ module.exports = async (jobRequest, context) => {
       try {
         const text = consolidatedMode
           ? await buildConsolidatedGroupCsv({
-              catalystApp,
-              group: entry,
-              asOnDate: checkpoint.asOnDate,
-              generatedAt: checkpoint.generatedAt,
-              reportDate: checkpoint.reportDate,
-              sharedPriceMap: checkpoint.priceMap,
-            })
+            catalystApp,
+            group: entry,
+            asOnDate: checkpoint.asOnDate,
+            generatedAt: checkpoint.generatedAt,
+            reportDate: checkpoint.reportDate,
+            sharedPriceMap: checkpoint.priceMap,
+          })
           : await buildSchemeClientCsv({
-              catalystApp,
-              entry,
-              asOnDate: checkpoint.asOnDate,
-              generatedAt: checkpoint.generatedAt,
-              reportDate: checkpoint.reportDate,
-              sharedPriceMap: checkpoint.priceMap,
-            });
+            catalystApp,
+            entry,
+            asOnDate: checkpoint.asOnDate,
+            generatedAt: checkpoint.generatedAt,
+            reportDate: checkpoint.reportDate,
+            sharedPriceMap: checkpoint.priceMap,
+          });
         buffer += text;
       } catch (entryErr) {
         checkpoint.errorCount++;
         console.error(
           `Error processing ${consolidatedMode ? "group" : "client"} ` +
-            `${checkpoint.cursor + 1}/${manifest.length}:`,
+          `${checkpoint.cursor + 1}/${manifest.length}:`,
           entryErr.message
         );
       }
@@ -353,7 +484,7 @@ module.exports = async (jobRequest, context) => {
         await saveCheckpoint(bucket, jobName, checkpoint);
         console.log(
           `Export job: ${remainingMs}ms remaining (< ${TIME_BUFFER_MS}ms buffer); ` +
-            `baton-pass at cursor=${checkpoint.cursor}/${manifest.length}`
+          `baton-pass at cursor=${checkpoint.cursor}/${manifest.length}`
         );
         break;
       }
@@ -383,13 +514,14 @@ module.exports = async (jobRequest, context) => {
 
     console.log(
       `Export job completed: ${checkpoint.processedCount} processed, ` +
-        `${checkpoint.errorCount} error(s), ${checkpoint.nextPartNumber - 1} part(s)`
+      `${checkpoint.errorCount} error(s), ${checkpoint.nextPartNumber - 1} part(s)`
     );
 
     await deleteExportArtifacts(bucket, jobName);
 
     try {
-      await zcql.executeZCQLQuery(
+      await queryWithTimeout(
+        zcql,
         `UPDATE Jobs SET status = 'COMPLETED' WHERE jobName = '${esc(jobName)}'`
       );
     } catch (statusErr) {
@@ -402,9 +534,24 @@ module.exports = async (jobRequest, context) => {
   } catch (error) {
     console.error("Export job failed:", error);
 
+    // This run may have opened a multipart upload (recorded in `checkpoint`)
+    // that will now never be completed. Left alone, that upload keeps its
+    // fileName "reserved" and every future attempt for this date/mode will
+    // fail with 409 key_already_exists — so close it out now instead of
+    // leaving it for a retry to trip over.
+    if (checkpoint?.uploadId && checkpoint?.fileName) {
+      try {
+        await releaseStaleUpload(bucket, checkpoint.fileName, checkpoint.uploadId, checkpoint.nextPartNumber);
+        console.log(`Released dangling upload for ${checkpoint.fileName} after failure`);
+      } catch (releaseErr) {
+        console.error(`Failed to release dangling upload for ${checkpoint.fileName}:`, releaseErr);
+      }
+    }
+
     if (jobName) {
       try {
-        await zcql.executeZCQLQuery(
+        await queryWithTimeout(
+          zcql,
           `UPDATE Jobs SET status = 'FAILED' WHERE jobName = '${esc(jobName)}'`
         );
       } catch (updateErr) {

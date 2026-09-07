@@ -1,4 +1,5 @@
 const CLIENT_IDS_BATCH = 270;
+const VIRTUAL_CODES_LOOKUP_BATCH = 50;
 
 /** Virtual codes per `IN (...)` clause. */
 const VIRTUAL_CODE_CHUNK = 200;
@@ -45,7 +46,11 @@ async function resolveChunkIndividually(zcql, codes, map) {
 
 /**
  * Build WS_Account_code (virtual) → Actual_Code map from clientIds.
- * When `virtualCodes` is provided, looks up only those codes (reliable + fast).
+ * When `virtualCodes` is provided, looks up only those codes in IN-list
+ * batches (one query per 50 codes, not one query per code — a per-code loop
+ * here previously reintroduced the same per-account fan-out that caused CA
+ * preview endpoints to 408 on deployed environments once an ISIN had enough
+ * holders, even after their Holdings-query loops were fixed).
  * Otherwise pages the full clientIds table.
  *
  * The scoped branch reads the codes in `IN (...)` chunks rather than one query
@@ -64,6 +69,33 @@ export async function buildVirtualToActualMap(zcql, virtualCodes = null) {
       ),
     ];
 
+    for (let i = 0; i < unique.length; i += VIRTUAL_CODES_LOOKUP_BATCH) {
+      const slice = unique.slice(i, i + VIRTUAL_CODES_LOOKUP_BATCH);
+      const inList = slice
+        .map((c) => `'${c.replace(/'/g, "''")}'`)
+        .join(",");
+      let rows = [];
+      try {
+        rows = await zcql.executeZCQLQuery(
+          `SELECT WS_Account_code, Actual_Code FROM clientIds WHERE WS_Account_code IN (${inList})`,
+        );
+      } catch (err) {
+        console.error(
+          "[mapVirtualToActualCodes] batch lookup failed:",
+          err.message,
+        );
+        for (const code of slice) map.set(code, "");
+        continue;
+      }
+
+      for (const code of slice) map.set(code, "");
+      for (const r of rows || []) {
+        const row = r.clientIds || r;
+        const virtual = String(row.WS_Account_code ?? "").trim();
+        if (!virtual) continue;
+        const actual = String(row.Actual_Code ?? "").trim();
+        // Prefer the first non-empty Actual_Code if duplicate clientIds rows exist.
+        if (!map.get(virtual) && actual) map.set(virtual, actual);
     // Seed every requested code so callers always get an entry, including codes
     // with no clientIds row — the per-code lookup returns "" for those.
     for (const code of unique) map.set(code, "");
