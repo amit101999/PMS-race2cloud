@@ -1,5 +1,10 @@
 const catalyst = require("zcatalyst-sdk-node");
-const { runFifoEngine, txnEffectiveDate } = require("./fifo.js");
+const {
+  QTY_EPS,
+  holdingsEffectiveDate,
+  recomputeHoldingsSnapshot,
+  nextISODate,
+} = require("./holdingsSnapshot.js");
 
 const ZCQL_ROW_LIMIT = 270;
 const REBUILD_BATCH = 400;
@@ -220,26 +225,82 @@ module.exports = async (jobRequest, context) => {
     });
 
     /* ======================================================
-       STEP 1: FIND ACCOUNTS WITH TRANSACTIONS FOR THIS ISIN
+       STEP 1+2: READ THE HOLDINGS LEDGER AS AT THE EX-DATE
+
+       Same source, same date rule and same position maths as the Bonus PREVIEW
+       (appsail-nodejs/util/analytics/bonusPreviewCalc.js) — one read gives both
+       the eligible accounts and the rows to size each grant from.
+
+       ===== OLD LOGIC — raw-table replay. Kept for rollback (see fifo.js in git
+       history, deleted with this change). =====
+       Accounts came from `SELECT WS_Account_code FROM Transaction`, then the
+       Transaction / Bonus / Split tables were replayed through a local FIFO
+       engine: `runFifoEngine(tx, bonuses, splits, true)`.
+
+       That engine was never given merger or demerger inputs, so shares that
+       arrived through a corporate action did not exist as far as it was
+       concerned. The preview sized the grant on the client's real position while
+       this job sized it on the traded position only — and when the client had
+       never traded the ISIN directly (every share came out of a demerger), the
+       account was not even in `eligibleAccounts` and silently got nothing.
+       ===== END OLD LOGIC =====
        ====================================================== */
-    const accountSet = new Set();
+    const cutoff = nextISODate(exDateISO);
+
+    const rowsByAccount = new Map(); // WS_Account_code → effective Holdings rows
+    const seenRowIds = new Set();
     let holdOffset = 0;
 
     while (true) {
       const batch = await zcql.executeZCQLQuery(`
-        SELECT WS_Account_code
-        FROM Transaction
-        WHERE ISIN='${esc(isin)}'
+        SELECT ROWID, WS_Account_code, HOLDING, WAP, HOLDING_VALUE,
+               QUANTITY, PRICE, TOTAL_AMOUNT,
+               TYPE, SETTLEMENT_DATE, TRANSACTION_DATE, CA_DATE
+        FROM Holdings
+        WHERE ISIN = '${esc(isin)}'
+          AND (SETTLEMENT_DATE < '${esc(cutoff)}' OR TRANSACTION_DATE < '${esc(cutoff)}')
+        ORDER BY CREATEDTIME ASC, ROWID ASC
         LIMIT ${ZCQL_ROW_LIMIT} OFFSET ${holdOffset}
       `);
 
       if (!batch || batch.length === 0) break;
-      batch.forEach((r) => accountSet.add(r.Transaction.WS_Account_code));
+
+      for (const row of batch) {
+        const h = row.Holdings || row;
+        if (h.ROWID != null) {
+          if (seenRowIds.has(h.ROWID)) continue;
+          seenRowIds.add(h.ROWID);
+        }
+        const acc = String(h.WS_Account_code || "").trim();
+        if (!acc) continue;
+
+        // The SQL above deliberately ORs both dates — it cannot express the OPI
+        // exception or the merger/demerger CA_DATE rule on its own. Apply the
+        // per-type rule here so a row that is not yet effective on the ex-date
+        // cannot count towards the entitlement.
+        const eff = holdingsEffectiveDate(h);
+        if (eff && eff >= cutoff) continue;
+
+        // Size this bonus on the holding BEFORE this bonus is added. On a
+        // recompute the stale BONUS row for this same ex-date is already in the
+        // ledger; dropping it keeps the basis post-split, not post-split +
+        // stale-bonus. Replaces the old `b.ExDate !== exDateISO` Bonus filter.
+        if (
+          String(h.TYPE || "").trim().toUpperCase() === "BONUS" &&
+          eff === exDateISO
+        ) {
+          continue;
+        }
+
+        if (!rowsByAccount.has(acc)) rowsByAccount.set(acc, []);
+        rowsByAccount.get(acc).push(h);
+      }
+
       if (batch.length < ZCQL_ROW_LIMIT) break;
       holdOffset += ZCQL_ROW_LIMIT;
     }
 
-    const eligibleAccounts = Array.from(accountSet);
+    const eligibleAccounts = [...rowsByAccount.keys()];
 
     if (!eligibleAccounts.length) {
       console.log("No eligible accounts found");
@@ -251,105 +312,7 @@ module.exports = async (jobRequest, context) => {
     }
 
     /* ======================================================
-
-    STEP 2: FETCH TX / BONUS / SPLIT (ROWID dedupe — matches preview API)
-       ====================================================== */
-    const fetchAllDeduped = async (
-      table,
-      dateCol,
-      operator,
-      orderBySql,
-      whereDateOverride = null,
-      rowFilter = null,
-    ) => {
-      const out = [];
-      const seenRowIds = new Set();
-      let off = 0;
-      while (true) {
-        const whereDate =
-          whereDateOverride || `${dateCol} ${operator} '${esc(exDateISO)}'`;
-        const r = await zcql.executeZCQLQuery(`
-          SELECT *
-          FROM ${table}
-          WHERE ISIN='${esc(isin)}' AND ${whereDate}
-          ORDER BY ${orderBySql}
-          LIMIT ${ZCQL_ROW_LIMIT} OFFSET ${off}
-        `);
-        if (!r || r.length === 0) break;
-        for (const row of r) {
-          const rec = row[table] || row.Transaction || row.Bonus || row.Split || row;
-          const rowId = rec.ROWID;
-          if (rowId != null && seenRowIds.has(rowId)) continue;
-          if (rowId != null) seenRowIds.add(rowId);
-          if (rowFilter && !rowFilter(rec)) continue;
-          out.push(row);
-        }
-        if (r.length < ZCQL_ROW_LIMIT) break;
-        off += ZCQL_ROW_LIMIT;
-      }
-      return out;
-    };
-
-    /* ===== OLD LOGIC — settlement-date only entitlement window. Kept for rollback. =====
-    const txRows = await fetchAllDeduped(
-      "Transaction",
-      "SETDATE",
-      "<=",
-      "SETDATE ASC, ROWID ASC"
-    );
-    ===== END OLD LOGIC ===== */
-
-    // The FIFO engine has no internal date cutoff — whatever is fetched here IS
-    // the entitlement window. OPI is dated by SETDATE and every other type by
-    // TRANDATE, so no single column expresses it: fetch on both, filter per row.
-    const txRows = await fetchAllDeduped(
-      "Transaction",
-      "TRANDATE",
-      "<=",
-      "TRANDATE ASC, ROWID ASC",
-      `(TRANDATE <= '${esc(exDateISO)}' OR SETDATE <= '${esc(exDateISO)}')`,
-      (rec) => {
-        const eff = String(txnEffectiveDate(rec) || "").slice(0, 10);
-        return !eff || eff <= exDateISO;
-      },
-    );
-    const bonusRows = await fetchAllDeduped(
-      "Bonus",
-      "ExDate",
-      "<=",
-      "ExDate ASC, ROWID ASC"
-    );
-    const splitRows = await fetchAllDeduped(
-      "Split",
-      "Issue_Date",
-      "<=",
-      "Issue_Date ASC, ROWID ASC"
-    );
-
-    const txByAcc = {};
-    txRows.forEach((r) => {
-      const t = r.Transaction;
-      (txByAcc[t.WS_Account_code] ||= []).push(t);
-    });
-
-    const bonusByAcc = {};
-    bonusRows.forEach((r) => {
-      const b = r.Bonus;
-      (bonusByAcc[b.WS_Account_code] ||= []).push(b);
-    });
-
-    const splits = splitRows.map((r) => {
-      const s = r.Split;
-      return {
-        issueDate: s.Issue_Date,
-        ratio1: Number(s.Ratio1) || 0,
-        ratio2: Number(s.Ratio2) || 0,
-        isin: s.ISIN,
-      };
-    });
-
-    /* ======================================================
-       STEP 3: FIFO + INSERT BONUS (one per eligible account)
+       STEP 3: SIZE + INSERT BONUS (one per eligible account)
        ====================================================== */
     let inserted = 0;
     let errorCount = 0;
@@ -373,27 +336,24 @@ module.exports = async (jobRequest, context) => {
       }
 
       try {
-        const tx = txByAcc[accountCode] || [];
-        if (!tx.length) {
+        const accRows = rowsByAccount.get(accountCode) || [];
+        if (!accRows.length) {
           if (trackingOn) await markAccountSuccess(zcql, jobName, accountCode);
           continue;
         }
 
-        // Size this bonus on the holding BEFORE this bonus is added. Exclude any
-        // Bonus row sharing this ex-date (only present on recompute, where the
-        // stale row already exists) so the FIFO basis is the post-split holding,
-        // not post-split + stale-bonus.
-        const bonuses = (bonusByAcc[accountCode] || []).filter(
-          (b) => String(b.ExDate || b.exDate || "").slice(0, 10) !== exDateISO,
-        );
-
-        const fifo = runFifoEngine(tx, bonuses, splits, true);
-        if (!fifo || fifo.holdings <= 1e-6) {
+        // The stored HOLDING column is a running balance frozen in settlement
+        // order at rebuild time, so it can contradict the rows the trade-date
+        // rule selected above. Re-derive the position from the rows themselves —
+        // identical call and identical helper to the preview's.
+        const snap = recomputeHoldingsSnapshot(accRows);
+        if (snap.HOLDING <= QTY_EPS) {
+          // Fully sold (or restated away) as at the ex-date.
           if (trackingOn) await markAccountSuccess(zcql, jobName, accountCode);
           continue;
         }
 
-        const bonusShares = Math.floor((fifo.holdings * r1) / r2);
+        const bonusShares = Math.floor((snap.HOLDING * r1) / r2);
         if (bonusShares <= 0) {
           if (trackingOn) await markAccountSuccess(zcql, jobName, accountCode);
           continue;
