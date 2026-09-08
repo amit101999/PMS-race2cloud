@@ -3,6 +3,7 @@ const {
   fetchSecurityListByIsins,
   fetchLatestPricesByIsins,
   rollupLastSnapshotByIsin,
+  rollupRecomputedSnapshotByIsin,
 } = require("./holdingsFromTable.js");
 
 /**
@@ -20,7 +21,17 @@ exports.calculateHoldingsSummary = async ({
   const zcql = catalystApp.zcql();
 
   const rows = await fetchHoldingsRowsPaged(zcql, accountCode, asOnDate, "");
-  const snapshots = rollupLastSnapshotByIsin(rows);
+
+  // As-on-date views must re-derive their totals: the stored HOLDING column is a
+  // running balance frozen in settlement order, so it can contradict the rows the
+  // trade-date rule actually selected. With no as-on-date every row is included and
+  // the stored final balance is already correct, so keep the cheaper path.
+  // Same branch as the AppSail `calculateHoldingsSummary` this mirrors — the
+  // export-all job is always called WITH an as-on-date, so this is the live path.
+  const useRecomputed = /^\d{4}-\d{2}-\d{2}$/.test(String(asOnDate ?? "").trim());
+  const snapshots = useRecomputed
+    ? rollupRecomputedSnapshotByIsin(rows)
+    : rollupLastSnapshotByIsin(rows);
   const isinList = snapshots.map((s) => s.isin);
 
   const metaByIsin = await fetchSecurityListByIsins(zcql, isinList);
