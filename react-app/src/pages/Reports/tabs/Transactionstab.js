@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState, useMemo } from "react";
 import { useAccountCodes } from "../../../hooks/GetAllCodes.js";
 import { BASE_URL } from "../../../constant.js";
+import { useJobNotifications } from "../../../notifications/JobNotificationContext";
 
 function ReportsTab() {
   const [asOnDate, setAsOnDate] = useState("");
@@ -12,6 +13,7 @@ function ReportsTab() {
 
   const dropdownRef = useRef(null);
   const { clientOptions } = useAccountCodes();
+  const { reportJob } = useJobNotifications();
 
   /* ---------------- FILTERED OPTIONS ---------------- */
   const filteredOptions = useMemo(() => {
@@ -46,6 +48,10 @@ function ReportsTab() {
 
   /* ===================== EXPORT HANDLER ===================== */
   const handleExport = async () => {
+    // Push a "Started" entry into the bell up front, then flip this same id to
+    // completed/failed once the synchronous export returns.
+    let syncJob = null;
+
     try {
       if (!accountCode) {
         alert("Please select an account code");
@@ -54,6 +60,16 @@ function ReportsTab() {
 
       setLoading(true);
       setDownloadUrl("");
+
+      syncJob = {
+        id: `txn-single-${accountCode}-${Date.now()}`,
+        label: `Transaction export — Account ${accountCode}${asOnDate ? `, as on ${asOnDate}` : ""}`,
+      };
+      reportJob({
+        ...syncJob,
+        status: "in_progress",
+        message: "Export started — generating the CSV…",
+      });
 
       const params = new URLSearchParams();
       params.append("accountCode", accountCode);
@@ -68,8 +84,19 @@ function ReportsTab() {
       if (!response.ok) throw new Error(data.message);
 
       setDownloadUrl(data.downloadUrl.signature);
+      reportJob({
+        ...syncJob,
+        status: "completed",
+        message: "Export ready — download the CSV from the Reports tab.",
+      });
     } catch (error) {
       alert(error.message);
+      reportJob({
+        id: syncJob?.id || `txn-single-error-${Date.now()}`,
+        label: syncJob?.label || `Transaction export — Account ${accountCode || "?"}`,
+        status: "failed",
+        message: error.message || "Export failed.",
+      });
     } finally {
       setLoading(false);
     }

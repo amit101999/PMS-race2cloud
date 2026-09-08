@@ -1,5 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { BASE_URL } from "../../../constant.js";
+import { useJobNotifications } from "../../../notifications/JobNotificationContext";
+import { parseReportStatus } from "../../../notifications/reportJobStatus";
 
 /* Individual per-client impact reports. Only `split` is wired to a backend
    handler today; the rest are listed so the dropdown reflects the full set and
@@ -46,6 +48,8 @@ function CorporateActionTab() {
 
   const impactJobsRef = useRef(impactJobs);
   impactJobsRef.current = impactJobs;
+
+  const { trackJob, reportJob } = useJobNotifications();
 
   const selectedType = INDIVIDUAL_TYPES.find((t) => t.key === reportMode);
 
@@ -146,8 +150,19 @@ function CorporateActionTab() {
       return;
     }
 
+    const syncJob = {
+      id: `ca-all-${fromDate}-${toDate}-${Date.now()}`,
+      label: `Corporate action event export — ${fromDate} to ${toDate}`,
+    };
+
     try {
       setLoading(true);
+      reportJob({
+        ...syncJob,
+        status: "in_progress",
+        message: "Export started — generating the CSV…",
+      });
+
       const params = new URLSearchParams({ fromDate, toDate });
       const response = await fetch(
         `${BASE_URL}/export/corporate-action/export?${params.toString()}`,
@@ -174,8 +189,19 @@ function CorporateActionTab() {
         },
         ...prev.slice(0, 9),
       ]);
+
+      reportJob({
+        ...syncJob,
+        status: "completed",
+        message: "CSV downloaded.",
+      });
     } catch (error) {
       alert(error.message);
+      reportJob({
+        ...syncJob,
+        status: "failed",
+        message: error.message || "Export failed.",
+      });
     } finally {
       setLoading(false);
     }
@@ -254,8 +280,26 @@ function CorporateActionTab() {
           ...prev,
         ];
       });
+
+      trackJob({
+        id: data.jobName || `ca-${reportMode}-${fromDate}-${toDate}`,
+        label: `${selectedType.label} client-impact report — ${fromDate} to ${toDate}`,
+        statusUrl: `${BASE_URL}/export/corporate-action/report/status?type=${encodeURIComponent(
+          reportMode
+        )}&fromDate=${encodeURIComponent(fromDate)}&toDate=${encodeURIComponent(toDate)}`,
+        parseStatus: (d) =>
+          parseReportStatus(d, {
+            noDataMessage: `No ${selectedType.label.toLowerCase()} actions in that period.`,
+          }),
+      });
     } catch (err) {
       setImpactError(err.message);
+      reportJob({
+        id: `ca-impact-error-${Date.now()}`,
+        label: `${selectedType?.label || "Corporate action"} client-impact report — ${fromDate} to ${toDate}`,
+        status: "failed",
+        message: err.message || "Failed to start report.",
+      });
     } finally {
       setGenerating(false);
     }

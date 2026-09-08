@@ -1,6 +1,8 @@
 import React, { useEffect, useRef, useState, useMemo } from "react";
 import { useAccountCodes } from "../../../hooks/GetAllCodes.js";
 import { BASE_URL } from "../../../constant.js";
+import { useJobNotifications } from "../../../notifications/JobNotificationContext";
+import { parseReportStatus } from "../../../notifications/reportJobStatus";
 
 /** Local wall time as yyyy-mm-dd HH:mm:ss (not locale-specific). */
 function formatExportTimestamp(iso) {
@@ -35,6 +37,7 @@ function HoldingsTab() {
   exportJobsRef.current = exportJobs;
   // Consolidated mode lists Actual Codes; scheme-wise lists virtual codes.
   const { clientOptions } = useAccountCodes(isConsolidated ? "actual" : "scheme");
+  const { trackJob, reportJob } = useJobNotifications();
 
   /* Reset the picked account when switching report mode — the code lists differ. */
   const handleReportModeChange = (mode) => {
@@ -156,6 +159,11 @@ function HoldingsTab() {
 
   /* ===================== EXPORT HANDLER ===================== */
   const handleExport = async () => {
+    // For the synchronous exports (ISIN / Single Client) we push a "Started"
+    // entry into the bell right away and then flip this same id to
+    // completed/failed — including from the shared catch below.
+    let syncJob = null;
+
     try {
       /* ---------- ISIN EXPORT (same shape as Analytics ISIN report) ---------- */
       if (exportType === "isin") {
@@ -166,6 +174,16 @@ function HoldingsTab() {
 
         setLoading(true);
         setDownloadUrl("");
+
+        syncJob = {
+          id: `holdings-isin-${selectedIsin}-${Date.now()}`,
+          label: `Holdings export — ISIN ${selectedIsin}${asOnDate ? `, as on ${asOnDate}` : ""}`,
+        };
+        reportJob({
+          ...syncJob,
+          status: "in_progress",
+          message: "Export started — generating the CSV…",
+        });
 
         const params = new URLSearchParams({ isin: selectedIsin });
         if (asOnDate) params.append("asOnDate", asOnDate);
@@ -181,6 +199,11 @@ function HoldingsTab() {
           data.downloadUrl?.signature || data.downloadUrl || "";
         if (!url) throw new Error("Download URL missing from export response");
         setDownloadUrl(url);
+        reportJob({
+          ...syncJob,
+          status: "completed",
+          message: "Export ready — download the CSV from the Reports tab.",
+        });
         setLoading(false);
         return;
       }
@@ -198,6 +221,16 @@ function HoldingsTab() {
 
         setLoading(true);
         setDownloadUrl("");
+
+        syncJob = {
+          id: `holdings-single-${accountCode}-${Date.now()}`,
+          label: `Holdings export — ${isConsolidated ? "Actual" : "Account"} ${accountCode}${asOnDate ? `, as on ${asOnDate}` : ""}`,
+        };
+        reportJob({
+          ...syncJob,
+          status: "in_progress",
+          message: "Export started — generating the CSV…",
+        });
 
         const params = new URLSearchParams();
         if (asOnDate) params.append("asOnDate", asOnDate);
@@ -221,6 +254,11 @@ function HoldingsTab() {
         if (!response.ok) throw new Error(data.message);
 
         setDownloadUrl(data.downloadUrl.signature);
+        reportJob({
+          ...syncJob,
+          status: "completed",
+          message: "Export ready — download the CSV from the Reports tab.",
+        });
         setLoading(false);
         return;
       }
@@ -270,9 +308,26 @@ function HoldingsTab() {
         ];
       });
 
+      // Mirror the export-all job into the shared notification bell so its
+      // Started → Completed/Failed sentence is visible from any page.
+      if (data.jobName) {
+        trackJob({
+          id: data.jobName,
+          label: `Holdings export — All clients, as on ${asOnDate}${isConsolidated ? " (Consolidated)" : ""}`,
+          statusUrl: `${BASE_URL}/export/check-status?asOnDate=${encodeURIComponent(asOnDate)}${isConsolidated ? "&mode=consolidated" : ""}`,
+          parseStatus: (d) => parseReportStatus(d),
+        });
+      }
+
       setLoading(false);
     } catch (error) {
       alert(error.message);
+      reportJob({
+        id: syncJob?.id || `holdings-export-error-${Date.now()}`,
+        label: syncJob?.label || "Holdings export",
+        status: "failed",
+        message: error.message || "Export failed.",
+      });
       setLoading(false);
     }
   };

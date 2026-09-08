@@ -155,6 +155,27 @@ export function JobNotificationProvider({ children }) {
     [stopPolling, updateJob],
   );
 
+  /**
+   * Push a one-shot entry that has no "check status" endpoint to poll — for
+   * work that finishes synchronously (an instant CSV export, say). Callers pass
+   * a terminal `status` ('completed' | 'failed' | …) and a `message` sentence.
+   */
+  const reportJob = useCallback(({ id, label, status, message = null, detail = null }) => {
+    if (!id || !status) return;
+    stopPolling(id); // in case an id is reused
+    const now = Date.now();
+    const entry = {
+      id,
+      label: label || id,
+      status,
+      message,
+      detail,
+      startedAt: now,
+      updatedAt: now,
+    };
+    setJobs((prev) => [entry, ...prev.filter((j) => j.id !== id)]);
+  }, [stopPolling]);
+
   /** Remove a job from the tray (and stop polling it if still active). */
   const dismissJob = useCallback(
     (id) => {
@@ -164,7 +185,7 @@ export function JobNotificationProvider({ children }) {
     [stopPolling],
   );
 
-  const value = { jobs, trackJob, dismissJob };
+  const value = { jobs, trackJob, reportJob, dismissJob };
 
   return (
     <JobNotificationContext.Provider value={value}>{children}</JobNotificationContext.Provider>
