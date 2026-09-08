@@ -1,6 +1,7 @@
 import React, { useState, useCallback, useEffect, useMemo, useRef } from "react";
 import MainLayout from "../../layouts/MainLayout";
 import { BASE_URL } from "../../constant";
+import { useJobNotifications } from "../../notifications/JobNotificationContext";
 import "./UpdateISINPage.css";
 
 /** @typedef {'idle' | 'in_progress' | 'completed' | 'failure'} UpdateStatus */
@@ -37,6 +38,9 @@ const UpdateISINPage = () => {
   const [scriptStatus, setScriptStatus] = useState("idle");
   /** @type {[BannerState, React.Dispatch<React.SetStateAction<BannerState>>]} */
   const [scriptBanner, setScriptBanner] = useState(null);
+  /** Pending poll timer + a cancel flag, so a stale poll can't update state after unmount/edit. */
+  /** id of the currently tracked rename job in the shared notification system. */
+  const [scriptJobId, setScriptJobId] = useState(null);
 
   /** --- New ISIN panel (bottom card): list-driven NEW ISIN + code + name, Apply --- */
   const [panelNewIsin, setPanelNewIsin] = useState("");
@@ -86,6 +90,45 @@ const UpdateISINPage = () => {
       cancelled = true;
     };
   }, []);
+
+  const { trackJob, jobs: notificationJobs } = useJobNotifications();
+
+  // The shared notification context owns the actual polling (and keeps
+  // running even if this page is left) — this just mirrors its result back
+  // into the card's own status/banner so the inline UI stays in sync too.
+  useEffect(() => {
+    if (!scriptJobId) return;
+    const job = notificationJobs.find((j) => j.id === scriptJobId);
+    if (!job) return;
+
+    if (job.status === "completed") {
+      setScriptStatus("completed");
+      setScriptBanner({
+        kind: "success",
+        text: job.message || "ISIN update completed — the database and holdings have been updated.",
+      });
+    } else if (job.status === "failed") {
+      setScriptStatus("failure");
+      setScriptBanner({
+        kind: "error",
+        text: job.message || "ISIN update failed partway through. Check the job logs before retrying.",
+      });
+    } else if (job.status === "partial_failure") {
+      setScriptStatus("failure");
+      setScriptBanner({
+        kind: "error",
+        text:
+          job.message ||
+          "Some tables could not be renamed. Check the notification panel for details.",
+      });
+    } else if (job.status === "timeout") {
+      setScriptStatus("in_progress");
+      setScriptBanner({
+        kind: "success",
+        text: job.message || "Still processing — check the notification panel for updates.",
+      });
+    }
+  }, [notificationJobs, scriptJobId]);
 
   const isinByKey = useMemo(() => {
     const m = new Map();
@@ -205,6 +248,10 @@ const UpdateISINPage = () => {
     }
 
     setScriptStatus("in_progress");
+    setScriptBanner({
+      kind: "success",
+      text: "ISIN update queued — checking progress…",
+    });
 
     try {
       const res = await fetch(`${ISIN_API_BASE}/isin/update`, {
@@ -219,14 +266,27 @@ const UpdateISINPage = () => {
         throw new Error(data?.message || `Request failed (${res.status})`);
       }
 
-      const jobId = data?.jobId ?? data?.job_id;
-      console.log("UpdateISIN job submitted, jobId:", jobId);
+      const jobName = data?.catalystJobName;
+      console.log("UpdateISIN job submitted, catalystJobName:", jobName, "jobId:", data?.jobId);
 
-      setScriptStatus("completed");
-      setScriptBanner({
-        kind: "success",
-        text: "ISIN update queued successfully. The database will be updated shortly.",
-      });
+      if (jobName) {
+        setScriptJobId(jobName);
+        trackJob({
+          id: jobName,
+          label: `ISIN update: ${oldTrim} → ${newTrim}`,
+          statusUrl: `${ISIN_API_BASE}/isin/job-status?jobName=${encodeURIComponent(jobName)}`,
+        });
+        // Tracking now lives in the shared notification system, so it keeps
+        // running (and stays visible via the bell icon) even if this page
+        // is left — the effect above mirrors its result back into this card.
+      } else {
+        // No status key to poll — fall back to reporting only that it was queued.
+        setScriptStatus("completed");
+        setScriptBanner({
+          kind: "success",
+          text: "ISIN update queued, but no job name was returned to track progress.",
+        });
+      }
     } catch (err) {
       setScriptStatus("failure");
       setScriptBanner({

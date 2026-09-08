@@ -1,5 +1,7 @@
 import "./App.css";
 import { HashRouter, Routes, Route } from "react-router-dom";
+import { JobNotificationProvider } from "./notifications/JobNotificationContext";
+import NotificationTray from "./notifications/NotificationTray";
 import DashboardPage from "./pages/Dashboard/DashboardPage";
 import AnalyticsPage from "./pages/Analytics/AnalyticsPage";
 import SplitPage from "./pages/SplitPage/SplitPage";
@@ -18,25 +20,28 @@ import SecurityPage from "./pages/Master/SecurityPage";
 
 function App() {
   return (
-    <HashRouter>
-      <Routes>
-        <Route path="/" element={<DashboardPage />} />
-        <Route path="/analytics" element={<AnalyticsPage />} />
-        <Route path="/split" element={<SplitPage />} />
-        <Route path="/bonus" element={<BonusPage />} />
-        <Route path="/dividend" element={<DividendPage />} />
-        <Route path="/demerger" element={<DemergerPage />} />
-        <Route path="/merger" element={<MergerPage />} />
-        <Route path="/bhav-copy" element={<BhavCopyUploadPage />} />
-        {/* <Route path="/transaction-upload" element={<TransactionUploadPage />} /> */}
-        <Route path="/temp-transaction" element={<TempTransaction />} />
-        <Route path="/updateISIN" element={<UpdateISINPage />} />
-        <Route path="/cash-balance" element={<CashBalancePage />} />
-        <Route path="/reports" element={<ReportsPage />} />
-        <Route path="/master-client" element={<ClientPage />} />
-        <Route path="/master-security" element={<SecurityPage />} />
-      </Routes>
-    </HashRouter>
+    <JobNotificationProvider>
+      <HashRouter>
+        <NotificationTray />
+        <Routes>
+          <Route path="/" element={<DashboardPage />} />
+          <Route path="/analytics" element={<AnalyticsPage />} />
+          <Route path="/split" element={<SplitPage />} />
+          <Route path="/bonus" element={<BonusPage />} />
+          <Route path="/dividend" element={<DividendPage />} />
+          <Route path="/demerger" element={<DemergerPage />} />
+          <Route path="/merger" element={<MergerPage />} />
+          <Route path="/bhav-copy" element={<BhavCopyUploadPage />} />
+          {/* <Route path="/transaction-upload" element={<TransactionUploadPage />} /> */}
+          <Route path="/temp-transaction" element={<TempTransaction />} />
+          <Route path="/updateISIN" element={<UpdateISINPage />} />
+          <Route path="/cash-balance" element={<CashBalancePage />} />
+          <Route path="/reports" element={<ReportsPage />} />
+          <Route path="/master-client" element={<ClientPage />} />
+          <Route path="/master-security" element={<SecurityPage />} />
+        </Routes>
+      </HashRouter>
+    </JobNotificationProvider>
   );
 }
 
