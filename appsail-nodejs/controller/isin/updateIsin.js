@@ -232,6 +232,10 @@ export const postApplyNewISIN = async (req, res) => {
         isin: isinTrim,
         security_code: codeTrim,
         security_name: nameTrim,
+        // Same status_key pattern as the rename flow — lets /isin/job-status
+        // report a real SUCCESS/PARTIAL_FAILURE for this job instead of
+        // there being no tracked status at all (there previously wasn't one).
+        status_key: catalystJobName,
       },
     });
 

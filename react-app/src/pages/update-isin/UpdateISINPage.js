@@ -38,7 +38,6 @@ const UpdateISINPage = () => {
   const [scriptStatus, setScriptStatus] = useState("idle");
   /** @type {[BannerState, React.Dispatch<React.SetStateAction<BannerState>>]} */
   const [scriptBanner, setScriptBanner] = useState(null);
-  /** Pending poll timer + a cancel flag, so a stale poll can't update state after unmount/edit. */
   /** id of the currently tracked rename job in the shared notification system. */
   const [scriptJobId, setScriptJobId] = useState(null);
 
@@ -51,6 +50,8 @@ const UpdateISINPage = () => {
   const [newSecurityName, setNewSecurityName] = useState("");
   /** @type {[UpdateStatus, React.Dispatch<React.SetStateAction<UpdateStatus>>]} */
   const [applyStatus, setApplyStatus] = useState("idle");
+  /** id of the currently tracked apply-new job in the shared notification system. */
+  const [applyJobId, setApplyJobId] = useState(null);
   /** @type {[BannerState, React.Dispatch<React.SetStateAction<BannerState>>]} */
   const [applyBanner, setApplyBanner] = useState(null);
 
@@ -105,7 +106,7 @@ const UpdateISINPage = () => {
       setScriptStatus("completed");
       setScriptBanner({
         kind: "success",
-        text: job.message || "ISIN update completed — the database and holdings have been updated.",
+        text: job.message || "ISIN update completed — the database has been updated.",
       });
     } else if (job.status === "failed") {
       setScriptStatus("failure");
@@ -129,6 +130,41 @@ const UpdateISINPage = () => {
       });
     }
   }, [notificationJobs, scriptJobId]);
+
+  // Same pattern as the rename card above, for the Apply (New ISIN) job.
+  useEffect(() => {
+    if (!applyJobId) return;
+    const job = notificationJobs.find((j) => j.id === applyJobId);
+    if (!job) return;
+
+    if (job.status === "completed") {
+      setApplyStatus("completed");
+      setApplyBanner({
+        kind: "success",
+        text: job.message || "New ISIN apply completed — Security Code/Name updated.",
+      });
+    } else if (job.status === "failed") {
+      setApplyStatus("failure");
+      setApplyBanner({
+        kind: "error",
+        text: job.message || "New ISIN apply failed. Check the job logs before retrying.",
+      });
+    } else if (job.status === "partial_failure") {
+      setApplyStatus("failure");
+      setApplyBanner({
+        kind: "error",
+        text:
+          job.message ||
+          "Some columns could not be updated. Check the notification panel for details.",
+      });
+    } else if (job.status === "timeout") {
+      setApplyStatus("in_progress");
+      setApplyBanner({
+        kind: "success",
+        text: job.message || "Still processing — check the notification panel for updates.",
+      });
+    }
+  }, [notificationJobs, applyJobId]);
 
   const isinByKey = useMemo(() => {
     const m = new Map();
@@ -344,6 +380,10 @@ const UpdateISINPage = () => {
     }
 
     setApplyStatus("in_progress");
+    setApplyBanner({
+      kind: "success",
+      text: "New ISIN apply queued — checking progress…",
+    });
 
     try {
       const res = await fetch(`${ISIN_API_BASE}/isin/apply-new`, {
@@ -362,16 +402,25 @@ const UpdateISINPage = () => {
         throw new Error(data?.message || `Request failed (${res.status})`);
       }
 
-      const jobId = data?.jobId ?? data?.job_id;
-      console.log("ApplyNewISIN job submitted, jobId:", jobId);
+      const jobName = data?.catalystJobName;
+      console.log("ApplyNewISIN job submitted, catalystJobName:", jobName, "jobId:", data?.jobId);
 
-      setApplyStatus("completed");
-      setApplyBanner({
-        kind: "success",
-        text:
-          data?.message ||
-          "New ISIN apply queued. Security_Code / Security_Name will be updated where missing or different.",
-      });
+      if (jobName) {
+        setApplyJobId(jobName);
+        trackJob({
+          id: jobName,
+          label: `New ISIN apply: ${isinTrim}`,
+          statusUrl: `${ISIN_API_BASE}/isin/job-status?jobName=${encodeURIComponent(jobName)}`,
+        });
+        // Tracking now lives in the shared notification system — the effect
+        // above mirrors its result back into this card once it settles.
+      } else {
+        setApplyStatus("completed");
+        setApplyBanner({
+          kind: "success",
+          text: "New ISIN apply queued, but no job name was returned to track progress.",
+        });
+      }
     } catch (err) {
       setApplyStatus("failure");
       setApplyBanner({
