@@ -10,22 +10,33 @@
  *     merger/demerger old + new ISIN columns). See UpdateISINWorker/index.js.
  *
  *   mode = "apply-new" (params: isin, security_code?, security_name?, status_key?)
- *     Backs the "New ISIN" Apply panel. Syncs Security_Code / Security_Name
- *     for the given ISIN across NEW_ISIN_TARGETS. Per column, per row:
+ *     Backs the "New ISIN" Apply panel. First checks whether `isin` already
+ *     exists in Security_List:
+ *       - Doesn't exist yet → CREATE it: INSERT INTO Security_List with the
+ *         given ISIN/Code/Name (both are required in this case — a fresh
+ *         record can't be half-filled). This is just one extra step in front
+ *         of the same pipeline below, not a separate mode/code path.
+ *       - Already exists → today's behavior: at least one of Code/Name must
+ *         be given.
+ *     Either way, it then syncs Security_Code / Security_Name for that ISIN
+ *     across NEW_ISIN_TARGETS (Security_List + Transaction). Per column:
  *       - Skip if existing value already equals the new value.
  *       - Otherwise (NULL, empty, or different) → UPDATE.
- *     If a value param is blank/missing, that column is not touched at all
- *     (its progress row is marked DONE immediately — nothing to do).
+ *     (For a brand-new ISIN these syncs are harmless no-ops — Security_List
+ *     already has the right values from the INSERT, and Transaction has no
+ *     rows for an ISIN that never existed before.)
+ *     A value param that's blank/missing means that column is never touched.
  *     Column casing differs by table — handled per entry in NEW_ISIN_TARGETS.
  *
- *     Each of the (at most 4) column syncs gets up to TARGET_RETRY_ATTEMPTS
- *     tries before being marked FAILED — mirrors UpdateISINWorker's per-table
- *     retry-then-continue, just for this mode's much smaller target list.
- *     The Jobs row is finalized SUCCESS only if every attempted sync
- *     succeeded, PARTIAL_FAILURE otherwise (naming which column and why) —
- *     reusing the exact same progress-row naming ("<status_key>_t<index>")
- *     and job-status/failedTargets lookup already built for rename, so no
- *     frontend or appsail-nodejs changes are needed to read this mode's status.
+ *     Every step (the create, plus each column sync) gets up to
+ *     TARGET_RETRY_ATTEMPTS tries before being marked FAILED — mirrors
+ *     UpdateISINWorker's per-table retry-then-continue, just for this mode's
+ *     much smaller, dynamic-length step list. The Jobs row is finalized
+ *     SUCCESS only if every attempted step succeeded, PARTIAL_FAILURE
+ *     otherwise (naming which step and why) — reusing the exact same
+ *     progress-row naming ("<status_key>_t<index>") and job-status/
+ *     failedTargets lookup already built for rename, so no frontend or
+ *     appsail-nodejs endpoint changes are needed to read this mode's status.
  */
 
 const catalyst = require("zcatalyst-sdk-node");
@@ -143,6 +154,23 @@ async function runRenameMode(app, zcql, params) {
   console.log(`[UpdateISIN/rename] Worker queued (${workerJobName}) for "${oldIsin}" → "${newIsin}"`);
 }
 
+/** Deliberately lets a failure throw — if we can't tell whether the ISIN
+ * exists, we can't safely decide create-vs-update, so the job should fail
+ * outright here rather than guessing. */
+async function isinExistsInSecurityList(zcql, isin) {
+  const rows = await zcql.executeZCQLQuery(
+    `SELECT ROWID FROM Security_List WHERE ISIN = '${esc(isin)}' LIMIT 1`,
+  );
+  return !!(rows && rows.length);
+}
+
+async function insertNewSecurity(zcql, isin, code, name) {
+  await zcql.executeZCQLQuery(
+    `INSERT INTO Security_List (ISIN, Security_Code, Security_Name)
+     VALUES ('${esc(isin)}', '${esc(code)}', '${esc(name)}')`,
+  );
+}
+
 async function countRowsToSync(zcql, table, col, isin, newVal) {
   try {
     const rows = await zcql.executeZCQLQuery(
@@ -192,7 +220,19 @@ async function runApplyNewMode(zcql, params) {
   if (!isin) {
     throw new Error("Parameter isin is required for apply-new mode");
   }
-  if (!securityCode && !securityName) {
+
+  const exists = await isinExistsInSecurityList(zcql, isin);
+
+  if (!exists) {
+    // Creating a fresh record — a half-filled one isn't useful, so both
+    // are required (unlike updating an existing ISIN, where either alone
+    // is a valid correction).
+    if (!securityCode || !securityName) {
+      throw new Error(
+        "security_code and security_name are both required to create a new ISIN"
+      );
+    }
+  } else if (!securityCode && !securityName) {
     throw new Error(
       "At least one of security_code / security_name must be provided for apply-new mode"
     );
@@ -200,36 +240,54 @@ async function runApplyNewMode(zcql, params) {
 
   await ensureJobsRowRunning(zcql, statusKey);
 
-  // Fixed, known order so progress-row index 0..3 always means the same
-  // slot: Security_List.code, Security_List.name, Transaction.code,
-  // Transaction.name. A slot with no new value provided has nothing to do
-  // and is marked DONE immediately rather than attempted.
-  const slots = [];
+  // Dynamic, ordered list of steps for this run. Index order is what the
+  // progress rows key off, so it only needs to be consistent within a
+  // single run, not fixed across runs.
+  //   - Doesn't exist yet: step 0 creates it; the sync steps that follow
+  //     are then harmless no-ops (Security_List already holds the values
+  //     just inserted; Transaction has no rows yet for a brand-new ISIN) —
+  //     unless this ISIN's code/name genuinely needs correcting somewhere
+  //     else too, in which case they do real work.
+  //   - Already exists: no create step, just the sync steps, same as before.
+  const steps = [];
+
+  if (!exists) {
+    steps.push({
+      label: "Security_List (create)",
+      run: () => insertNewSecurity(zcql, isin, securityCode, securityName),
+    });
+  }
+
   for (const { table, codeCol, nameCol } of NEW_ISIN_TARGETS) {
-    slots.push({ table, col: codeCol, label: `${table}.${codeCol}`, newVal: securityCode });
-    slots.push({ table, col: nameCol, label: `${table}.${nameCol}`, newVal: securityName });
+    if (securityCode) {
+      steps.push({
+        label: `${table}.${codeCol}`,
+        run: () => syncColumn(zcql, table, codeCol, isin, securityCode),
+      });
+    }
+    if (securityName) {
+      steps.push({
+        label: `${table}.${nameCol}`,
+        run: () => syncColumn(zcql, table, nameCol, isin, securityName),
+      });
+    }
   }
 
   const summary = [];
   const failedTargets = [];
 
-  for (let i = 0; i < slots.length; i++) {
-    const { table, col, label, newVal } = slots[i];
+  for (let i = 0; i < steps.length; i++) {
+    const { label, run } = steps[i];
     const rowName = progressRowName(statusKey, i);
 
-    if (!newVal) {
-      await markTargetDone(zcql, rowName);
-      summary.push({ table, col, skipped: true });
-      continue;
-    }
-
     let attempts = 0;
-    let updated = -1;
+    let succeeded = false;
     let lastErr = "";
 
     while (attempts < TARGET_RETRY_ATTEMPTS) {
       try {
-        updated = await syncColumn(zcql, table, col, isin, newVal);
+        await run();
+        succeeded = true;
         break;
       } catch (err) {
         attempts++;
@@ -244,25 +302,25 @@ async function runApplyNewMode(zcql, params) {
       }
     }
 
-    if (updated < 0) {
-      console.error(`[UpdateISIN/apply-new] target FAILED: ${label} — ${lastErr}`);
+    if (!succeeded) {
+      console.error(`[UpdateISIN/apply-new] step FAILED: ${label} — ${lastErr}`);
       await markTargetFailed(zcql, rowName, label, lastErr);
       failedTargets.push({ label, error: lastErr });
-      summary.push({ table, col, failed: true, error: lastErr });
+      summary.push({ label, failed: true, error: lastErr });
       continue;
     }
 
     await markTargetDone(zcql, rowName);
-    summary.push({ table, col, updated });
+    summary.push({ label, done: true });
   }
 
   console.log(
-    `[UpdateISIN/apply-new] Done isin="${isin}" — ${JSON.stringify(summary)}`
+    `[UpdateISIN/apply-new] Done isin="${isin}" (created=${!exists}) — ${JSON.stringify(summary)}`
   );
 
   if (failedTargets.length > 0) {
     console.error(
-      `[UpdateISIN/apply-new] finished with ${failedTargets.length} failed sync(s): ` +
+      `[UpdateISIN/apply-new] finished with ${failedTargets.length} failed step(s): ` +
         failedTargets.map((f) => `${f.label} (${f.error})`).join("; "),
     );
     await finalizeJobsRow(zcql, statusKey, "PARTIAL_FAILURE");

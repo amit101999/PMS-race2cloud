@@ -172,11 +172,20 @@ export const postUpdateIsin = async (req, res) => {
 
 /**
  * POST /api/isin/apply-new
- * Queues the UpdateISIN job in "apply-new" mode (the "New ISIN" panel):
- * syncs Security_Code / Security_Name for the given ISIN across Security_List
- * and Transaction. Per-column rule:
- *   - Skip rows where the value already equals the new value.
- *   - Update everywhere else (NULL, empty, or different).
+ * Queues the UpdateISIN job in "apply-new" mode (the "New ISIN" panel).
+ *
+ * Checks whether `isin` already exists in Security_List and branches:
+ *   - Doesn't exist → this becomes a CREATE: Security Code and Security
+ *     Name are both required (a half-filled new record isn't useful), and
+ *     the job will INSERT a fresh Security_List row for it.
+ *   - Already exists → today's behavior: syncs Security_Code / Security_Name
+ *     across Security_List and Transaction, at least one of the two required.
+ *     Per-column rule: skip rows where the value already equals the new
+ *     value, update everywhere else (NULL, empty, or different).
+ *
+ * The existence check happens here too (not just inside the job) so a bad
+ * request is rejected immediately with a clear message, instead of the user
+ * waiting on a queued job that will fail asynchronously for the same reason.
  */
 export const postApplyNewISIN = async (req, res) => {
   try {
@@ -198,12 +207,6 @@ export const postApplyNewISIN = async (req, res) => {
         message: "ISIN is required.",
       });
     }
-    if (!codeTrim && !nameTrim) {
-      return res.status(400).json({
-        success: false,
-        message: "Provide at least one of Security Code or Security Name.",
-      });
-    }
 
     const zcql = req.catalystApp.zcql();
     const existsRows = await zcql.executeZCQLQuery(`
@@ -212,10 +215,20 @@ export const postApplyNewISIN = async (req, res) => {
       WHERE ISIN='${escSql(isinTrim)}'
       LIMIT 1
     `);
-    if (!existsRows?.length) {
+    const exists = Boolean(existsRows?.length);
+
+    if (!exists) {
+      if (!codeTrim || !nameTrim) {
+        return res.status(400).json({
+          success: false,
+          message:
+            "This ISIN doesn't exist yet. Security Code and Security Name are both required to create it.",
+        });
+      }
+    } else if (!codeTrim && !nameTrim) {
       return res.status(400).json({
         success: false,
-        message: "ISIN must exist in Security List.",
+        message: "Provide at least one of Security Code or Security Name.",
       });
     }
 
@@ -243,8 +256,9 @@ export const postApplyNewISIN = async (req, res) => {
 
     return res.status(200).json({
       success: true,
-      message:
-        "New ISIN apply queued; Security_Code / Security_Name will be updated where missing or different.",
+      message: exists
+        ? "New ISIN apply queued; Security_Code / Security_Name will be updated where missing or different."
+        : "New ISIN creation queued; it will be added to Security List and synced to Transaction records.",
       catalystJobName,
       jobId,
     });

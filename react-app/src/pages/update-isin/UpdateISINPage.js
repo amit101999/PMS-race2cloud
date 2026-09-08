@@ -352,14 +352,6 @@ const UpdateISINPage = () => {
       });
       return;
     }
-    if (!codeTrim && !nameTrim) {
-      setApplyStatus("failure");
-      setApplyBanner({
-        kind: "error",
-        text: "Provide at least one of Security Code or Security Name.",
-      });
-      return;
-    }
 
     if (isinsLoading) {
       setApplyStatus("failure");
@@ -370,11 +362,27 @@ const UpdateISINPage = () => {
       return;
     }
 
-    if (securityListIsins.length > 0 && !isinByKey.get(isinTrim.toUpperCase())) {
+    // Not found in the Security List we loaded → this Apply will CREATE a
+    // brand-new security instead of updating an existing one. A fresh
+    // record needs both fields; correcting an existing one only needs one.
+    const isNewIsin =
+      securityListIsins.length > 0 && !isinByKey.get(isinTrim.toUpperCase());
+
+    if (isNewIsin) {
+      if (!codeTrim || !nameTrim) {
+        setApplyStatus("failure");
+        setApplyBanner({
+          kind: "error",
+          text:
+            "This ISIN doesn't exist yet. Security Code and Security Name are both required to create it.",
+        });
+        return;
+      }
+    } else if (!codeTrim && !nameTrim) {
       setApplyStatus("failure");
       setApplyBanner({
         kind: "error",
-        text: "ISIN must match Security List. Type the full ISIN or pick a suggestion.",
+        text: "Provide at least one of Security Code or Security Name.",
       });
       return;
     }
@@ -382,7 +390,9 @@ const UpdateISINPage = () => {
     setApplyStatus("in_progress");
     setApplyBanner({
       kind: "success",
-      text: "New ISIN apply queued — checking progress…",
+      text: isNewIsin
+        ? "Creating new ISIN — checking progress…"
+        : "New ISIN apply queued — checking progress…",
     });
 
     try {
@@ -409,7 +419,7 @@ const UpdateISINPage = () => {
         setApplyJobId(jobName);
         trackJob({
           id: jobName,
-          label: `New ISIN apply: ${isinTrim}`,
+          label: isNewIsin ? `Create ISIN: ${isinTrim}` : `New ISIN apply: ${isinTrim}`,
           statusUrl: `${ISIN_API_BASE}/isin/job-status?jobName=${encodeURIComponent(jobName)}`,
         });
         // Tracking now lives in the shared notification system — the effect
@@ -771,8 +781,9 @@ const UpdateISINPage = () => {
             !isinsLoading &&
             !resolvedPanelNewRow &&
             panelNewSuggestions.length === 0 ? (
-              <span className="update-isin-resolution-warn" role="status">
-                No exact match in Security List for this ISIN.
+              <span className="update-isin-resolution-info" role="status">
+                This ISIN doesn't exist yet — it will be created as a new security. Security
+                Code and Security Name are both required.
               </span>
             ) : null}
           </div>
