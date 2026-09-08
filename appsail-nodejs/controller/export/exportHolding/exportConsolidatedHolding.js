@@ -1,5 +1,10 @@
 import { PassThrough } from "stream";
-import { calculateHoldingsSummary } from "./analyticsController.js";
+// Single source of truth, shared with the Analytics Holding tab — the export
+// used to call a near-identical local copy that never received the as-on-date
+// re-derivation, so a dated export disagreed with the screen it was taken from.
+// Matters doubly here: a consolidated total sums several per-scheme summaries,
+// so each one being stale compounds into the rolled-up figure.
+import { calculateHoldingsSummary } from "../../analytics/tabs/holding/AnalyticsControllers.js";
 import {
   fetchVirtualCodesByActual,
   consolidateSummaries,
