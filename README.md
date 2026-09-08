@@ -312,7 +312,7 @@ Applied consistently across **every** FIFO engine so all holding-building paths 
 
 | Layer | Files |
 |-------|-------|
-| Serverless (`functions/`) | `CalculateHoldingWorkers`, `CalculateHoldingPerAccount`, `RebuildHoldingtable/holdingsRebuildFromSources.js`, `HoldingUpdateManually`, `UpdateDividendData`, `UpdateBonusTable/fifo.js`, `MegerFn/fifo.js`, `ExportDividendAccounts/fifo.js`, `ExportDifferentialReport/fifo.js`, `ExportAllCustomerHoldingData/holdingsFromTable.js` |
+| Serverless (`functions/`) | `CalculateHoldingWorkers`, `CalculateHoldingPerAccount`, `RebuildHoldingtable/holdingsRebuildFromSources.js`, `HoldingUpdateManually`, `UpdateDividendData`, `MegerFn/fifo.js`, `ExportDividendAccounts/fifo.js`, `ExportDifferentialReport/fifo.js`, `ExportAllCustomerHoldingData/holdingsFromTable.js` |
 | API (`appsail-nodejs/`) | `util/analytics/transactionHistory/fifo.js`, `util/export/fifo.js`, `util/merger/lotFifo.js`, `util/analytics/holdingsFromTable.js`, dividend/split/bonus eligibility checks |
 
 **Important — this is dust hygiene, not business rounding.** Genuine fractional quantities (e.g. `5.533`) pass through untouched; only near-zero residue snaps to `0`. **Corporate-action rounding is intentional business logic and is NOT changed** — demerger/merger still use `Math.floor((Q1*r1)/r2)`, split/bonus keep their ratio + `round()`/`toFixed` rules.
@@ -781,7 +781,7 @@ functions/
 ├── Cal_CB_Append_TxnUpload/      # Incremental cash passbook after upload
 ├── Cal_CB_Per_TNX/               # Full cash passbook rebuild per account
 ├── CashCalculation/              # Daily Cash_Ledger incremental update
-├── UpdateBonusTable/             # Apply bonus + fifo.js
+├── UpdateBonusTable/             # Apply bonus + holdingsSnapshot.js
 ├── UpdateDividendData/           # Apply dividend + inline FIFO + cash rows
 ├── MegerFn/                      # Apply merger + fifo.js + bulk write
 ├── DemergerFn/                   # Apply demerger + demergerApplyCore.js
@@ -962,11 +962,11 @@ Standalone full rebuild with optional `pairsJson` scoping, `Jobs`/`JobStatusPerA
 1. Update `Jobs` status; per-account `JobStatusPerAccount` tracking.
 2. Idempotency: skip if `Bonus` row already exists for (ISIN, account, ExDate).
 3. `INSERT Bonus_Record` master row (once).
-4. Discover accounts with transactions for ISIN; run `fifo.js` `runFifoEngine` per account.
+4. Read the `Holdings` ledger as at the ex-date; re-derive each account position with `holdingsSnapshot.js` `recomputeHoldingsSnapshot` — same source and maths as the preview.
 5. `INSERT Bonus` rows for eligible accounts.
 6. Queue `RebuildHoldingtable` jobs (pool `CorporateActions`, 400 accounts/batch, scoped to affected ISIN).
 
-**Helper:** `fifo.js` — shared FIFO engine (SPLIT before BONUS priority).
+**Helper:** `holdingsSnapshot.js` — CommonJS port of `appsail-nodejs/util/analytics/holdingsFromTable.js` position maths. Replaced the local `fifo.js` raw-table replay, which was never given merger/demerger inputs and so under-granted (or skipped) accounts holding shares that arrived through a corporate action.
 
 #### `UpdateDividendData`
 
@@ -1088,7 +1088,8 @@ Scheduled cleanup: deletes `Jobs` rows with `CREATEDTIME` older than **10 days**
 | Function folder | Helpers |
 |-----------------|---------|
 | `RebuildHoldingtable` | `holdingsRebuildFromSources.js` — **canonical** full FIFO rebuild engine |
-| `UpdateBonusTable`, `MegerFn`, `ExportDividendAccounts`, `ExportDifferentialReport` | `fifo.js` |
+| `MegerFn`, `ExportDividendAccounts`, `ExportDifferentialReport` | `fifo.js` |
+| `UpdateBonusTable` | `holdingsSnapshot.js` — reads the `Holdings` ledger instead of replaying raw tables |
 | `DemergerFn` | `demergerApplyCore.js` |
 | `ExportDifferentialReport` | `differentialExport.js`, `diffLogic.js` (unused) |
 | `ExportAllCustomerHoldingData` | `allAccountCodes.js`, `analyticsController.js`, `holdingsFromTable.js` |
