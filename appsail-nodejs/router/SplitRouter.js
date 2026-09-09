@@ -3,6 +3,7 @@ import {
   addStockSplit,
   getAllSecuritiesISINs,
   previewStockSplit,
+  getSplitApplyStatus,
 } from "../controller/uploader/SplitController.js";
 import { exportSplitPreviewFile } from "../controller/export/exportSplit/exportSplitFile.js";
 const router = express.Router();
@@ -12,4 +13,5 @@ router.post("/preview", previewStockSplit);
 
 router.get("/getAllSecuritiesList", getAllSecuritiesISINs);
 router.get("/export-preview", exportSplitPreviewFile);
+router.get("/job-status", getSplitApplyStatus);
 export default router;

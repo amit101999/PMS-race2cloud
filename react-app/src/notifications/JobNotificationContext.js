@@ -85,6 +85,7 @@ export function JobNotificationProvider({ children }) {
       id,
       label,
       statusUrl,
+      message = null,
       interval = DEFAULT_POLL_INTERVAL_MS,
       timeoutMs = DEFAULT_TIMEOUT_MS,
       parseStatus = defaultParseStatus,
@@ -101,7 +102,8 @@ export function JobNotificationProvider({ children }) {
         id,
         label: label || id,
         status: "in_progress",
-        message: null,
+        // Optional opening sentence shown while the job is still running.
+        message: message ?? null,
         detail: null,
         startedAt,
         updatedAt: startedAt,
