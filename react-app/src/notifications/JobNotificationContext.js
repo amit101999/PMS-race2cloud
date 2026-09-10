@@ -6,188 +6,150 @@ import React, {
   useRef,
   useState,
 } from "react";
+import { BASE_URL } from "../constant";
 
 /**
- * Generic background-job notification system.
+ * Background-job notification bell — backed by the server.
  *
- * Any page can call `trackJob({ id, label, statusUrl })` when it kicks off a
- * long-running background job (an ISIN rename, a bulk export, a report
- * generation — anything with a "check status" endpoint). This provider owns
- * the poll loop itself, independent of whichever page is currently mounted,
- * so the job keeps being tracked — and is visible via <NotificationTray /> —
- * even after the user navigates away from the page that started it.
+ * Any page calls `trackJob({ id, label, message })` when it starts a
+ * long-running background job, or `reportJob({ id, label, status, message })`
+ * for work that finished right away. Both write one row to the `Notifications`
+ * table (via /api/notifications), keyed by `id` (the job / track key).
  *
- * Not specific to ISIN or any one feature: `statusUrl` + an optional
- * `parseStatus` is all a caller needs to supply. Mount <JobNotificationProvider>
- * once, above the router, so it survives route changes for the whole session.
+ * The list lives on the server, so it is the same for every admin and survives
+ * a page refresh. This provider just polls `GET /api/notifications` (newest 5)
+ * on a shared loop — faster while something is still running. The row itself is
+ * settled to completed / failed server-side by reconciling against the `Jobs`
+ * table each job already updates, so it finishes correctly even if the tab that
+ * started it was closed.
+ *
+ * Mount <JobNotificationProvider> once, above the router.
  */
 
 const JobNotificationContext = createContext(null);
 
-const DEFAULT_POLL_INTERVAL_MS = 5000;
-const DEFAULT_TIMEOUT_MS = 20 * 60 * 1000; // 20 minutes
+const ENDPOINT = `${BASE_URL}/notifications`;
+const ACTIVE_POLL_MS = 5000; // something is still running
+const IDLE_POLL_MS = 20000; // everything settled — just keep the list fresh
 
-/**
- * Default response parser — matches the shape returned by
- * GET /api/isin/job-status (jobStatus: SUCCESSFUL | FAILURE | PARTIAL_FAILURE
- * | IN_PROGRESS, plus an optional failedTargets list). Callers tracking a
- * different kind of job can pass their own `parseStatus(data)` instead.
- */
-function defaultParseStatus(data) {
-  const raw = String(data?.jobStatus ?? "").toUpperCase();
-  if (raw === "SUCCESSFUL") {
-    return { status: "completed", message: data?.message || null };
-  }
-  if (raw === "FAILURE") {
-    return { status: "failed", message: data?.message || null };
-  }
-  if (raw === "PARTIAL_FAILURE") {
-    const failedTargets = Array.isArray(data?.failedTargets) ? data.failedTargets : [];
-    const names = failedTargets.map((f) => f?.table).filter(Boolean).join(", ");
-    return {
-      status: "partial_failure",
-      message: names ? `Could not update: ${names}` : "Completed with some failures.",
-      detail: failedTargets,
-    };
-  }
-  return { status: "in_progress", message: null };
+function mapRow(n) {
+  return {
+    id: n.jobName || n.rowId, // pages match by their own job key
+    rowId: n.rowId,
+    label: n.title || n.jobName || "Task",
+    message: n.message || null,
+    status: n.status || "in_progress",
+    updatedAt: n.updatedAt || Date.now(),
+  };
 }
 
 export function JobNotificationProvider({ children }) {
-  const [jobs, setJobs] = useState([]); // most-recent-first
-  const timersRef = useRef(new Map()); // id -> timeout handle
-  const cancelledRef = useRef(new Set()); // ids whose poll loop should stop
-
-  const stopPolling = useCallback((id) => {
-    cancelledRef.current.add(id);
-    const t = timersRef.current.get(id);
-    if (t) {
-      clearTimeout(t);
-      timersRef.current.delete(id);
-    }
-  }, []);
+  const [jobs, setJobs] = useState([]); // newest first, max 5
+  const jobsRef = useRef([]);
+  const timerRef = useRef(null);
+  const mountedRef = useRef(true);
 
   useEffect(() => {
-    // Stop every poll loop if the provider itself ever unmounts (app close).
-    const timers = timersRef.current;
+    jobsRef.current = jobs;
+  }, [jobs]);
+
+  const applyList = useCallback((list) => {
+    if (!mountedRef.current) return;
+    setJobs((Array.isArray(list) ? list : []).map(mapRow));
+  }, []);
+
+  const refresh = useCallback(async () => {
+    try {
+      const res = await fetch(ENDPOINT, { method: "GET", credentials: "include" });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data?.success) applyList(data.notifications);
+    } catch (e) {
+      console.warn("[JobNotifications] refresh failed:", e);
+    }
+  }, [applyList]);
+
+  // One shared poll loop for the whole app.
+  useEffect(() => {
+    mountedRef.current = true;
+    const tick = async () => {
+      if (document.visibilityState === "visible") await refresh();
+      if (!mountedRef.current) return;
+      const anyActive = jobsRef.current.some((j) => j.status === "in_progress");
+      timerRef.current = setTimeout(tick, anyActive ? ACTIVE_POLL_MS : IDLE_POLL_MS);
+    };
+    tick();
     return () => {
-      for (const t of timers.values()) clearTimeout(t);
-      timers.clear();
+      mountedRef.current = false;
+      if (timerRef.current) clearTimeout(timerRef.current);
     };
-  }, []);
+  }, [refresh]);
 
-  const updateJob = useCallback((id, patch) => {
-    setJobs((prev) => prev.map((j) => (j.id === id ? { ...j, ...patch, updatedAt: Date.now() } : j)));
-  }, []);
+  const post = useCallback(
+    async (body) => {
+      try {
+        const res = await fetch(ENDPOINT, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify(body),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (res.ok && data?.success) applyList(data.notifications);
+        else refresh();
+      } catch (e) {
+        console.warn("[JobNotifications] save failed:", e);
+      }
+    },
+    [applyList, refresh],
+  );
 
+  /** Long-running job: shows "in progress" until the server settles the row. */
   const trackJob = useCallback(
-    ({
-      id,
-      label,
-      statusUrl,
-      message = null,
-      interval = DEFAULT_POLL_INTERVAL_MS,
-      timeoutMs = DEFAULT_TIMEOUT_MS,
-      parseStatus = defaultParseStatus,
-      fetchOptions = { method: "GET", credentials: "include" },
-    }) => {
-      if (!id || !statusUrl) return;
-
-      // A fresh tracking call for this id restarts its poll loop.
-      stopPolling(id);
-      cancelledRef.current.delete(id);
-
-      const startedAt = Date.now();
-      const entry = {
-        id,
-        label: label || id,
-        status: "in_progress",
-        // Optional opening sentence shown while the job is still running.
-        message: message ?? null,
-        detail: null,
-        startedAt,
-        updatedAt: startedAt,
-      };
-
-      setJobs((prev) => [entry, ...prev.filter((j) => j.id !== id)]);
-
-      const tick = async () => {
-        if (cancelledRef.current.has(id)) return;
-
-        try {
-          const res = await fetch(statusUrl, fetchOptions);
-          const data = await res.json().catch(() => ({}));
-          if (!res.ok) {
-            throw new Error(data?.message || `Status check failed (${res.status})`);
-          }
-
-          const parsed = parseStatus(data) || {};
-          if (parsed.status && parsed.status !== "in_progress") {
-            if (!cancelledRef.current.has(id)) {
-              updateJob(id, {
-                status: parsed.status,
-                message: parsed.message ?? null,
-                detail: parsed.detail ?? null,
-              });
-            }
-            return; // terminal — stop polling
-          }
-        } catch (e) {
-          // A single failed status check shouldn't end the whole flow — keep
-          // polling until the timeout below.
-          console.warn(`[JobNotifications] poll error for '${id}':`, e);
-        }
-
-        if (cancelledRef.current.has(id)) return;
-
-        if (Date.now() - startedAt > timeoutMs) {
-          updateJob(id, {
-            status: "timeout",
-            message: "Still processing — this is taking longer than usual. Check back later.",
-          });
-          return;
-        }
-
-        const t = setTimeout(tick, interval);
-        timersRef.current.set(id, t);
-      };
-
-      tick();
+    ({ id, label, message = null }) => {
+      if (!id || !label) return;
+      post({ jobName: String(id), title: label, message, status: "in_progress" });
     },
-    [stopPolling, updateJob],
+    [post],
   );
 
-  /**
-   * Push a one-shot entry that has no "check status" endpoint to poll — for
-   * work that finishes synchronously (an instant CSV export, say). Callers pass
-   * a terminal `status` ('completed' | 'failed' | …) and a `message` sentence.
-   */
-  const reportJob = useCallback(({ id, label, status, message = null, detail = null }) => {
-    if (!id || !status) return;
-    stopPolling(id); // in case an id is reused
-    const now = Date.now();
-    const entry = {
-      id,
-      label: label || id,
-      status,
-      message,
-      detail,
-      startedAt: now,
-      updatedAt: now,
-    };
-    setJobs((prev) => [entry, ...prev.filter((j) => j.id !== id)]);
-  }, [stopPolling]);
+  /** Work that already finished: pass a terminal status ("completed" | "failed" | …). */
+  const reportJob = useCallback(
+    ({ id, label, status, message = null }) => {
+      if (!id || !label || !status) return;
+      post({ jobName: String(id), title: label, message, status });
+    },
+    [post],
+  );
 
-  /** Remove a job from the tray (and stop polling it if still active). */
   const dismissJob = useCallback(
-    (id) => {
-      stopPolling(id);
-      setJobs((prev) => prev.filter((j) => j.id !== id));
+    (rowId) => {
+      if (!rowId) return;
+      fetch(`${ENDPOINT}/${encodeURIComponent(rowId)}`, {
+        method: "DELETE",
+        credentials: "include",
+      })
+        .then((r) => r.json())
+        .catch(() => ({}))
+        .then((data) => (data?.success ? applyList(data.notifications) : refresh()));
     },
-    [stopPolling],
+    [applyList, refresh],
   );
 
-  const value = { jobs, trackJob, reportJob, dismissJob };
+  const clearAll = useCallback(() => {
+    const ids = jobsRef.current.map((j) => j.rowId).filter(Boolean);
+    if (!ids.length) return;
+    fetch(`${ENDPOINT}/clear`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify({ ids }),
+    })
+      .then((r) => r.json())
+      .catch(() => ({}))
+      .then((data) => (data?.success ? applyList(data.notifications) : refresh()));
+  }, [applyList, refresh]);
+
+  const value = { jobs, trackJob, reportJob, dismissJob, clearAll, refresh };
 
   return (
     <JobNotificationContext.Provider value={value}>{children}</JobNotificationContext.Provider>
