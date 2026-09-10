@@ -5,7 +5,13 @@ const { runDemergerApply, DEMERGER_JOB_TYPE_DEFAULT } = require("./demergerApply
 
 const REBUILD_BATCH = 400;
 
-async function queueRebuildHoldingsJobs(catalystApp, accountCodes, source, isins) {
+async function queueRebuildHoldingsJobs(
+  catalystApp,
+  accountCodes,
+  source,
+  isins,
+  caTrackKey = "",
+) {
   const uniq = [...new Set(accountCodes)]
     .map((a) => String(a || "").trim())
     .filter(Boolean);
@@ -22,9 +28,33 @@ async function queueRebuildHoldingsJobs(catalystApp, accountCodes, source, isins
     .filter(Boolean);
 
   const scheduling = catalystApp.jobScheduling();
+  const zcql = catalystApp.zcql();
   for (let i = 0; i < uniq.length; i += REBUILD_BATCH) {
     const chunk = uniq.slice(i, i + REBUILD_BATCH);
     const catalystJobName = `H${Date.now()}${i}`.slice(0, 20);
+    const jobParams = {
+      accountCodesJson: JSON.stringify(chunk),
+      source,
+      ...(scopedIsins.length ? { isinsJson: JSON.stringify(scopedIsins) } : {}),
+    };
+
+    // Notification: register a piece for this chunk under the demerger's track
+    // key BEFORE the "_root" placeholder is flipped, so the parent can't read
+    // "all done" while this rebuild is still pending.
+    if (caTrackKey) {
+      const childSubId = `${caTrackKey}_dh${Date.now()}_${i}`;
+      try {
+        await zcql.executeZCQLQuery(
+          `INSERT INTO JobStatusPerAccount (jobType, WS_Account_code, status, lastError, jobName) ` +
+            `VALUES ('DEMERGER_APPLY', '${esc(childSubId)}', 'RUNNING', '', '${esc(caTrackKey)}')`,
+        );
+        jobParams.caTrackKey = caTrackKey;
+        jobParams.caSubId = childSubId;
+      } catch (e) {
+        console.warn(`[DemergerFn] child piece insert failed (${childSubId}):`, e.message);
+      }
+    }
+
     await scheduling.JOB.submitJob({
       job_name: catalystJobName,
       jobpool_name: "CorporateActions",
@@ -35,18 +65,52 @@ async function queueRebuildHoldingsJobs(catalystApp, accountCodes, source, isins
         number_of_retries: 5,
         retry_interval: 60 * 1000,
       },
-      params: {
-        accountCodesJson: JSON.stringify(chunk),
-        source,
-        ...(scopedIsins.length
-          ? { isinsJson: JSON.stringify(scopedIsins) }
-          : {}),
-      },
+      params: jobParams,
     });
   }
 }
 
 const esc = (v) => String(v ?? "").replace(/'/g, "''");
+
+/**
+ * "Apply Demerger" notification progress (params.caTrackKey / caSubId, set by
+ * DemergerController — no-op otherwise). Flips this run's placeholder piece in
+ * `JobStatusPerAccount` (jobName = trackKey, WS_Account_code = subId) to
+ * SUCCESS / FAILED, then settles the parent `Jobs` row named with the trackKey
+ * once no piece for it is still RUNNING. The rebuild jobs this demerger spawns
+ * register their own pieces (see queueRebuildHoldingsJobs) BEFORE this
+ * placeholder is flipped, so the parent can't read "all done" early.
+ */
+async function settleCaTrackPiece(zcql, trackKey, subId, outcome) {
+  if (!trackKey || !subId) return;
+  const pieceStatus = outcome === "SUCCESS" ? "SUCCESS" : "FAILED";
+  try {
+    await zcql.executeZCQLQuery(
+      `UPDATE JobStatusPerAccount SET status = '${esc(pieceStatus)}', ` +
+        `lastError = '${pieceStatus === "FAILED" ? "demerger apply failed" : ""}' ` +
+        `WHERE jobName = '${esc(trackKey)}' AND WS_Account_code = '${esc(subId)}'`,
+    );
+  } catch (e) {
+    console.warn(`[DemergerFn] ca-track mark '${subId}' ${pieceStatus} failed:`, e.message);
+    return;
+  }
+  try {
+    const running = await zcql.executeZCQLQuery(
+      `SELECT status FROM JobStatusPerAccount WHERE jobName = '${esc(trackKey)}' AND status = 'RUNNING' LIMIT 1`,
+    );
+    if (running && running.length) return;
+    const failed = await zcql.executeZCQLQuery(
+      `SELECT status FROM JobStatusPerAccount WHERE jobName = '${esc(trackKey)}' AND status = 'FAILED' LIMIT 1`,
+    );
+    const parentStatus = failed && failed.length ? "COMPLETED_WITH_ERRORS" : "COMPLETED";
+    await zcql.executeZCQLQuery(
+      `UPDATE Jobs SET status = '${parentStatus}' WHERE jobName = '${esc(trackKey)}'`,
+    );
+    console.log(`[DemergerFn] ca track '${trackKey}' finalized as ${parentStatus}`);
+  } catch (e) {
+    console.warn(`[DemergerFn] ca-track finalize '${trackKey}' failed:`, e.message);
+  }
+}
 
 async function setJobStatus(zcql, jobName, status) {
   if (!jobName) return;
@@ -64,11 +128,17 @@ module.exports = async (jobRequest, context) => {
   const zcql = catalystApp.zcql();
 
   let jobName = "";
+  // "Apply Demerger" notification tracking (see settleCaTrackPiece). caSubId is
+  // this run's "_root" placeholder piece.
+  let caTrackKey = "";
+  let caSubId = "";
   const startedAt = Date.now();
 
   try {
     const params = jobRequest.getAllJobParams();
     jobName = String(params.jobName || "").trim();
+    caTrackKey = String(params.caTrackKey || "").trim();
+    caSubId = String(params.caSubId || "").trim();
     const demergerJobType =
       String(params.jobType || "").trim() || DEMERGER_JOB_TYPE_DEFAULT;
 
@@ -130,6 +200,7 @@ module.exports = async (jobRequest, context) => {
     ) {
       console.error("[DemergerFn] Invalid params");
       await setJobStatus(zcql, jobName, "FAILED");
+      await settleCaTrackPiece(zcql, caTrackKey, caSubId, "FAILURE");
       context.closeWithFailure();
       return;
     }
@@ -167,6 +238,7 @@ module.exports = async (jobRequest, context) => {
           applyResult.accountsAffected,
           "DemergerFn",
           [oldIsin, newIsin],
+          caTrackKey,
         );
         console.log(
           "[DemergerFn] Queued RebuildHoldingtable for",
@@ -176,21 +248,34 @@ module.exports = async (jobRequest, context) => {
       } catch (rbErr) {
         console.error("[DemergerFn] Queue holdings rebuild failed:", rbErr);
         await setJobStatus(zcql, jobName, "FAILED");
+        await settleCaTrackPiece(zcql, caTrackKey, caSubId, "FAILURE");
         context.closeWithFailure();
         return;
       }
     }
 
     console.log(`[DemergerFn] Done in ${Date.now() - startedAt}ms`);
-    await setJobStatus(
+    const finalMerged =
+      applyResult.trackingFailures > 0 ? "FAILED" : "COMPLETED";
+    await setJobStatus(zcql, jobName, finalMerged);
+    // The rebuild jobs above carry their own pieces now — release the
+    // placeholder so the parent settles once those pieces finish (or right
+    // away if there were no accounts to rebuild).
+    await settleCaTrackPiece(
       zcql,
-      jobName,
-      applyResult.trackingFailures > 0 ? "FAILED" : "COMPLETED",
+      caTrackKey,
+      caSubId,
+      finalMerged === "FAILED" ? "FAILURE" : "SUCCESS",
     );
     context.closeWithSuccess();
   } catch (error) {
     console.error("[DemergerFn] FATAL:", error);
     await setJobStatus(zcql, jobName, "FAILED");
+    try {
+      await settleCaTrackPiece(zcql, caTrackKey, caSubId, "FAILURE");
+    } catch (trackErr) {
+      console.error("[DemergerFn] settle ca-track piece failed:", trackErr);
+    }
     context.closeWithFailure();
   }
 };

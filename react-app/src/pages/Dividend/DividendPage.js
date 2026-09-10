@@ -3,6 +3,25 @@ import MainLayout from "../../layouts/MainLayout";
 import { Card } from "../../components/common/CommonComponents";
 import "./DividendPage.css";
 import { BASE_URL } from "../../constant";
+import { useJobNotifications } from "../../notifications/JobNotificationContext";
+
+/** Maps GET /dividend/apply-status → the notification system's vocabulary. */
+function parseDividendStatus(d) {
+  const s = String(d?.status ?? "").toUpperCase();
+  if (s === "COMPLETED") {
+    return {
+      status: "completed",
+      message: "The dividend has been applied to all affected accounts.",
+    };
+  }
+  if (s === "FAILED" || s === "ERROR") {
+    return {
+      status: "failed",
+      message: "The dividend could not be completed. Please try again.",
+    };
+  }
+  return { status: "in_progress", message: null };
+}
 
 /**
  * Friendly labels for the per-row reconciliation status produced by
@@ -93,6 +112,8 @@ function DividendPage() {
   const custodianInputRef = useRef(null);
 
   const dropdownRef = useRef(null);
+
+  const { trackJob } = useJobNotifications();
 
   useEffect(() => setPage(1), [reconEvents, statusFilter, activeEvent]);
 
@@ -540,6 +561,20 @@ function DividendPage() {
       }
       setApplyJobName(data.jobName);
       setApplyStatus(data.status || "PENDING");
+
+      // Bell notification: "in progress" until the background job finishes.
+      // (UpdateDividendData is one self-contained job — no rebuild fan-out — so
+      // the existing apply-status endpoint already reports the true end state.)
+      trackJob({
+        id: data.jobName,
+        label: `Dividend — ${symbol || isin || "security"}`,
+        message: "Your dividend task has been submitted.",
+        statusUrl: `${BASE_URL}/dividend/apply-status?jobName=${encodeURIComponent(
+          data.jobName,
+        )}`,
+        parseStatus: parseDividendStatus,
+        timeoutMs: 45 * 60 * 1000,
+      });
     } catch (err) {
       console.error(err);
       setError("Failed to apply dividend");

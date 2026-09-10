@@ -1,12 +1,21 @@
 /**
  * GET /api/isin/security-list-isins — ISINs from Security_List (dropdown data).
- * POST /api/isin/update — Queues UpdateISIN job; old ISIN must exist in Security_List.
+ * POST /api/isin/update — Queues UpdateISIN job; old ISIN must exist in Security_List
+ * and new ISIN must not already be assigned to a security.
  * The job replaces the old ISIN with the new one across all relevant database tables.
  */
 
 /** Catalyst console mein jis job pool mein "UpdateISIN" function add hai, wahi naam yahan hona chahiye. */
 const UPDATE_ISIN_JOBPOOL = "UpdateMasters";
 const SECURITY_LIST_BATCH = 270;
+
+/**
+ * Must match ISIN_TARGETS.length in functions/UpdateISINWorker/index.js.
+ * Used to build the exact "<jobName>_t0".."_t(N-1)" progress-row names to
+ * fetch via `IN (...)` — ZCQL's LIKE does not support `%` wildcards (it
+ * silently matches nothing), so a "<jobName>_t%" prefix lookup can't be used.
+ */
+const RENAME_TARGET_COUNT = 16;
 
 const escSql = (value) => String(value ?? "").replace(/'/g, "''");
 
@@ -111,6 +120,19 @@ export const postUpdateIsin = async (req, res) => {
       });
     }
 
+    const newIsinRows = await zcql.executeZCQLQuery(`
+      SELECT ROWID
+      FROM Security_List
+      WHERE ISIN='${escSql(newTrim)}'
+      LIMIT 1
+    `);
+    if (newIsinRows?.length) {
+      return res.status(400).json({
+        success: false,
+        message: "New ISIN is already assigned to a security in Security List.",
+      });
+    }
+
     const catalystApp = req.catalystApp;
 
     // Catalyst submitJob: job_name must be 1–20 characters (not the Stratus object key).
@@ -150,11 +172,20 @@ export const postUpdateIsin = async (req, res) => {
 
 /**
  * POST /api/isin/apply-new
- * Queues the UpdateISIN job in "apply-new" mode (the "New ISIN" panel):
- * syncs Security_Code / Security_Name for the given ISIN across Security_List
- * and Transaction. Per-column rule:
- *   - Skip rows where the value already equals the new value.
- *   - Update everywhere else (NULL, empty, or different).
+ * Queues the UpdateISIN job in "apply-new" mode (the "New ISIN" panel).
+ *
+ * Checks whether `isin` already exists in Security_List and branches:
+ *   - Doesn't exist → this becomes a CREATE: Security Code and Security
+ *     Name are both required (a half-filled new record isn't useful), and
+ *     the job will INSERT a fresh Security_List row for it.
+ *   - Already exists → today's behavior: syncs Security_Code / Security_Name
+ *     across Security_List and Transaction, at least one of the two required.
+ *     Per-column rule: skip rows where the value already equals the new
+ *     value, update everywhere else (NULL, empty, or different).
+ *
+ * The existence check happens here too (not just inside the job) so a bad
+ * request is rejected immediately with a clear message, instead of the user
+ * waiting on a queued job that will fail asynchronously for the same reason.
  */
 export const postApplyNewISIN = async (req, res) => {
   try {
@@ -176,12 +207,6 @@ export const postApplyNewISIN = async (req, res) => {
         message: "ISIN is required.",
       });
     }
-    if (!codeTrim && !nameTrim) {
-      return res.status(400).json({
-        success: false,
-        message: "Provide at least one of Security Code or Security Name.",
-      });
-    }
 
     const zcql = req.catalystApp.zcql();
     const existsRows = await zcql.executeZCQLQuery(`
@@ -190,10 +215,20 @@ export const postApplyNewISIN = async (req, res) => {
       WHERE ISIN='${escSql(isinTrim)}'
       LIMIT 1
     `);
-    if (!existsRows?.length) {
+    const exists = Boolean(existsRows?.length);
+
+    if (!exists) {
+      if (!codeTrim || !nameTrim) {
+        return res.status(400).json({
+          success: false,
+          message:
+            "This ISIN doesn't exist yet. Security Code and Security Name are both required to create it.",
+        });
+      }
+    } else if (!codeTrim && !nameTrim) {
       return res.status(400).json({
         success: false,
-        message: "ISIN must exist in Security List.",
+        message: "Provide at least one of Security Code or Security Name.",
       });
     }
 
@@ -210,6 +245,10 @@ export const postApplyNewISIN = async (req, res) => {
         isin: isinTrim,
         security_code: codeTrim,
         security_name: nameTrim,
+        // Same status_key pattern as the rename flow — lets /isin/job-status
+        // report a real SUCCESS/PARTIAL_FAILURE for this job instead of
+        // there being no tracked status at all (there previously wasn't one).
+        status_key: catalystJobName,
       },
     });
 
@@ -217,8 +256,9 @@ export const postApplyNewISIN = async (req, res) => {
 
     return res.status(200).json({
       success: true,
-      message:
-        "New ISIN apply queued; Security_Code / Security_Name will be updated where missing or different.",
+      message: exists
+        ? "New ISIN apply queued; Security_Code / Security_Name will be updated where missing or different."
+        : "New ISIN creation queued; it will be added to Security List and synced to Transaction records.",
       catalystJobName,
       jobId,
     });
@@ -259,9 +299,43 @@ export const getIsinUpdateJobStatus = async (req, res) => {
         jobStatus = "SUCCESSFUL";
       } else if (["FAILURE", "FAILED", "ERROR"].includes(st)) {
         jobStatus = "FAILURE";
+      } else if (st === "PARTIAL_FAILURE") {
+        // Rename finished, but one or more tables couldn't be updated even
+        // after retries — a terminal state, distinct from a full FAILURE.
+        // No automatic/manual retry for this run; surface which table(s)
+        // failed and why, using the per-target progress rows the worker
+        // wrote as "<jobName>_t<index>" (see UpdateISINWorker).
+        jobStatus = "PARTIAL_FAILURE";
       } else {
         jobStatus = st || "IN_PROGRESS";
       }
+
+      if (jobStatus === "PARTIAL_FAILURE") {
+        // Exact-match IN (...) over the fixed, known set of target indices —
+        // NOT `LIKE '<jobName>_t%'`. ZCQL's LIKE does not support % wildcards
+        // (it silently matches zero rows rather than erroring), which would
+        // make this always come back empty.
+        const targetNames = [];
+        for (let i = 0; i < RENAME_TARGET_COUNT; i++) {
+          targetNames.push(`'${escSql(jobName)}_t${i}'`);
+        }
+        const progressRows = await req.catalystApp.zcql().executeZCQLQuery(`
+          SELECT status FROM Jobs WHERE jobName IN (${targetNames.join(",")})
+        `);
+        const failedTargets = (progressRows || [])
+          .map((r) => r?.Jobs ?? r)
+          .filter((r) => String(r?.status ?? "").toUpperCase().startsWith("FAILED"))
+          .map((r) => {
+            // status = "FAILED:<table>:<error>"
+            const body = String(r?.status ?? "").replace(/^FAILED:/i, "");
+            const sepIdx = body.indexOf(":");
+            const table = (sepIdx >= 0 ? body.slice(0, sepIdx) : body) || "(unknown table)";
+            const error = sepIdx >= 0 ? body.slice(sepIdx + 1) : "";
+            return { table, error };
+          });
+        return res.status(200).json({ success: true, jobName, jobStatus, failedTargets });
+      }
+
       return res.status(200).json({ success: true, jobName, jobStatus });
     }
 

@@ -1,6 +1,8 @@
 import React, { useEffect, useRef, useState, useMemo } from "react";
 import { useAccountCodes } from "../../../hooks/GetAllCodes.js";
 import { BASE_URL } from "../../../constant.js";
+import { useJobNotifications } from "../../../notifications/JobNotificationContext";
+import { parseReportStatus } from "../../../notifications/reportJobStatus";
 
 /** Local wall time as yyyy-mm-dd HH:mm:ss (not locale-specific). */
 function formatExportTimestamp(iso) {
@@ -36,6 +38,7 @@ function CashTab() {
   const exportJobsRef = useRef(exportJobs);
   exportJobsRef.current = exportJobs;
   const { clientOptions } = useAccountCodes();
+  const { trackJob, reportJob } = useJobNotifications();
 
   const filteredOptions = useMemo(() => {
     return clientOptions.filter((opt) =>
@@ -128,8 +131,22 @@ function CashTab() {
             ...prev,
           ];
         });
+
+        trackJob({
+          id: jobName,
+          label: `Cash export — All clients, as on ${asOnDate}`,
+          statusUrl: `${BASE_URL}/export/cash-all/status?asOnDate=${encodeURIComponent(asOnDate)}`,
+          parseStatus: (d) => parseReportStatus(d),
+        });
       } catch (error) {
-        alert(error instanceof Error ? error.message : "Export failed");
+        const msg = error instanceof Error ? error.message : "Export failed";
+        alert(msg);
+        reportJob({
+          id: `cash-all-error-${Date.now()}`,
+          label: `Cash export — All clients, as on ${asOnDate}`,
+          status: "failed",
+          message: msg,
+        });
       } finally {
         setLoading(false);
       }
@@ -182,9 +199,23 @@ function CashTab() {
         ];
       });
 
+      trackJob({
+        id: jobName,
+        label: `Cash export — Account ${accountCode}`,
+        statusUrl: `${BASE_URL}/cash-balance/export/status?jobName=${encodeURIComponent(jobName)}`,
+        parseStatus: (d) => parseReportStatus(d),
+      });
+
       setLoading(false);
     } catch (error) {
-      alert(error instanceof Error ? error.message : "Export failed");
+      const msg = error instanceof Error ? error.message : "Export failed";
+      alert(msg);
+      reportJob({
+        id: `cash-single-error-${Date.now()}`,
+        label: `Cash export — Account ${accountCode}`,
+        status: "failed",
+        message: msg,
+      });
       setLoading(false);
     }
   };

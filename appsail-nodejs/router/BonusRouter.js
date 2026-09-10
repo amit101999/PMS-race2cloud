@@ -4,6 +4,7 @@ import {
   previewStockBonus,
   applyStockBonus,
   getBonusApplyStatus,
+  getBonusApplyProgress,
 } from "../controller/BonusController.js";
 import { exportBonusPreviewFile } from "../controller/export/exportBonus/exportBonusFile.js";
 
@@ -14,5 +15,6 @@ router.post("/preview", previewStockBonus);
 router.get("/export-preview", exportBonusPreviewFile);
 router.post("/apply", applyStockBonus);
 router.get("/apply-status", getBonusApplyStatus);
+router.get("/apply-progress", getBonusApplyProgress);
 
 export default router;

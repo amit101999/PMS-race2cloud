@@ -5,6 +5,25 @@ import MainLayout from "../../layouts/MainLayout";
 import { Card } from "../../components/common/CommonComponents";
 import "./SplitPage.css";
 import { BASE_URL } from "../../constant";
+import { useJobNotifications } from "../../notifications/JobNotificationContext";
+
+/** Maps GET /split/job-status → the notification system's vocabulary. */
+function parseSplitStatus(d) {
+  const s = String(d?.status ?? "").toUpperCase();
+  if (s === "COMPLETED") {
+    return { status: "completed", message: "The split has been applied to all affected accounts." };
+  }
+  if (s === "COMPLETED_WITH_ERRORS") {
+    return {
+      status: "completed",
+      message: "The split was applied, but a few accounts could not be updated.",
+    };
+  }
+  if (s === "ERROR") {
+    return { status: "failed", message: "The split could not be completed. Please try again." };
+  }
+  return { status: "in_progress", message: null };
+}
 
 function SplitPage() {
   /* ===========================
@@ -38,6 +57,8 @@ function SplitPage() {
   const [expandedKeys, setExpandedKeys] = useState(() => new Set());
 
   const dropdownRef = useRef(null);
+
+  const { trackJob, reportJob } = useJobNotifications();
 
   useEffect(() => setPage(1), [previewData]);
 
@@ -212,12 +233,36 @@ function SplitPage() {
         body: JSON.stringify(payload),
       });
 
+      const data = await res.json().catch(() => ({}));
+
       if (!res.ok) {
-        const errData = await res.json().catch(() => ({}));
-        throw new Error(errData.message || "Failed to apply split");
+        throw new Error(data.message || "Failed to apply split");
       }
 
       setSuccess(true);
+
+      // Bell notification: "in progress" until every background piece (the
+      // holdings rebuild AND any bonus recompute it triggers) has finished.
+      const splitLabel = `Stock split — ${isin || securityCode || "security"}`;
+      if (data.alreadyApplied) {
+        reportJob({
+          id: `split-already-${Date.now()}`,
+          label: splitLabel,
+          status: "completed",
+          message: "This split has already been applied.",
+        });
+      } else if (data.catalystJobName) {
+        trackJob({
+          id: data.catalystJobName,
+          label: splitLabel,
+          message: "Your split task has been submitted.",
+          statusUrl: `${BASE_URL}/split/job-status?key=${encodeURIComponent(data.catalystJobName)}`,
+          parseStatus: parseSplitStatus,
+          // A large split fans out into many rebuild jobs plus bonus recompute —
+          // give it longer than the 20-min default before the bell says "still running".
+          timeoutMs: 45 * 60 * 1000,
+        });
+      }
 
       // Reset form and preview (same as Bonus)
       setIsin("");

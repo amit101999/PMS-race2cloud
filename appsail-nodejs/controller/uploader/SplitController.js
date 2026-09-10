@@ -2,6 +2,7 @@ import { buildVirtualToActualMap } from "../../util/mapVirtualToActualCodes.js";
 // Shared FIFO re-derivation only — the effective-date rule below stays local so
 // this module's preview cannot be silently changed by another module's copy.
 import { recomputeHoldingsSnapshot } from "../../util/analytics/holdingsFromTable.js";
+import { readCaJobProgress, insertCaTrackPiece } from "../../util/caJobProgress.js";
 
 const HOLDINGS_BATCH = 250;
 
@@ -272,6 +273,20 @@ export const previewStockSplit = async (req, res) => {
 // avoiding a single long-running job timing out as the account count grows.
 const REBUILD_HOLDINGS_BATCH = 100;
 
+const escSql = (v) => String(v ?? "").replace(/'/g, "''");
+
+/**
+ * Progress tracking for one "Confirm & Apply Split" click, so the UI can show a
+ * single "in progress → done" notification that only settles once ALL the
+ * background work is actually finished — the holdings rebuild AND any bonus
+ * recompute the split triggers (which itself fans out into more rebuild jobs).
+ *
+ * The mechanism lives in util/caJobProgress.js (shared with the bonus flow):
+ * a parent `Jobs` row named with the track key + one `JobStatusPerAccount` row
+ * per piece. See finalizeCaTrackIfNeeded / settleCaTrackPiece in
+ * functions/RebuildHoldingtable and functions/UpdateBonusTable.
+ */
+
 export const addStockSplit = async (req, res) => {
   try {
     const app = req.catalystApp;
@@ -359,11 +374,26 @@ export const addStockSplit = async (req, res) => {
     }
 
     const affectedAccounts = Array.from(accountSet);
+
+    // One track key per Apply-Split click. The parent Jobs row starts RUNNING;
+    // each rebuild chunk and each bonus job below registers a "piece" row that
+    // it flips when it finishes. The last piece to finish settles the parent.
+    const caTrackKey = `SPL${Date.now()}`.slice(0, 20);
+    try {
+      await zcql.executeZCQLQuery(
+        `INSERT INTO Jobs (jobName, status) VALUES ('${escSql(caTrackKey)}', 'RUNNING')`,
+      );
+    } catch (e) {
+      console.warn("[SplitController] parent track row insert failed:", e.message);
+    }
+
     if (affectedAccounts.length > 0) {
       const scheduling = app.jobScheduling();
       for (let i = 0; i < affectedAccounts.length; i += REBUILD_HOLDINGS_BATCH) {
         const chunk = affectedAccounts.slice(i, i + REBUILD_HOLDINGS_BATCH);
         const catalystJobName = `H${Date.now()}${i}`.slice(0, 20);
+        const caSubId = `${caTrackKey}_h${i}`;
+        await insertCaTrackPiece(zcql, caTrackKey, caSubId);
         await scheduling.JOB.submitJob({
           job_name: catalystJobName,
           jobpool_name: "CorporateActions",
@@ -378,6 +408,8 @@ export const addStockSplit = async (req, res) => {
             accountCodesJson: JSON.stringify(chunk),
             isinsJson: JSON.stringify([isin]),
             source: "SplitController",
+            caTrackKey,
+            caSubId,
           },
         });
       }
@@ -388,6 +420,7 @@ export const addStockSplit = async (req, res) => {
     // in recompute mode (the Split row above is now in the DB, so the bonus
     // FIFO will re-size on the post-split holding and overwrite BonusShare).
     // The recompute job re-queues its own RebuildHoldingtable afterward.
+    let bonusPiecesRegistered = 0;
     try {
       const bonusRecords = await zcql.executeZCQLQuery(`
         SELECT SecurityCode, SecurityName, ISIN, Ratio1, Ratio2, ExDate
@@ -397,6 +430,7 @@ export const addStockSplit = async (req, res) => {
       `);
 
       const scheduling = app.jobScheduling();
+      let bonusIdx = 0;
       for (const row of bonusRecords || []) {
         const b = row.Bonus_Record || row;
         const exDateISO = String(b.ExDate || "").slice(0, 10);
@@ -405,6 +439,15 @@ export const addStockSplit = async (req, res) => {
         // Unique tracking name so UpdateBonusTable's per-account SUCCESS guard
         // (scoped by jobName) does not skip a prior bonus run for this ex-date.
         const bonusJobName = `BONRC_${isin.slice(-6)}_${exDateISO}_${Date.now()}`;
+        // A "bonus phase" piece for the split notification. It stays RUNNING
+        // until UpdateBonusTable has re-sized this bonus AND handed off to the
+        // rebuild jobs it spawns (which register their own pieces) — so the
+        // parent can never read "all done" while a bonus fix is still pending.
+        const caSubId = `${caTrackKey}_b${bonusIdx}`;
+        await insertCaTrackPiece(zcql, caTrackKey, caSubId);
+        bonusPiecesRegistered += 1;
+        bonusIdx += 1;
+
         await scheduling.JOB.submitJob({
           job_name: `BRC${Date.now()}`.slice(0, 20),
           jobpool_name: "CorporateActions",
@@ -423,6 +466,8 @@ export const addStockSplit = async (req, res) => {
             secName: b.SecurityName || securityName || "",
             recompute: "true",
             jobName: bonusJobName,
+            caTrackKey,
+            caSubId,
           },
         });
         console.log(
@@ -436,8 +481,21 @@ export const addStockSplit = async (req, res) => {
       );
     }
 
+    // Nothing to wait for (no affected accounts, no bonus to recompute) — settle
+    // the parent now so the notification completes on the first status poll.
+    if (affectedAccounts.length === 0 && bonusPiecesRegistered === 0) {
+      try {
+        await zcql.executeZCQLQuery(
+          `UPDATE Jobs SET status = 'COMPLETED' WHERE jobName = '${escSql(caTrackKey)}'`,
+        );
+      } catch (e) {
+        console.warn("[SplitController] parent immediate-complete failed:", e.message);
+      }
+    }
+
     return res.status(200).json({
       success: true,
+      catalystJobName: caTrackKey,
       message: "Stock split applied successfully",
     });
   } catch (error) {
@@ -445,6 +503,41 @@ export const addStockSplit = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: "Failed to apply stock split",
+    });
+  }
+};
+
+/**
+ * GET /split/job-status?key=SPL...
+ * Reports the overall state of one "Confirm & Apply Split" run.
+ *
+ *   RUNNING               → work still in progress
+ *   COMPLETED             → every piece finished cleanly
+ *   COMPLETED_WITH_ERRORS → finished, but at least one rebuild chunk failed
+ *   ERROR                 → parent row was stuck RUNNING past the stale window
+ *   NOT_STARTED           → no such key (unknown / never created)
+ *
+ * Belt and suspenders: if the parent still says RUNNING but no piece rows are
+ * RUNNING any more, this settles it here too (in case the finishing job's own
+ * finalize call lost a race).
+ */
+export const getSplitApplyStatus = async (req, res) => {
+  try {
+    if (!req.catalystApp) {
+      return res.status(500).json({ success: false, message: "Catalyst app not initialized" });
+    }
+    const key = String(req.query.key ?? req.query.jobName ?? "").trim();
+    if (!key) {
+      return res.status(400).json({ success: false, message: "Query parameter key is required" });
+    }
+
+    const status = await readCaJobProgress(req.catalystApp.zcql(), key);
+    return res.status(200).json({ success: true, key, status });
+  } catch (error) {
+    console.error("[getSplitApplyStatus]", error);
+    return res.status(500).json({
+      success: false,
+      message: error?.message || "Failed to fetch split job status",
     });
   }
 };

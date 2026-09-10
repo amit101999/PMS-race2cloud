@@ -3,6 +3,25 @@ import MainLayout from "../../layouts/MainLayout";
 import { Card } from "../../components/common/CommonComponents";
 import "./BonusPage.css";
 import { BASE_URL } from "../../constant";
+import { useJobNotifications } from "../../notifications/JobNotificationContext";
+
+/** Maps GET /bonus/apply-progress → the notification system's vocabulary. */
+function parseBonusStatus(d) {
+  const s = String(d?.status ?? "").toUpperCase();
+  if (s === "COMPLETED") {
+    return { status: "completed", message: "The bonus has been applied to all affected accounts." };
+  }
+  if (s === "COMPLETED_WITH_ERRORS") {
+    return {
+      status: "completed",
+      message: "The bonus was applied, but a few accounts could not be updated.",
+    };
+  }
+  if (s === "ERROR") {
+    return { status: "failed", message: "The bonus could not be completed. Please try again." };
+  }
+  return { status: "in_progress", message: null };
+}
 
 function BonusPage() {
   /* ===========================
@@ -89,6 +108,8 @@ function BonusPage() {
   };
 
   const dropdownRef = useRef(null);
+
+  const { trackJob, reportJob } = useJobNotifications();
 
   /* ===========================
      FETCH SECURITIES
@@ -571,6 +592,29 @@ function BonusPage() {
 
                       setApplyJobName(data.jobName);
                       setApplyStatus(data.status);
+
+                      // Bell notification: "in progress" until the background
+                      // holdings rebuild has actually finished.
+                      const bonusLabel = `Stock bonus — ${isin || securityCode || "security"}`;
+                      if (data.alreadyRunning) {
+                        reportJob({
+                          id: `bonus-already-${Date.now()}`,
+                          label: bonusLabel,
+                          status: "completed",
+                          message: "A bonus for this security and date is already being applied.",
+                        });
+                      } else if (data.catalystJobName) {
+                        trackJob({
+                          id: data.catalystJobName,
+                          label: bonusLabel,
+                          message: "Your bonus task has been submitted.",
+                          statusUrl: `${BASE_URL}/bonus/apply-progress?key=${encodeURIComponent(
+                            data.catalystJobName,
+                          )}`,
+                          parseStatus: parseBonusStatus,
+                          timeoutMs: 45 * 60 * 1000,
+                        });
+                      }
                     } catch (err) {
                       setError("Something went wrong");
                       setApplying(false);

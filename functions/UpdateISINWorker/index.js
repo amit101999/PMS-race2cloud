@@ -5,6 +5,9 @@
  *
  * Renames an ISIN (old → new) across EVERY table that stores it, in small
  * batches, so no single invocation exceeds the 15-minute function timeout.
+ * This IS the whole flow — a plain rename with no follow-up recompute step.
+ * (An earlier version also rebuilt Holdings from source data afterward; that
+ * was deliberately removed — see git history if it's ever needed again.)
  *
  * How it survives large tables (Transaction ~10–12 lakh rows):
  *   - Self-draining queue: each batch updates rows OUT of the `WHERE col = old`
@@ -41,14 +44,16 @@ const BATCH = 300;
 /** Stop and hand off before this elapsed time (< the 15-min function cap). */
 const TIME_BUDGET_MS = 12 * 60 * 1000;
 
-/* --- Holdings rebuild (runs after the rename fully completes) --- */
-/** Rebuild function + its pool (same wiring the merger/demerger apply use). */
-const REBUILD_TARGET = "RebuildHoldingtable";
-const REBUILD_JOBPOOL = "CorporateActions";
-/** Accounts per rebuild job (matches MegerFn's REBUILD_BATCH). */
-const REBUILD_ACCOUNTS_PER_JOB = 400;
-/** Page size for scanning Holdings to collect the affected accounts. */
-const ACCOUNT_SCAN_PAGE = 270;
+/**
+ * Per-target retry policy. A "target" = one table in ISIN_TARGETS (all of its
+ * columns). A failing SELECT/UPDATE batch gets this many quick attempts
+ * (a short pause between each) before the whole target is given up on for
+ * this run — deliberately no further automatic retry beyond this, and no
+ * manual retry endpoint; recovering means submitting the rename again from
+ * the UI, which is cheap because of the self-draining query (see below).
+ */
+const TARGET_RETRY_ATTEMPTS = 3;
+const TARGET_RETRY_DELAY_MS = 3000;
 
 /**
  * Every table that stores an ISIN, with the exact column(s) to rename.
@@ -56,6 +61,12 @@ const ACCOUNT_SCAN_PAGE = 270;
  * - Merger / Merger_Record: "ISIN" (new side) + "OldISIN" (old side).
  * - Demerger: "Old_ISIN" + "New_ISIN" (this table has NO plain "ISIN" column).
  * - Demerger_Record: single "ISIN" column.
+ *
+ * IMPORTANT: appsail-nodejs/controller/isin/updateIsin.js keeps its own
+ * RENAME_TARGET_COUNT constant equal to this array's length, so it can build
+ * the exact set of "<jobName>_t0".."_t(N-1)" progress-row names to fetch (see
+ * progressRowName above — ZCQL's LIKE doesn't support % wildcards). If this
+ * array's length ever changes, update that constant too.
  */
 const ISIN_TARGETS = [
   { table: "Security_List", cols: ["ISIN"] },
@@ -115,6 +126,71 @@ async function finalizeJobsRow(zcql, jobName, status) {
   }
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Progress-tracking row name for one ISIN_TARGETS entry (reuses the Jobs
+ * table). Index-only — NOT "<key>_t<index>_<table>" — because the reader
+ * (appsail-nodejs) needs to fetch all of them with an exact-match `IN (...)`
+ * query. ZCQL's `LIKE` does not support `%` wildcards (matches nothing,
+ * silently), so a prefix-style lookup can't be used here; the reader instead
+ * knows the fixed target count (RENAME_TARGET_COUNT, kept in sync with
+ * ISIN_TARGETS.length below) and builds the exact list of row names itself.
+ * The table name is carried in the status text instead (see markTargetFailed).
+ */
+function progressRowName(statusKey, index) {
+  return `${statusKey}_t${index}`;
+}
+
+/**
+ * Open a PENDING progress row for every target, once, at the start of a
+ * fresh rename run (startIndex === 0). A resumed run (after a timeout baton
+ * pass) skips this — the rows from the original run are still there.
+ * Lets the frontend show "13/16 done, 1 failed (Bhav_Copy), 2 pending"
+ * instead of a plain spinner.
+ */
+async function initializeProgressRows(zcql, statusKey) {
+  if (!statusKey) return;
+  for (let i = 0; i < ISIN_TARGETS.length; i++) {
+    const rowName = progressRowName(statusKey, i);
+    try {
+      await zcql.executeZCQLQuery(
+        `INSERT INTO Jobs (jobName, status) VALUES ('${esc(rowName)}', 'PENDING')`,
+      );
+    } catch (e) {
+      // Already exists, or a transient error — non-fatal. The per-target
+      // finalize call at the end of that target still records the truth.
+    }
+  }
+}
+
+async function markTargetDone(zcql, rowName) {
+  if (!rowName) return;
+  try {
+    await zcql.executeZCQLQuery(
+      `UPDATE Jobs SET status = 'DONE' WHERE jobName = '${esc(rowName)}'`,
+    );
+  } catch (e) {
+    console.warn(`[UpdateISINWorker] mark DONE '${rowName}' failed:`, e.message);
+  }
+}
+
+/** status = "FAILED:<table>:<error>" — table travels in the status text since
+ * the row name is now index-only (see progressRowName). */
+async function markTargetFailed(zcql, rowName, table, errorMessage) {
+  if (!rowName) return;
+  const detail = esc(`${table}:${String(errorMessage || "").slice(0, 160)}`);
+  try {
+    await zcql.executeZCQLQuery(
+      `UPDATE Jobs SET status = 'FAILED:${detail}' WHERE jobName = '${esc(rowName)}'`,
+    );
+  } catch (e) {
+    console.warn(`[UpdateISINWorker] mark FAILED '${rowName}' failed:`, e.message);
+  }
+}
+
 /** Re-queue this worker to resume at `targetIndex` (the baton pass). */
 async function submitContinuation(app, params, targetIndex, startedAt) {
   const jobName = `IW_${targetIndex}_${startedAt}`.slice(0, 20);
@@ -133,86 +209,6 @@ async function submitContinuation(app, params, targetIndex, startedAt) {
   });
 }
 
-/**
- * Hand off to a fresh worker that runs phase = "rebuild". Done once the rename
- * is fully complete, so the rebuild gets its own clean 15-min budget instead of
- * sharing the rename's.
- */
-async function submitRebuildPhase(app, params, startedAt) {
-  const jobName = `IWR_${startedAt}`.slice(0, 20);
-  await app.jobScheduling().JOB.submitJob({
-    job_name: jobName,
-    jobpool_name: WORKER_JOBPOOL,
-    target_name: WORKER_TARGET,
-    target_type: "Function",
-    job_config: { number_of_retries: 5, retry_interval: 60 * 1000 },
-    params: {
-      phase: "rebuild",
-      new_isin: params.new_isin,
-      status_key: params.status_key,
-    },
-  });
-}
-
-/** Distinct accounts that hold the (now renamed) ISIN — the rebuild scope. */
-async function collectAccountsForIsin(zcql, isinSql) {
-  const accounts = new Set();
-  let offset = 0;
-  while (true) {
-    const rows = await zcql.executeZCQLQuery(
-      `SELECT WS_Account_code FROM Holdings WHERE ISIN = '${isinSql}'
-       ORDER BY ROWID ASC LIMIT ${ACCOUNT_SCAN_PAGE} OFFSET ${offset}`,
-    );
-    if (!rows?.length) break;
-    for (const r of rows) {
-      const acc = String((r.Holdings || r).WS_Account_code ?? "").trim();
-      if (acc) accounts.add(acc);
-    }
-    if (rows.length < ACCOUNT_SCAN_PAGE) break;
-    offset += ACCOUNT_SCAN_PAGE;
-  }
-  return [...accounts];
-}
-
-/**
- * phase = "rebuild": recompute Holdings for the new ISIN across every account
- * that holds it, by dispatching scoped RebuildHoldingtable jobs (batched).
- * Marks the Jobs status row SUCCESS once the rebuild jobs are queued.
- */
-async function runRebuildPhase(app, zcql, newIsin, statusKey) {
-  const isinSql = esc(newIsin);
-  const accounts = await collectAccountsForIsin(zcql, isinSql);
-
-  console.log(`[UpdateISINWorker/rebuild] ${accounts.length} account(s) for "${newIsin}"`);
-
-  if (accounts.length === 0) {
-    // Nothing holds it (e.g. only closed positions) — rename already relabelled
-    // any rows; there is nothing to recompute.
-    await finalizeJobsRow(zcql, statusKey, "SUCCESS");
-    return;
-  }
-
-  const scheduling = app.jobScheduling();
-  for (let i = 0; i < accounts.length; i += REBUILD_ACCOUNTS_PER_JOB) {
-    const chunk = accounts.slice(i, i + REBUILD_ACCOUNTS_PER_JOB);
-    const jobName = `HRB_${i}_${Date.now()}`.slice(0, 20);
-    await scheduling.JOB.submitJob({
-      job_name: jobName,
-      jobpool_name: REBUILD_JOBPOOL,
-      target_name: REBUILD_TARGET,
-      target_type: "Function",
-      job_config: { number_of_retries: 5, retry_interval: 60 * 1000 },
-      params: {
-        accountCodesJson: JSON.stringify(chunk),
-        isinsJson: JSON.stringify([newIsin]),
-        source: "UpdateISIN",
-      },
-    });
-  }
-
-  await finalizeJobsRow(zcql, statusKey, "SUCCESS");
-}
-
 /* ============================== ENTRY ============================== */
 
 module.exports = async (jobRequest, context) => {
@@ -222,23 +218,10 @@ module.exports = async (jobRequest, context) => {
 
   try {
     const p = getAllParams(jobRequest);
-    const phase = String(p.phase ?? "rename").trim();
     const oldIsin = String(p.old_isin ?? "").trim();
     const newIsin = String(p.new_isin ?? "").trim();
     const statusKey = String(p.status_key ?? "").trim();
     const startIndex = Math.max(0, Number(p.target_index ?? 0) || 0);
-
-    // Phase 2: rebuild Holdings for the new ISIN (own fresh budget).
-    if (phase === "rebuild") {
-      if (!newIsin) {
-        console.error("[UpdateISINWorker/rebuild] new_isin is required.");
-        context.closeWithFailure();
-        return;
-      }
-      await runRebuildPhase(app, zcql, newIsin, statusKey);
-      context.closeWithSuccess();
-      return;
-    }
 
     if (!oldIsin || !newIsin) {
       console.error("[UpdateISINWorker] old_isin and new_isin are required.");
@@ -259,11 +242,23 @@ module.exports = async (jobRequest, context) => {
     );
 
     let totalUpdated = 0;
+    const failedTargets = [];
+
+    // First invocation of a fresh run (not a timeout-resumed one) — lay down
+    // the full 16-row checklist up front so the frontend can show progress
+    // even before any target has finished.
+    if (startIndex === 0) {
+      await initializeProgressRows(zcql, statusKey);
+    }
 
     for (let i = startIndex; i < ISIN_TARGETS.length; i++) {
       const { table, cols } = ISIN_TARGETS[i];
+      const rowName = progressRowName(statusKey, i);
+      let targetError = "";
 
-      for (const col of cols) {
+      columnsLoop: for (const col of cols) {
+        let attempts = 0;
+
         // Drain this column batch-by-batch until no old-ISIN rows remain.
         while (true) {
           // Hand off before the timeout; resume this same target next time.
@@ -281,9 +276,18 @@ module.exports = async (jobRequest, context) => {
           try {
             ids = await fetchOldRowIds(zcql, table, col, oldSql);
           } catch (e) {
-            // Column/table not present or query error — log and skip this column.
-            console.warn(`[UpdateISINWorker] select ${table}.${col} skipped:`, e.message);
-            break;
+            attempts++;
+            console.warn(
+              `[UpdateISINWorker] select ${table}.${col} failed ` +
+                `(attempt ${attempts}/${TARGET_RETRY_ATTEMPTS}):`,
+              e.message,
+            );
+            if (attempts < TARGET_RETRY_ATTEMPTS) {
+              await sleep(TARGET_RETRY_DELAY_MS);
+              continue;
+            }
+            targetError = `${col}: ${e.message}`;
+            break columnsLoop;
           }
 
           if (ids.length === 0) break; // this column is fully renamed
@@ -293,24 +297,60 @@ module.exports = async (jobRequest, context) => {
               `UPDATE ${table} SET ${col} = '${newSql}' WHERE ROWID IN (${ids.join(",")})`,
             );
             totalUpdated += ids.length;
+            attempts = 0; // this batch succeeded — reset before the next one
           } catch (e) {
-            // Break (not continue) so a failing UPDATE can't spin forever.
-            console.warn(`[UpdateISINWorker] update ${table}.${col} failed:`, e.message);
-            break;
+            attempts++;
+            console.warn(
+              `[UpdateISINWorker] update ${table}.${col} failed ` +
+                `(attempt ${attempts}/${TARGET_RETRY_ATTEMPTS}):`,
+              e.message,
+            );
+            if (attempts < TARGET_RETRY_ATTEMPTS) {
+              await sleep(TARGET_RETRY_DELAY_MS);
+              continue;
+            }
+            targetError = `${col}: ${e.message}`;
+            break columnsLoop;
           }
         }
 
         console.log(`[UpdateISINWorker] drained ${table}.${col}`);
       }
+
+      if (targetError) {
+        console.error(`[UpdateISINWorker] target FAILED: ${table} — ${targetError}`);
+        await markTargetFailed(zcql, rowName, table, targetError);
+        failedTargets.push({ index: i, table, error: targetError });
+        continue; // targets are independent — keep going to the next table
+      }
+
+      await markTargetDone(zcql, rowName);
     }
 
-    // Rename fully done. Hand off to the rebuild phase (it marks Jobs SUCCESS),
-    // so Holdings is recomputed for the new ISIN from the now-corrected sources.
+    if (failedTargets.length > 0) {
+      // Some table(s) couldn't be renamed even after retries. Report exactly
+      // which ones, distinct from a full FAILURE. No further automatic or
+      // manual retry here by design; re-submitting the same rename from the
+      // UI is the recovery path (self-draining query means it only
+      // reprocesses what's still stuck).
+      console.error(
+        `[UpdateISINWorker] rename finished with ${failedTargets.length} failed target(s): ` +
+          failedTargets.map((f) => `${f.table} (${f.error})`).join("; "),
+      );
+      await finalizeJobsRow(zcql, statusKey, "PARTIAL_FAILURE");
+      // A handled, recorded outcome — not a crash — so close as success and
+      // don't trigger Catalyst's own function-level retry.
+      context.closeWithSuccess();
+      return;
+    }
+
+    // Rename fully done across all 16 tables — that's the whole flow now, no
+    // follow-up Holdings recompute step.
     console.log(
       `[UpdateISINWorker] rename DONE "${oldIsin}" → "${newIsin}" | ${totalUpdated} row(s) ` +
-        `in ${Date.now() - startedAt}ms — dispatching rebuild phase.`,
+        `in ${Date.now() - startedAt}ms.`,
     );
-    await submitRebuildPhase(app, p, startedAt);
+    await finalizeJobsRow(zcql, statusKey, "SUCCESS");
     context.closeWithSuccess();
   } catch (err) {
     console.error("[UpdateISINWorker] Fatal:", err?.message || err);

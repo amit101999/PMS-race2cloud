@@ -266,6 +266,15 @@
   padding: 8px 0 0 0;
 }
 
+/* Informational, not an error — used where a "no match" isn't a mistake
+   (e.g. the New ISIN panel, where it just means "this will be created"). */
+.update-isin-resolution-info {
+  font-size: 13px;
+  color: #1d4ed8;
+  display: block;
+  padding: 8px 0 0 0;
+}
+
 .update-isin-actions {
   margin-bottom: 20px;
   display: flex;

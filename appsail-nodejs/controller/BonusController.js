@@ -2,6 +2,9 @@ import { buildVirtualToActualMap } from "../util/mapVirtualToActualCodes.js";
 // Shared FIFO re-derivation only — the effective-date rule below stays local so
 // this module's preview cannot be silently changed by another module's copy.
 import { recomputeHoldingsSnapshot } from "../util/analytics/holdingsFromTable.js";
+import { readCaJobProgress, insertCaTrackPiece } from "../util/caJobProgress.js";
+
+const escSql = (v) => String(v ?? "").replace(/'/g, "''");
 
 const ZCQL_ROW_LIMIT = 270;
 const HOLDINGS_BATCH  = 250;
@@ -328,6 +331,7 @@ export const applyStockBonus = async (req, res) => {
           success: true,
           jobName,
           status: oldStatus,
+          alreadyRunning: true,
           message: "Bonus application is already in progress",
         });
       }
@@ -338,6 +342,21 @@ export const applyStockBonus = async (req, res) => {
         console.error("Error deleting old bonus job:", delErr);
       }
     }
+
+    // Progress tracking for the notification bell — a parent `Jobs` row + one
+    // "_root" placeholder piece that UpdateBonusTable hands off to the rebuild
+    // jobs it queues, so the parent only settles once the holdings rebuild has
+    // actually finished (not just been queued). See util/caJobProgress.js.
+    const caTrackKey = `BONA${Date.now()}`.slice(0, 20);
+    const caSubId = `${caTrackKey}_root`;
+    try {
+      await zcql.executeZCQLQuery(
+        `INSERT INTO Jobs (jobName, status) VALUES ('${escSql(caTrackKey)}', 'RUNNING')`,
+      );
+    } catch (e) {
+      console.warn("[BonusController] parent track row insert failed:", e.message);
+    }
+    await insertCaTrackPiece(zcql, caTrackKey, caSubId);
 
     await jobScheduling.JOB.submitJob({
       job_name: "ApplyBonus",
@@ -357,12 +376,15 @@ export const applyStockBonus = async (req, res) => {
         secCode: bodySecurityCode || "",
         secName: bodySecurityName || "",
         jobName,
+        caTrackKey,
+        caSubId,
       },
     });
 
     return res.json({
       success: true,
       jobName,
+      catalystJobName: caTrackKey,
       status: "PENDING",
       message: "Bonus application job started",
     });
@@ -419,6 +441,35 @@ export const getBonusApplyStatus = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: "Failed to fetch bonus job status",
+    });
+  }
+};
+
+/**
+ * GET /bonus/apply-progress?key=BONA...
+ * Overall state of one "Confirm & Apply Bonus" run — stays RUNNING until the
+ * background holdings rebuild it triggers has actually finished, not just been
+ * queued (which is all GET /bonus/apply-status reflects).
+ *
+ *   RUNNING | COMPLETED | COMPLETED_WITH_ERRORS | ERROR | NOT_STARTED
+ */
+export const getBonusApplyProgress = async (req, res) => {
+  try {
+    if (!req.catalystApp) {
+      return res.status(500).json({ success: false, message: "Catalyst app not initialized" });
+    }
+    const key = String(req.query.key ?? "").trim();
+    if (!key) {
+      return res.status(400).json({ success: false, message: "Query parameter key is required" });
+    }
+
+    const status = await readCaJobProgress(req.catalystApp.zcql(), key);
+    return res.status(200).json({ success: true, key, status });
+  } catch (error) {
+    console.error("[getBonusApplyProgress]", error);
+    return res.status(500).json({
+      success: false,
+      message: error?.message || "Failed to fetch bonus job progress",
     });
   }
 };

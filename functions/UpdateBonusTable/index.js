@@ -94,6 +94,46 @@ async function markAccountFailed(zcql, jobName, accountCode, errMsg) {
   }
 }
 
+/**
+ * Split "Confirm & Apply" progress tracking (params.caTrackKey / caSubId,
+ * set only when this bonus recompute was queued by SplitController). Flips this
+ * bonus's placeholder piece in `JobStatusPerAccount` (jobName = trackKey,
+ * WS_Account_code = subId) to SUCCESS / FAILED, then settles the parent `Jobs`
+ * row named with the trackKey once no piece for it is still RUNNING. The rebuild
+ * jobs this bonus spawns register their own pieces (see queueRebuildHoldingsJobs)
+ * BEFORE this placeholder is flipped, so the parent can't read "all done" early.
+ */
+async function settleCaTrackPiece(zcql, trackKey, subId, outcome) {
+  if (!trackKey || !subId) return;
+  const pieceStatus = outcome === "SUCCESS" ? "SUCCESS" : "FAILED";
+  try {
+    await zcql.executeZCQLQuery(
+      `UPDATE JobStatusPerAccount SET status = '${esc(pieceStatus)}', ` +
+        `lastError = '${pieceStatus === "FAILED" ? "bonus recompute failed" : ""}' ` +
+        `WHERE jobName = '${esc(trackKey)}' AND WS_Account_code = '${esc(subId)}'`,
+    );
+  } catch (e) {
+    console.warn(`[UpdateBonusTable] split-track mark '${subId}' ${pieceStatus} failed:`, e.message);
+    return;
+  }
+  try {
+    const running = await zcql.executeZCQLQuery(
+      `SELECT status FROM JobStatusPerAccount WHERE jobName = '${esc(trackKey)}' AND status = 'RUNNING' LIMIT 1`,
+    );
+    if (running && running.length) return;
+    const failed = await zcql.executeZCQLQuery(
+      `SELECT status FROM JobStatusPerAccount WHERE jobName = '${esc(trackKey)}' AND status = 'FAILED' LIMIT 1`,
+    );
+    const parentStatus = failed && failed.length ? "COMPLETED_WITH_ERRORS" : "COMPLETED";
+    await zcql.executeZCQLQuery(
+      `UPDATE Jobs SET status = '${parentStatus}' WHERE jobName = '${esc(trackKey)}'`,
+    );
+    console.log(`[UpdateBonusTable] split track '${trackKey}' finalized as ${parentStatus}`);
+  } catch (e) {
+    console.warn(`[UpdateBonusTable] split-track finalize '${trackKey}' failed:`, e.message);
+  }
+}
+
 /** Skip INSERT on retry if row already exists for this corporate-action key. */
 async function bonusRowExists(zcql, isin, accountCode, exDateISO) {
   try {
@@ -143,7 +183,13 @@ async function ensureBonusRecord(zcql, { secCode, secName, isin, r1, r2, exDateI
     `);
 }
 
-async function queueRebuildHoldingsJobs(catalystApp, accountCodes, source, isins) {
+async function queueRebuildHoldingsJobs(
+  catalystApp,
+  accountCodes,
+  source,
+  isins,
+  caTrackKey = "",
+) {
   const uniq = [...new Set(accountCodes)]
     .map((a) => String(a || "").trim())
     .filter(Boolean);
@@ -156,9 +202,33 @@ async function queueRebuildHoldingsJobs(catalystApp, accountCodes, source, isins
     .filter(Boolean);
 
   const scheduling = catalystApp.jobScheduling();
+  const zcql = catalystApp.zcql();
   for (let i = 0; i < uniq.length; i += REBUILD_BATCH) {
     const chunk = uniq.slice(i, i + REBUILD_BATCH);
     const catalystJobName = `H${Date.now()}${i}`.slice(0, 20);
+    const jobParams = {
+      accountCodesJson: JSON.stringify(chunk),
+      isinsJson: JSON.stringify(scopedIsins),
+      source,
+    };
+
+    // Split notification: register a piece for this chunk under the split's
+    // track key BEFORE the bonus placeholder is flipped, so the parent can't
+    // read "all done" while this rebuild is still pending.
+    if (caTrackKey) {
+      const childSubId = `${caTrackKey}_bh${Date.now()}_${i}`;
+      try {
+        await zcql.executeZCQLQuery(
+          `INSERT INTO JobStatusPerAccount (jobType, WS_Account_code, status, lastError, jobName) ` +
+            `VALUES ('SPLIT_APPLY', '${esc(childSubId)}', 'RUNNING', '', '${esc(caTrackKey)}')`,
+        );
+        jobParams.caTrackKey = caTrackKey;
+        jobParams.caSubId = childSubId;
+      } catch (e) {
+        console.warn(`[UpdateBonusTable] child piece insert failed (${childSubId}):`, e.message);
+      }
+    }
+
     await scheduling.JOB.submitJob({
       job_name: catalystJobName,
       jobpool_name: "CorporateActions",
@@ -169,11 +239,7 @@ async function queueRebuildHoldingsJobs(catalystApp, accountCodes, source, isins
         number_of_retries: 5,
         retry_interval: 60 * 1000,
       },
-      params: {
-        accountCodesJson: JSON.stringify(chunk),
-        isinsJson: JSON.stringify(scopedIsins),
-        source,
-      },
+      params: jobParams,
     });
   }
 }
@@ -185,6 +251,10 @@ module.exports = async (jobRequest, context) => {
   const catalystApp = catalyst.initialize(context);
   const zcql = catalystApp.zcql();
   let jobName = "";
+  // Split "Confirm & Apply" notification: set only when SplitController queued
+  // this recompute. `caSubId` is this bonus's placeholder piece.
+  let caTrackKey = "";
+  let caSubId = "";
 
   try {
     console.log("Bonus apply job started");
@@ -194,6 +264,8 @@ module.exports = async (jobRequest, context) => {
     const r1 = Number(params.ratio1);
     const r2 = Number(params.ratio2);
     jobName = params.jobName;
+    caTrackKey = String(params.caTrackKey || "").trim();
+    caSubId = String(params.caSubId || "").trim();
     const bonusJobType =
       String(params.jobType || "").trim() || BONUS_JOB_TYPE_DEFAULT;
     const trackingOn = Boolean(String(jobName || "").trim());
@@ -307,6 +379,8 @@ module.exports = async (jobRequest, context) => {
       await zcql.executeZCQLQuery(
         `UPDATE Jobs SET status = 'COMPLETED' WHERE jobName = '${esc(jobName)}'`,
       );
+      // Nothing to rebuild for the split notification — release the placeholder.
+      await settleCaTrackPiece(zcql, caTrackKey, caSubId, "SUCCESS");
       context.closeWithSuccess();
       return;
     }
@@ -450,6 +524,7 @@ module.exports = async (jobRequest, context) => {
           accountsRebuild,
           "UpdateBonusTable",
           [isin],
+          caTrackKey,
         );
         console.log(
           `Queued RebuildHoldingtable for ${accountsRebuild.length} account(s)`,
@@ -459,10 +534,21 @@ module.exports = async (jobRequest, context) => {
         await zcql.executeZCQLQuery(
           `UPDATE Jobs SET status = 'FAILED' WHERE jobName = '${esc(jobName)}'`,
         );
+        await settleCaTrackPiece(zcql, caTrackKey, caSubId, "FAILURE");
         context.closeWithFailure();
         return;
       }
     }
+
+    // The rebuild jobs above carry their own split-notification pieces now, so
+    // this bonus's placeholder can hand off. (If the bonus hit per-account
+    // errors, mark the piece FAILED so the parent settles COMPLETED_WITH_ERRORS.)
+    await settleCaTrackPiece(
+      zcql,
+      caTrackKey,
+      caSubId,
+      errorCount > 0 ? "FAILURE" : "SUCCESS",
+    );
 
     if (trackingOn && errorCount > 0) {
       await zcql.executeZCQLQuery(
@@ -485,6 +571,11 @@ module.exports = async (jobRequest, context) => {
       );
     } catch (updateErr) {
       console.error("Failed to update job status to FAILED:", updateErr);
+    }
+    try {
+      await settleCaTrackPiece(zcql, caTrackKey, caSubId, "FAILURE");
+    } catch (trackErr) {
+      console.error("Failed to settle split-track piece:", trackErr);
     }
     context.closeWithFailure();
   }
