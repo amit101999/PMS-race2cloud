@@ -5,8 +5,27 @@ import "../SplitPage/SplitPage.css";
 import "../BonusPage/BonusPage.css";
 import "./MergerPage.css";
 import { BASE_URL } from "../../constant";
+import { useJobNotifications } from "../../notifications/JobNotificationContext";
 
 const MERGER_OLD_ISIN_PLACEHOLDER = "Type or pick ISIN — matched name shows here";
+
+/** Maps GET /merger/apply-progress → the notification system's vocabulary. */
+function parseMergerStatus(d) {
+  const s = String(d?.status ?? "").toUpperCase();
+  if (s === "COMPLETED") {
+    return { status: "completed", message: "The merger has been applied to all affected accounts." };
+  }
+  if (s === "COMPLETED_WITH_ERRORS") {
+    return {
+      status: "completed",
+      message: "The merger was applied, but a few accounts could not be updated.",
+    };
+  }
+  if (s === "ERROR") {
+    return { status: "failed", message: "The merger could not be completed. Please try again." };
+  }
+  return { status: "in_progress", message: null };
+}
 
 /** Normalize Security_List API row to { isin, securityCode, securityName } */
 function normalizeSecurityRow(raw) {
@@ -51,11 +70,15 @@ function MergerPage() {
   const [apiError, setApiError] = useState(null);
   const [previewRows, setPreviewRows] = useState([]);
   const [previewMeta, setPreviewMeta] = useState(null);
+  /** Set after a preview that succeeded but found no affected accounts. */
+  const [previewNote, setPreviewNote] = useState(null);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [applyLoading, setApplyLoading] = useState(false);
   const [applySuccess, setApplySuccess] = useState(null);
   const [applyStatus, setApplyStatus] = useState(null);
   const applyPollRef = useRef(null);
+
+  const { trackJob, reportJob } = useJobNotifications();
 
   const PAGE_SIZE = 10;
   const [page, setPage] = useState(1);
@@ -74,6 +97,7 @@ function MergerPage() {
     setApiError(null);
     setApplySuccess(null);
     setApplyStatus(null);
+    setPreviewNote(null);
   }, []);
 
   useEffect(() => {
@@ -267,8 +291,16 @@ function MergerPage() {
         setApiError(data.message || "Preview failed");
         return;
       }
-      setPreviewRows(Array.isArray(data.data) ? data.data : []);
+      const rows = Array.isArray(data.data) ? data.data : [];
+      setPreviewRows(rows);
       setPreviewMeta(data.meta || null);
+      if (rows.length === 0) {
+        setPreviewNote(
+          `No accounts found in transactions for ${
+            oldIsin || "this security"
+          }. There is nothing to merge.`,
+        );
+      }
     } catch (e) {
       setApiError(e.message || "Preview request failed");
     } finally {
@@ -353,7 +385,13 @@ function MergerPage() {
       return;
     }
     if (!previewRows.length) {
-      setApiError("Run preview first.");
+      setApiError(
+        previewMeta
+          ? `No accounts found in transactions for ${
+              oldIsin || "this security"
+            } — there is nothing to merge.`
+          : "Run preview first.",
+      );
       return;
     }
     setApplyLoading(true);
@@ -377,6 +415,29 @@ function MergerPage() {
         return;
       }
       startApplyPoll(jobName);
+
+      // Bell notification: "in progress" until the background holdings rebuild
+      // this merger triggers has actually finished.
+      const mergerLabel = `Merger — ${oldIsin || "?"} → ${newIsinInput || "?"}`;
+      if (data.alreadyRunning) {
+        reportJob({
+          id: `merger-already-${Date.now()}`,
+          label: mergerLabel,
+          status: "completed",
+          message: "A merger for these securities is already being applied.",
+        });
+      } else if (data.catalystJobName) {
+        trackJob({
+          id: data.catalystJobName,
+          label: mergerLabel,
+          message: "Your merger task has been submitted.",
+          statusUrl: `${BASE_URL}/merger/apply-progress?key=${encodeURIComponent(
+            data.catalystJobName,
+          )}`,
+          parseStatus: parseMergerStatus,
+          timeoutMs: 45 * 60 * 1000,
+        });
+      }
     } catch (e) {
       setApiError(e.message || "Apply request failed");
       setApplyLoading(false);
@@ -459,6 +520,7 @@ function MergerPage() {
           {formError && <div className="alert error">{formError}</div>}
           {apiError && <div className="alert error">{apiError}</div>}
           {applySuccess && <div className="alert success">{applySuccess}</div>}
+          {previewNote && <div className="alert info">{previewNote}</div>}
 
           <div className="split-card merger-split-card">
             <div className="merger-top-row">

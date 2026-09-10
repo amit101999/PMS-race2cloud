@@ -5,6 +5,28 @@ import "../SplitPage/SplitPage.css";
 import "../BonusPage/BonusPage.css";
 import "./DemergerPage.css";
 import { BASE_URL } from "../../constant";
+import { useJobNotifications } from "../../notifications/JobNotificationContext";
+
+/** Maps GET /demerger/apply-progress → the notification system's vocabulary. */
+function parseDemergerStatus(d) {
+  const s = String(d?.status ?? "").toUpperCase();
+  if (s === "COMPLETED") {
+    return {
+      status: "completed",
+      message: "The demerger has been applied to all affected accounts.",
+    };
+  }
+  if (s === "COMPLETED_WITH_ERRORS") {
+    return {
+      status: "completed",
+      message: "The demerger was applied, but a few accounts could not be updated.",
+    };
+  }
+  if (s === "ERROR") {
+    return { status: "failed", message: "The demerger could not be completed. Please try again." };
+  }
+  return { status: "in_progress", message: null };
+}
 
 function escapeCsvCell(value) {
   const s = value === null || value === undefined ? "" : String(value);
@@ -45,6 +67,8 @@ function DemergerPage() {
   const [applying, setApplying] = useState(false);
   const [applySuccess, setApplySuccess] = useState(false);
   const [applyStatus, setApplyStatus] = useState("");
+
+  const { trackJob, reportJob } = useJobNotifications();
 
   const PAGE_SIZE = 10;
   const [page, setPage] = useState(1);
@@ -325,6 +349,29 @@ function DemergerPage() {
       }
 
       startApplyPoll(jn);
+
+      // Bell notification: "in progress" until the background holdings rebuild
+      // this demerger triggers has actually finished.
+      const demergerLabel = `Demerger — ${oldIsin || "?"} → ${newIsin || "?"}`;
+      if (data.alreadyRunning) {
+        reportJob({
+          id: `demerger-already-${Date.now()}`,
+          label: demergerLabel,
+          status: "completed",
+          message: "A demerger for these securities is already being applied.",
+        });
+      } else if (data.catalystJobName) {
+        trackJob({
+          id: data.catalystJobName,
+          label: demergerLabel,
+          message: "Your demerger task has been submitted.",
+          statusUrl: `${BASE_URL}/demerger/apply-progress?key=${encodeURIComponent(
+            data.catalystJobName,
+          )}`,
+          parseStatus: parseDemergerStatus,
+          timeoutMs: 45 * 60 * 1000,
+        });
+      }
     } catch (err) {
       setFormError(err.message || "Network error");
       setApplying(false);
@@ -617,7 +664,10 @@ function DemergerPage() {
           {previewData.length === 0 ? (
             <>
               <h3>Demerger Impact Preview</h3>
-              <div className="alert info">No accounts affected</div>
+              <div className="alert info">
+                No accounts found in transactions for {oldIsin || "this security"}.
+                There is nothing to demerge.
+              </div>
             </>
           ) : (
             <>

@@ -6,7 +6,13 @@ const { runFifoForLots } = require("./fifo.js");
 
 const REBUILD_BATCH = 400;
 
-async function queueRebuildHoldingsJobs(catalystApp, accountCodes, source, isins) {
+async function queueRebuildHoldingsJobs(
+  catalystApp,
+  accountCodes,
+  source,
+  isins,
+  caTrackKey = "",
+) {
   const uniq = [...new Set(accountCodes)]
     .map((a) => String(a || "").trim())
     .filter(Boolean);
@@ -21,9 +27,33 @@ async function queueRebuildHoldingsJobs(catalystApp, accountCodes, source, isins
     .filter(Boolean);
 
   const scheduling = catalystApp.jobScheduling();
+  const zcql = catalystApp.zcql();
   for (let i = 0; i < uniq.length; i += REBUILD_BATCH) {
     const chunk = uniq.slice(i, i + REBUILD_BATCH);
     const catalystJobName = `H${Date.now()}${i}`.slice(0, 20);
+    const jobParams = {
+      accountCodesJson: JSON.stringify(chunk),
+      source,
+      ...(scopedIsins.length ? { isinsJson: JSON.stringify(scopedIsins) } : {}),
+    };
+
+    // Notification: register a piece for this chunk under the merger's track
+    // key BEFORE the "_root" placeholder is flipped, so the parent can't read
+    // "all done" while this rebuild is still pending.
+    if (caTrackKey) {
+      const childSubId = `${caTrackKey}_mh${Date.now()}_${i}`;
+      try {
+        await zcql.executeZCQLQuery(
+          `INSERT INTO JobStatusPerAccount (jobType, WS_Account_code, status, lastError, jobName) ` +
+            `VALUES ('MERGER_APPLY', '${esc(childSubId)}', 'RUNNING', '', '${esc(caTrackKey)}')`,
+        );
+        jobParams.caTrackKey = caTrackKey;
+        jobParams.caSubId = childSubId;
+      } catch (e) {
+        console.warn(`[MegerFn] child piece insert failed (${childSubId}):`, e.message);
+      }
+    }
+
     await scheduling.JOB.submitJob({
       job_name: catalystJobName,
       jobpool_name: "CorporateActions",
@@ -34,13 +64,7 @@ async function queueRebuildHoldingsJobs(catalystApp, accountCodes, source, isins
         number_of_retries: 5,
         retry_interval: 60 * 1000,
       },
-      params: {
-        accountCodesJson: JSON.stringify(chunk),
-        source,
-        ...(scopedIsins.length
-          ? { isinsJson: JSON.stringify(scopedIsins) }
-          : {}),
-      },
+      params: jobParams,
     });
   }
 }
@@ -128,6 +152,46 @@ async function markAccountFailed(zcql, jobName, accountCode, errMsg) {
     `);
   } catch (e) {
     console.warn(`[MegerFn][JobStatusPerAccount] FAILED failed ${accountCode}:`, e.message);
+  }
+}
+
+/**
+ * "Apply Merger" notification progress (params.caTrackKey / caSubId, set by
+ * MergerController — no-op otherwise). Flips this run's placeholder piece in
+ * `JobStatusPerAccount` (jobName = trackKey, WS_Account_code = subId) to
+ * SUCCESS / FAILED, then settles the parent `Jobs` row named with the trackKey
+ * once no piece for it is still RUNNING. The rebuild jobs this merger spawns
+ * register their own pieces (see queueRebuildHoldingsJobs) BEFORE this
+ * placeholder is flipped, so the parent can't read "all done" early.
+ */
+async function settleCaTrackPiece(zcql, trackKey, subId, outcome) {
+  if (!trackKey || !subId) return;
+  const pieceStatus = outcome === "SUCCESS" ? "SUCCESS" : "FAILED";
+  try {
+    await zcql.executeZCQLQuery(
+      `UPDATE JobStatusPerAccount SET status = '${esc(pieceStatus)}', ` +
+        `lastError = '${pieceStatus === "FAILED" ? "merger apply failed" : ""}' ` +
+        `WHERE jobName = '${esc(trackKey)}' AND WS_Account_code = '${esc(subId)}'`,
+    );
+  } catch (e) {
+    console.warn(`[MegerFn] ca-track mark '${subId}' ${pieceStatus} failed:`, e.message);
+    return;
+  }
+  try {
+    const running = await zcql.executeZCQLQuery(
+      `SELECT status FROM JobStatusPerAccount WHERE jobName = '${esc(trackKey)}' AND status = 'RUNNING' LIMIT 1`,
+    );
+    if (running && running.length) return;
+    const failed = await zcql.executeZCQLQuery(
+      `SELECT status FROM JobStatusPerAccount WHERE jobName = '${esc(trackKey)}' AND status = 'FAILED' LIMIT 1`,
+    );
+    const parentStatus = failed && failed.length ? "COMPLETED_WITH_ERRORS" : "COMPLETED";
+    await zcql.executeZCQLQuery(
+      `UPDATE Jobs SET status = '${parentStatus}' WHERE jobName = '${esc(trackKey)}'`,
+    );
+    console.log(`[MegerFn] ca track '${trackKey}' finalized as ${parentStatus}`);
+  } catch (e) {
+    console.warn(`[MegerFn] ca-track finalize '${trackKey}' failed:`, e.message);
   }
 }
 
@@ -375,11 +439,17 @@ module.exports = async (jobRequest, context) => {
   const datastore = catalystApp.datastore();
 
   let jobName = "";
+  // "Apply Merger" notification tracking (see settleCaTrackPiece). caSubId is
+  // this run's "_root" placeholder piece.
+  let caTrackKey = "";
+  let caSubId = "";
   const startedAt = Date.now();
 
   try {
     const params = jobRequest.getAllJobParams();
     jobName = params.jobName || "";
+    caTrackKey = String(params.caTrackKey || "").trim();
+    caSubId = String(params.caSubId || "").trim();
     const mergerJobType =
       String(params.jobType || "").trim() || MERGER_JOB_TYPE_DEFAULT;
     const trackingOn = Boolean(String(jobName || "").trim());
@@ -429,6 +499,7 @@ module.exports = async (jobRequest, context) => {
     ) {
       console.error("[MegerFn] Invalid params");
       await setJobStatus(zcql, jobName, "FAILED");
+      await settleCaTrackPiece(zcql, caTrackKey, caSubId, "FAILURE");
       context.closeWithFailure();
       return;
     }
@@ -439,6 +510,8 @@ module.exports = async (jobRequest, context) => {
 
     if (!accounts.length) {
       await setJobStatus(zcql, jobName, "COMPLETED");
+      // Nothing to rebuild — release the placeholder now.
+      await settleCaTrackPiece(zcql, caTrackKey, caSubId, "SUCCESS");
       context.closeWithSuccess();
       return;
     }
@@ -643,10 +716,14 @@ module.exports = async (jobRequest, context) => {
 
     if (!mergerInsertRows.length) {
       console.log("[MegerFn] Nothing to insert; closing as COMPLETED.");
-      await setJobStatus(
+      const merged = trackingOn && trackingFailures > 0 ? "FAILED" : "COMPLETED";
+      await setJobStatus(zcql, jobName, merged);
+      // Nothing to rebuild — release the placeholder.
+      await settleCaTrackPiece(
         zcql,
-        jobName,
-        trackingOn && trackingFailures > 0 ? "FAILED" : "COMPLETED",
+        caTrackKey,
+        caSubId,
+        merged === "FAILED" ? "FAILURE" : "SUCCESS",
       );
       context.closeWithSuccess();
       return;
@@ -668,6 +745,7 @@ module.exports = async (jobRequest, context) => {
     } catch (recordErr) {
       console.error("[MegerFn] Merger_Record insert failed:", recordErr.message);
       await setJobStatus(zcql, jobName, "FAILED");
+      await settleCaTrackPiece(zcql, caTrackKey, caSubId, "FAILURE");
       context.closeWithFailure();
       return;
     }
@@ -722,6 +800,7 @@ module.exports = async (jobRequest, context) => {
           accountsAffected,
           "MegerFn",
           [oldIsin, newIsin],
+          caTrackKey,
         );
         console.log(
           "[MegerFn] Queued RebuildHoldingtable for",
@@ -742,6 +821,7 @@ module.exports = async (jobRequest, context) => {
           "[MegerFn] Merger rows are persisted but Holdings rebuild was not queued — remediate manually if needed.",
         );
         await setJobStatus(zcql, jobName, "FAILED");
+        await settleCaTrackPiece(zcql, caTrackKey, caSubId, "FAILURE");
         context.closeWithFailure();
         return;
       }
@@ -752,15 +832,26 @@ module.exports = async (jobRequest, context) => {
       `[MegerFn] Done. accounts=${accounts.length} lots=${totalSurvivingLots} ` +
         `newQty=${totalNewQty} carriedCost=${totalCarriedCost.toFixed(2)} elapsed=${elapsed}s`,
     );
-    await setJobStatus(
+    const finalMerged = trackingOn && trackingFailures > 0 ? "FAILED" : "COMPLETED";
+    await setJobStatus(zcql, jobName, finalMerged);
+    // The rebuild jobs above carry their own pieces now — release the
+    // placeholder so the parent settles once those pieces finish (or right
+    // away if there were no accounts to rebuild).
+    await settleCaTrackPiece(
       zcql,
-      jobName,
-      trackingOn && trackingFailures > 0 ? "FAILED" : "COMPLETED",
+      caTrackKey,
+      caSubId,
+      finalMerged === "FAILED" ? "FAILURE" : "SUCCESS",
     );
     context.closeWithSuccess();
   } catch (error) {
     console.error("[MegerFn] FATAL:", error);
     await setJobStatus(zcql, jobName, "FAILED");
+    try {
+      await settleCaTrackPiece(zcql, caTrackKey, caSubId, "FAILURE");
+    } catch (trackErr) {
+      console.error("[MegerFn] settle ca-track piece failed:", trackErr);
+    }
     context.closeWithFailure();
   }
 };

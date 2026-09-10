@@ -3,6 +3,7 @@ import {
   fetchAccountsForIsin,
   fifoLotsForIsinOnRecordDate,
 } from "../util/merger/mergerEngine.js";
+import { readCaJobProgress, insertCaTrackPiece } from "../util/caJobProgress.js";
 
 /**
  * Calendar date for DB (no timezone shift). HTML date inputs send yyyy-mm-dd — must not use
@@ -340,6 +341,7 @@ export const applyMerger = async (req, res) => {
           success: true,
           jobName,
           status: oldStatus,
+          alreadyRunning: true,
           message: "Merger application is already in progress",
         });
       }
@@ -350,6 +352,21 @@ export const applyMerger = async (req, res) => {
         console.error("[applyMerger] Error deleting old job row:", delErr);
       }
     }
+
+    // Progress tracking for the notification bell — a parent `Jobs` row + one
+    // "_root" placeholder piece that MegerFn hands off to the rebuild jobs it
+    // queues, so the parent only settles once the holdings rebuild has actually
+    // finished (not just been queued). See util/caJobProgress.js.
+    const caTrackKey = `MRGT${Date.now()}`.slice(0, 20);
+    const caSubId = `${caTrackKey}_root`;
+    try {
+      await zcql.executeZCQLQuery(
+        `INSERT INTO Jobs (jobName, status) VALUES ('${escSql(caTrackKey)}', 'RUNNING')`,
+      );
+    } catch (e) {
+      console.warn("[applyMerger] parent track row insert failed:", e.message);
+    }
+    await insertCaTrackPiece(zcql, caTrackKey, caSubId);
 
     await jobScheduling.JOB.submitJob({
       job_name: "ApplyMerger",
@@ -371,12 +388,15 @@ export const applyMerger = async (req, res) => {
         ratio2: String(r2),
         recordDateIso: recordISO,
         effectiveDateIso: effectiveISO,
+        caTrackKey,
+        caSubId,
       },
     });
 
     return res.json({
       success: true,
       jobName,
+      catalystJobName: caTrackKey,
       status: "PENDING",
       message: "Merger application job started",
     });
@@ -436,5 +456,38 @@ export const getMergerApplyStatus = async (req, res) => {
     return res
       .status(500)
       .json({ success: false, message: error.message || "Status check failed" });
+  }
+};
+
+/**
+ * GET /merger/apply-progress?key=MRGT...
+ * Overall state of one "Apply Merger" run — stays RUNNING until the background
+ * holdings rebuild it triggers has actually finished, not just been queued
+ * (which is all GET /merger/apply-status reflects).
+ *
+ *   RUNNING | COMPLETED | COMPLETED_WITH_ERRORS | ERROR | NOT_STARTED
+ */
+export const getMergerApplyProgress = async (req, res) => {
+  try {
+    if (!req.catalystApp) {
+      return res
+        .status(500)
+        .json({ success: false, message: "Catalyst app not initialized" });
+    }
+    const key = String(req.query.key ?? "").trim();
+    if (!key) {
+      return res
+        .status(400)
+        .json({ success: false, message: "Query parameter key is required" });
+    }
+
+    const status = await readCaJobProgress(req.catalystApp.zcql(), key);
+    return res.status(200).json({ success: true, key, status });
+  } catch (error) {
+    console.error("[getMergerApplyProgress]", error);
+    return res.status(500).json({
+      success: false,
+      message: error?.message || "Failed to fetch merger job progress",
+    });
   }
 };

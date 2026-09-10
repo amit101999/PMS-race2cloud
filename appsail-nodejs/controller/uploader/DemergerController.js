@@ -27,6 +27,8 @@
  * Holdings is refreshed (`functions/RebuildHoldingtable/`).
  */
 
+import { readCaJobProgress, insertCaTrackPiece } from "../../util/caJobProgress.js";
+
 const ZCQL_ROW_LIMIT = 270;
 
 const escSql = (s) => String(s ?? "").replace(/'/g, "''");
@@ -417,6 +419,7 @@ export const applyDemerger = async (req, res) => {
           success: true,
           jobName,
           status: oldStatus,
+          alreadyRunning: true,
           message: "Demerger application is already in progress",
         });
       }
@@ -427,6 +430,21 @@ export const applyDemerger = async (req, res) => {
         console.error("[applyDemerger] Error deleting old job row:", delErr);
       }
     }
+
+    // Progress tracking for the notification bell — a parent `Jobs` row + one
+    // "_root" placeholder piece that DemergerFn hands off to the rebuild jobs it
+    // queues, so the parent only settles once the holdings rebuild has actually
+    // finished (not just been queued). See util/caJobProgress.js.
+    const caTrackKey = `DMGT${Date.now()}`.slice(0, 20);
+    const caSubId = `${caTrackKey}_root`;
+    try {
+      await zcql.executeZCQLQuery(
+        `INSERT INTO Jobs (jobName, status) VALUES ('${escSql(caTrackKey)}', 'RUNNING')`,
+      );
+    } catch (e) {
+      console.warn("[applyDemerger] parent track row insert failed:", e.message);
+    }
+    await insertCaTrackPiece(zcql, caTrackKey, caSubId);
 
     await jobScheduling.JOB.submitJob({
       job_name: "ApplyDemerger",
@@ -451,12 +469,15 @@ export const applyDemerger = async (req, res) => {
         allocationPct: String(pct),
         effectiveDateIso: effectiveDateISO,
         recordDateIso: recordDateISO,
+        caTrackKey,
+        caSubId,
       },
     });
 
     return res.json({
       success: true,
       jobName,
+      catalystJobName: caTrackKey,
       status: "PENDING",
       message: "Demerger application job started",
     });
@@ -519,6 +540,39 @@ export const getDemergerApplyStatus = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: error.message || "Status check failed",
+    });
+  }
+};
+
+/**
+ * GET /demerger/apply-progress?key=DMGT...
+ * Overall state of one "Apply Demerger" run — stays RUNNING until the background
+ * holdings rebuild it triggers has actually finished, not just been queued
+ * (which is all GET /demerger/apply-status reflects).
+ *
+ *   RUNNING | COMPLETED | COMPLETED_WITH_ERRORS | ERROR | NOT_STARTED
+ */
+export const getDemergerApplyProgress = async (req, res) => {
+  try {
+    if (!req.catalystApp) {
+      return res
+        .status(500)
+        .json({ success: false, message: "Catalyst app not initialized" });
+    }
+    const key = String(req.query.key ?? "").trim();
+    if (!key) {
+      return res
+        .status(400)
+        .json({ success: false, message: "Query parameter key is required" });
+    }
+
+    const status = await readCaJobProgress(req.catalystApp.zcql(), key);
+    return res.status(200).json({ success: true, key, status });
+  } catch (error) {
+    console.error("[getDemergerApplyProgress]", error);
+    return res.status(500).json({
+      success: false,
+      message: error?.message || "Failed to fetch demerger job progress",
     });
   }
 };
