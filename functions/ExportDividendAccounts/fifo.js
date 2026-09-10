@@ -55,7 +55,7 @@ exports.runFifoEngine = (
   };
 
   const isBuy = (type) => /^BY-|SQB|OPI/.test(String(type || "").toUpperCase());
-  const isOpi = (type) => String(type || "").trim().toUpperCase() === "OPI";
+  const isOpi = (type) => /^OPI/i.test(String(type || "").trim());
 
   const getTxnEventDate = (t) => {
     const tradeDate = t.TRANDATE || t.trandate;

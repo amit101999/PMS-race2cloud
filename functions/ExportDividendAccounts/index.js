@@ -9,7 +9,7 @@ const BATCH_SIZE = 270;
  * rule; every other transaction type now uses Transaction Date. Mirrors the
  * isOpi() used inside fifo.js's getTxnEventDate().
  */
-const isOpiType = (type) => String(type || "").trim().toUpperCase() === "OPI";
+const isOpiType = (type) => /^OPI/i.test(String(type || "").trim());
 
 /** Effective date used to test a transaction against the RecordDate cutoff. */
 const txnEffectiveDate = (t) => {

@@ -34,7 +34,7 @@ const esc = (s) => String(s ?? "").replace(/'/g, "''");
  * rule; every other transaction type now uses Transaction Date. Mirrors the
  * isOpi() used inside runFifoEngine()'s getTxnEventDate().
  */
-const isOpiType = (type) => String(type || "").trim().toUpperCase() === "OPI";
+const isOpiType = (type) => /^OPI/i.test(String(type || "").trim());
 
 /** Effective date used to test a transaction against the RecordDate cutoff. */
 const txnEffectiveDate = (t) => {
@@ -117,7 +117,7 @@ function runFifoEngine(
 
   const isBuy = (type) => /^BY-|SQB|OPI/.test(String(type || "").toUpperCase());
   const isSell = (t) => /^SL\+|SQS|OPO|NF-/.test(String(t).toUpperCase());
-  const isOpi = (type) => String(type || "").trim().toUpperCase() === "OPI";
+  const isOpi = (type) => /^OPI/i.test(String(type || "").trim());
 
   const getTxnEventDate = (t) => {
     const tradeDate = t.TRANDATE || t.trandate;
