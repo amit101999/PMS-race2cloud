@@ -43,7 +43,9 @@
       "ExportDemergerReport",
       "ExportMergerReport",
       "GenerateComparsionReport",
-      "ExportCorpActionReport"
+      "ExportCorpActionReport",
+      "CustodyMatchRunner",
+      "CustodyMatchCleanup"
     ],
     "ignore": [],
     "source": "functions"

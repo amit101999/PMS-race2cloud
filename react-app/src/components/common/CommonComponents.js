@@ -664,6 +664,13 @@ export function Topbar({ title, rightContent }) {
       <div>
         <h1 style={titleStyle}>{title}</h1>
       </div>
+      {/* The prop was accepted but never rendered, so anything a page passed
+          here disappeared silently. */}
+      {rightContent ? (
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          {rightContent}
+        </div>
+      ) : null}
     </header>
   );
 }

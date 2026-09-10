@@ -1,0 +1,641 @@
+/* Custody Matching — gated upload workflow.
+   Sits alongside TempTransaction.css and reuses its card look so the new stages
+   read as part of the same screen rather than a bolted-on panel. */
+
+/* Every card on this screen is .temp-transaction-card from TempTransaction.css,
+   so the custody stages, Recent Uploads and the reports read as one page rather
+   than as two designs stacked. Only the side-by-side columns differ: full card
+   padding at half width leaves too little room for the controls. */
+.cm-split .temp-transaction-card {
+    padding: 28px;
+}
+
+.temp-transaction-card + .temp-transaction-card,
+.cm-split + .temp-transaction-card {
+    margin-top: 24px;
+}
+
+.cm-sub {
+    margin: 0 0 16px;
+    font-size: 13px;
+    line-height: 1.55;
+    color: #6b7280;
+    max-width: 70ch;
+}
+
+.cm-card-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 24px;
+    flex-wrap: wrap;
+}
+
+.cm-date {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: 12px;
+    font-weight: 600;
+    color: #6b7280;
+    white-space: nowrap;
+}
+
+.cm-date input {
+    padding: 7px 10px;
+    border: 1px solid #d1d5db;
+    border-radius: 8px;
+    font-size: 14px;
+    color: #111827;
+}
+
+/* ── custodian files ──────────────────────────────────────────────────── */
+
+/* One row per uploaded file. The list scrolls in place rather than growing the
+   card without limit, so "Add custodian file" and the gate below it stay
+   reachable however many files a day needs. */
+/* The shared table, wrapped so a long list scrolls in place instead of pushing
+   "Add custodian file" and the gate below it off the card. */
+.cm-filetable {
+    display: block;
+    max-height: 340px;
+    overflow-y: auto;
+}
+
+.cm-filetable th {
+    /* Sticky so the headings stay put while the list scrolls. Everything else
+       comes from .upload-history-table. */
+    position: sticky;
+    top: 0;
+    z-index: 1;
+}
+
+.cm-cell-scheme {
+    font-weight: 600;
+    color: #111827;
+    white-space: nowrap;
+}
+
+.cm-cell-dates {
+    white-space: nowrap;
+    color: #374151;
+}
+
+/* The file name is the only column that can be long, so it is the one that
+   gives way — everything else keeps its natural width. */
+.cm-cell-file {
+    max-width: 220px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: #166534;
+}
+
+.cm-remove {
+    width: 28px;
+    height: 28px;
+    border: 1px solid #e5e7eb;
+    background: #fff;
+    border-radius: 8px;
+    font-size: 18px;
+    line-height: 1;
+    color: #6b7280;
+    cursor: pointer;
+}
+
+.cm-remove:hover:not(:disabled) {
+    background: #fee2e2;
+    color: #991b1b;
+    border-color: #fecaca;
+}
+
+/* Separated by a rule rather than a second outline inside the card. */
+.cm-addfile {
+    margin-top: 18px;
+    padding-top: 18px;
+    border-top: 1px solid #f1f3f4;
+}
+
+.cm-addfile-title {
+    display: block;
+    font-size: 12px;
+    font-weight: 600;
+    color: #374151;
+    margin-bottom: 8px;
+}
+
+.cm-addfile-controls {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+/* The chooser is the action, so it sits at the far right of the row. */
+.cm-addfile-controls > input[type="file"] {
+    flex: 0 0 auto;
+    margin-left: auto;
+    font-size: 12px;
+    max-width: 100%;
+}
+
+.cm-addfile-busy {
+    display: block;
+    margin-top: 8px;
+    font-size: 12px;
+    color: #6b7280;
+}
+
+.cm-scheme {
+    flex: 1 1 200px;
+    min-width: 160px;
+    padding: 8px 10px;
+    border: 1px solid #d1d5db;
+    border-radius: 8px;
+    font-size: 14px;
+}
+
+.cm-scheme:disabled,
+.cm-type:disabled {
+    background: #f3f4f6;
+    color: #4b5563;
+}
+
+.cm-type {
+    padding: 8px 10px;
+    border: 1px solid #d1d5db;
+    border-radius: 8px;
+    font-size: 14px;
+    background: #fff;
+}
+
+/* ── transaction file ─────────────────────────────────────────────────── */
+
+.cm-fa {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    flex-wrap: wrap;
+}
+
+/* Same remove control as a custodian row, pushed to the far edge of the card so
+   the two sides read alike. */
+.cm-fa .cm-remove {
+    margin-left: auto;
+}
+
+.cm-staged {
+    font-size: 13px;
+    color: #166534;
+    font-weight: 500;
+}
+
+.cm-staged.muted {
+    color: #9ca3af;
+    font-weight: 400;
+}
+
+/* ── gate ─────────────────────────────────────────────────────────────── */
+
+.cm-gate-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 20px;
+    flex-wrap: wrap;
+}
+
+.cm-primary {
+    padding: 11px 22px;
+    border: none;
+    border-radius: 8px;
+    background: #2563eb;
+    color: #fff;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+.cm-primary:disabled {
+    background: #cbd5e1;
+    cursor: not-allowed;
+}
+
+.cm-secondary {
+    margin-top: 10px;
+    padding: 7px 14px;
+    border: 1px solid #d1d5db;
+    background: #fff;
+    border-radius: 8px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.cm-blockers {
+    margin: 0;
+    padding-left: 1.15rem;
+    font-size: 13px;
+    line-height: 1.7;
+    color: #92400e;
+}
+
+/* ── progress ─────────────────────────────────────────────────────────── */
+
+.cm-progress {
+    margin-top: 18px;
+    padding: 14px 16px;
+    border-radius: 10px;
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+}
+
+.cm-progress-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 12px;
+    font-size: 14px;
+    color: #111827;
+}
+
+.cm-run-id {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 11px;
+    color: #9ca3af;
+}
+
+.cm-bar {
+    height: 6px;
+    background: #e2e8f0;
+    border-radius: 999px;
+    overflow: hidden;
+    margin: 10px 0;
+}
+
+.cm-bar-fill {
+    height: 100%;
+    background: #2563eb;
+    transition: width 0.3s ease;
+}
+
+.cm-stats {
+    display: flex;
+    gap: 18px;
+    flex-wrap: wrap;
+    margin-top: 8px;
+    font-size: 12.5px;
+    color: #475569;
+    font-variant-numeric: tabular-nums;
+}
+
+.cm-stats .warn {
+    color: #92400e;
+    font-weight: 600;
+}
+
+.cm-verdict {
+    margin: 12px 0 0;
+    padding: 12px 14px;
+    border-radius: 8px;
+    font-size: 13.5px;
+    line-height: 1.55;
+}
+
+.cm-verdict.ok {
+    background: #f0fdf4;
+    color: #166534;
+    border: 1px solid #bbf7d0;
+}
+
+.cm-verdict.bad {
+    background: #fef2f2;
+    color: #991b1b;
+    border: 1px solid #fecaca;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .cm-bar-fill {
+        transition: none;
+    }
+}
+
+/* ── exception grid ───────────────────────────────────────────────────── */
+
+.cm-count {
+    color: #b91c1c;
+    font-weight: 700;
+}
+
+/* The exception grid, the reports list and Recent Uploads all render through
+   .upload-history-table so the three read as one screen. Only what that table
+   does not already say lives here. */
+.upload-history-table .mono {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12.5px;
+    white-space: nowrap;
+}
+
+.upload-history-table .num.diff {
+    color: #b91c1c;
+    font-weight: 700;
+}
+
+.cm-empty {
+    text-align: center;
+    padding: 28px 12px;
+    color: #9ca3af;
+}
+
+.cm-preview-note {
+    margin: 12px 0 0;
+    font-size: 12.5px;
+    color: #6b7280;
+}
+
+.cm-tag {
+    display: inline-block;
+    font-size: 11px;
+    font-weight: 600;
+    padding: 3px 8px;
+    border-radius: 6px;
+    white-space: nowrap;
+    background: #f3f4f6;
+    color: #374151;
+}
+
+.cm-tag.quantity_mismatch {
+    background: #fef3c7;
+    color: #92400e;
+}
+
+.cm-tag.missing_in_custody,
+.cm-tag.missing_in_fa {
+    background: #fee2e2;
+    color: #991b1b;
+}
+
+.cm-tag.date_mismatch,
+.cm-tag.type_mismatch {
+    background: #e0e7ff;
+    color: #3730a3;
+}
+
+.cm-tag.unmapped_code {
+    background: #f3e8ff;
+    color: #6b21a8;
+}
+
+/* ── two-column stage: custody left, transaction file right ───────────── */
+
+.cm-split {
+    display: grid;
+    grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr);
+    gap: 20px;
+    align-items: start;
+}
+
+/* Heading and date sit above the panel, so they read as the section's label
+   rather than as content inside it. */
+.cm-col-head {
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 16px;
+    flex-wrap: wrap;
+    margin-bottom: 10px;
+    min-height: 42px;
+}
+
+.cm-col-head h3 {
+    margin: 0;
+    font-size: 17px;
+    font-weight: 600;
+    color: #111827;
+}
+
+@media (max-width: 1024px) {
+    .cm-split {
+        grid-template-columns: 1fr;
+    }
+}
+
+/* Escape hatch from "+ New scheme…" back to the picker. */
+.cm-scheme-back {
+    border: none;
+    background: transparent;
+    padding: 0 2px;
+    font-size: 12px;
+    font-weight: 600;
+    color: #2563eb;
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+.cm-scheme-back:hover:not(:disabled) {
+    text-decoration: underline;
+}
+
+.cm-scheme-back:disabled {
+    color: #9ca3af;
+    cursor: not-allowed;
+}
+
+/* Importing a day that has not reconciled is allowed, but it should not look
+   like the ordinary path. */
+.cm-primary--warn {
+    background: #b45309;
+    border-color: #b45309;
+}
+
+.cm-primary--warn:hover:not(:disabled) {
+    background: #92400e;
+}
+
+.cm-unreconciled {
+    margin: 0;
+    font-size: 13px;
+    line-height: 1.55;
+    color: #92400e;
+    max-width: 68ch;
+}
+
+/* A file that was accepted but does not line up with the mapping. Not an error
+   — the upload succeeded — so it must not read like one. */
+.cm-warnings {
+    margin-top: 10px;
+    padding: 10px 12px;
+    border-radius: 8px;
+    background: #fef3c7;
+    border: 1px solid #fde68a;
+    color: #92400e;
+    font-size: 12.5px;
+    line-height: 1.55;
+}
+
+.cm-warnings p {
+    margin: 6px 0 0;
+}
+
+.cm-warn-cols {
+    font-family: "SFMono-Regular", Consolas, monospace;
+    font-size: 12px;
+}
+
+/* The size trails the file name in its cell rather than taking a column of
+   its own — it is a detail, not something anyone scans down. */
+.cm-file-size {
+    margin-left: 8px;
+    color: #6b7280;
+}
+
+/* ── choose which dates a run compares ────────────────────────────────── */
+
+.cm-dialog {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: min(520px, calc(100vw - 32px));
+    max-height: calc(100vh - 64px);
+    overflow-y: auto;
+    background: #fff;
+    border: 1px solid #e5e7eb;
+    border-radius: 12px;
+    box-shadow: 0 12px 32px rgba(16, 24, 40, 0.18);
+    padding: 24px;
+    z-index: 60;
+}
+
+.cm-dialog h3 {
+    margin: 0 0 4px;
+    font-size: 17px;
+    font-weight: 600;
+    color: #111827;
+}
+
+.cm-dialog-actions {
+    display: flex;
+    gap: 14px;
+    margin-bottom: 10px;
+}
+
+.cm-linkbtn {
+    border: none;
+    background: transparent;
+    padding: 0;
+    font-size: 12.5px;
+    font-weight: 600;
+    color: #2563eb;
+    cursor: pointer;
+}
+
+.cm-linkbtn:hover {
+    text-decoration: underline;
+}
+
+.cm-datelist {
+    list-style: none;
+    margin: 0 0 14px;
+    padding: 0;
+    border: 1px solid #e5e7eb;
+    border-radius: 8px;
+    max-height: 260px;
+    overflow-y: auto;
+}
+
+.cm-datelist li {
+    padding: 9px 12px;
+    border-bottom: 1px solid #f3f4f6;
+}
+
+.cm-datelist li:last-child {
+    border-bottom: 0;
+}
+
+.cm-datelist label {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    cursor: pointer;
+}
+
+.cm-date-label {
+    font-family: "SFMono-Regular", Consolas, monospace;
+    font-size: 13px;
+    font-weight: 600;
+    color: #111827;
+}
+
+.cm-date-counts {
+    font-size: 12px;
+    color: #6b7280;
+}
+
+.cm-date-note {
+    display: block;
+    margin: 3px 0 0 26px;
+    font-size: 11.5px;
+    color: #92400e;
+}
+
+.cm-dialog-summary {
+    margin: 0 0 16px;
+    font-size: 12.5px;
+    color: #374151;
+}
+
+.cm-dialog-error {
+    padding: 10px 12px;
+    margin-bottom: 12px;
+    border-radius: 8px;
+    background: #fee2e2;
+    color: #991b1b;
+    font-size: 12.5px;
+}
+
+.cm-dialog-foot {
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+}
+
+.cm-muted {
+    font-size: 13px;
+    color: #6b7280;
+}
+
+/* ── previous difference reports ──────────────────────────────────────── */
+
+.cm-notmatching {
+    font-weight: 600;
+    color: #92400e;
+}
+
+/* A report kept for reference after a later run took over the date. */
+.cm-report-old {
+    display: inline-block;
+    margin-left: 8px;
+    padding: 1px 6px;
+    border-radius: 999px;
+    background: #f3f4f6;
+    color: #6b7280;
+    font-size: 10.5px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+}
+
+
+/* Match handed back a report that already existed rather than making a second
+   copy of the same answer. Information, not a problem. */
+.cm-reused {
+    margin-top: 12px;
+    padding: 10px 12px;
+    border: 1px solid #bfdbfe;
+    border-radius: 8px;
+    background: #eff6ff;
+    color: #1e40af;
+    font-size: 13px;
+    line-height: 1.55;
+}
