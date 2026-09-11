@@ -32,6 +32,21 @@ async function fetchAll(zcql, baseQuery, mapFn) {
   return out;
 }
 
+/* ===== TRADE_DATE_MIGRATION: OLD (settlement basis for every row) — retained, do not delete =====
+    TRANDATE: r.SETDATE ?? r.TRANDATE ?? "",
+   ============================================================================================= */
+
+/* ===== TRADE_DATE_MIGRATION: NEW (trade basis; OPI keeps settlement) =====
+   OPI's TRANDATE is the original acquisition date and SETDATE is PMS onboarding,
+   so OPI stays on SETDATE. This date only orders rows — runFifoEngine here sums
+   quantities without looking at dates — so the report's numbers don't change. */
+const isOpiType = (type) => /^OPI/i.test(String(type || ""));
+
+const effectiveTxnDate = (r) =>
+  isOpiType(r.Tran_Type)
+    ? r.SETDATE || r.TRANDATE || ""
+    : r.TRANDATE || r.SETDATE || "";
+
 /** Normalize a raw Transaction / Temp_Transaction row. */
 function normalizeTxnRow(r) {
   return {
@@ -40,7 +55,7 @@ function normalizeTxnRow(r) {
     Security_Name: r.Security_Name ?? "",
     Tran_Type: r.Tran_Type ?? "",
     QTY: Number(r.QTY) || 0,
-    TRANDATE: r.SETDATE ?? r.TRANDATE ?? "",
+    TRANDATE: effectiveTxnDate(r),
     NETRATE: Number(r.NETRATE) || 0,
   };
 }
@@ -168,7 +183,7 @@ async function fetchTransactionsForAccounts(zcql, accountCodes) {
     while (true) {
       const rows = await zcql.executeZCQLQuery(`
         SELECT ROWID, WS_Account_code, ISIN, Security_Name, Security_code,
-               Tran_Type, QTY, SETDATE, NETRATE
+               Tran_Type, QTY, TRANDATE, SETDATE, NETRATE
         FROM Transaction
         WHERE WS_Account_code IN (${inClause})
         ORDER BY ROWID ASC
