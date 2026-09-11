@@ -28,7 +28,7 @@ function isHoldingsOpiType(type) {
 }
 
 function isHoldingsSellType(type) {
-  return /^SL[+-]|SQS|OPO|NF-/i.test(String(type || "").trim());
+  return /^SL\+|SQS|OPO|NF-/i.test(String(type || "").trim());
 }
 
 /** MERGER / DEMERGER rows are dated by the corporate action, not the lot. */

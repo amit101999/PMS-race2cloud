@@ -1,5 +1,17 @@
 /** Read materialised Holding rows — same ledger as CalculateHoldingPerAccount / catalyst rebuild. */
 
+/*
+ * HAND-COPIED INTO CATALYST FUNCTIONS. Functions can't import from AppSail, so
+ * the date rule and position maths below are ported into:
+ *   functions/ExportAllCustomerHoldingData/holdingsFromTable.js
+ *   functions/UpdateBonusTable/holdingsSnapshot.js
+ *   functions/UpdateDividendData/holdingsSnapshot.js      (+ fetch in index.js)
+ *   functions/ExportDividendAccounts/holdingsSnapshot.js  (+ fetch in index.js)
+ * A change to holdingsEffectiveDate, the buy/sell/replace type tests or
+ * recomputeHoldingsSnapshot must be made in every copy, or preview and apply
+ * will disagree.
+ */
+
 const BATCH = 250;
 
 /**
@@ -28,7 +40,7 @@ export function isHoldingsBuyType(type) {
 }
 
 export function isHoldingsSellType(type) {
-  return /^SL[+-]|SQS|OPO|NF-/i.test(String(type || "").trim());
+  return /^SL\+|SQS|OPO|NF-/i.test(String(type || "").trim());
 }
 
 /** Only OPI is settlement-dated — see `holdingsEffectiveDate` for why. */
