@@ -188,7 +188,12 @@ function computeSurvivingLotsFromHoldingRows(rows) {
       // SPLIT / MERGER / DEMERGER each produce one Holdings row per resulting lot.
       // The first row of a new event wipes the prior queue; subsequent rows of the
       // SAME event are added additively (one per resulting lot).
-      const eventKey = `${buyDate}|${type}`;
+      // Key on the event date, not buyDate: MERGER / DEMERGER rows keep each
+      // lot's ORIGINAL trade date, so keying on it made every lot look like a
+      // new event and only the last lot survived. holdingsEligibilityDate gives
+      // CA_DATE for those types (trade date for SPLIT and legacy rows), matching
+      // recomputeHoldingsSnapshot in util/analytics/holdingsFromTable.js.
+      const eventKey = `${holdingsEligibilityDate(row)}|${type}`;
       if (lastReplaceEventKey !== eventKey) {
         queue = [];
         lastReplaceEventKey = eventKey;

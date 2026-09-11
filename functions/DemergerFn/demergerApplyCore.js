@@ -247,7 +247,12 @@ function computeSurvivingLotsFromHoldingRows(rows) {
     }
 
     if (upperEq(type, "SPLIT") || upperEq(type, "MERGER") || upperEq(type, "DEMERGER")) {
-      const eventKey = `${buyDate}|${type}`;
+      // Key on the event date, not buyDate: MERGER / DEMERGER rows keep each
+      // lot's ORIGINAL trade date, so keying on it made every lot look like a
+      // new event and only the last lot survived. holdingsEligibilityDate gives
+      // CA_DATE for those types (trade date for SPLIT and legacy rows). Keep in
+      // sync with the twin in appsail-nodejs/controller/uploader/DemergerController.js.
+      const eventKey = `${holdingsEligibilityDate(row)}|${type}`;
       if (lastReplaceEventKey !== eventKey) {
         queue = [];
         lastReplaceEventKey = eventKey;
