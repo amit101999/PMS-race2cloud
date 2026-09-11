@@ -128,6 +128,11 @@ function sortCashEvents(allEvents) {
   });
 }
 
+/* Cash deliberately does NOT follow the holdings date rule (trade date, OPI on
+   settlement). It takes a conservative cash view: money arriving counts from its
+   settlement date (mapInflow), money leaving from its trade date (mapOutflow).
+   OPI / OPO move shares, not cash, so there is no OPI branch here.
+   Keep in sync with the twin in functions/Cal_CB_Append_TxnUpload/index.js. */
 function mapInflow(t) {
   return {
     rowId: t.ROWID,
