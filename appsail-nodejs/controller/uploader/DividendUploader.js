@@ -5,7 +5,6 @@ import {
 import { parseCustodianCsv } from "../../util/custodian/parseCustodianCsv.js";
 import { buildVirtualToActualMap } from "../../util/mapVirtualToActualCodes.js";
 
-const ZCQL_ROW_LIMIT = 270;
 const ACCOUNT_LOOKUP_BATCH = 50;
 
 const parseCatalystTime = (ct) => {
@@ -285,36 +284,21 @@ export const getAllSecuritiesISINs = async (req, res) => {
       const zcql = req.catalystApp.zcql();
 
       /* ======================================================
-         STEP 1: FIND ACCOUNTS WITH TRANSACTIONS FOR THIS ISIN
-         ====================================================== */
-      const accountSet = new Set();
-      let holdOffset = 0;
-
-      while (true) {
-        const batch = await zcql.executeZCQLQuery(`
-          SELECT WS_Account_code
-          FROM Transaction
-          WHERE ISIN='${isin}'
-          LIMIT ${ZCQL_ROW_LIMIT} OFFSET ${holdOffset}
-        `);
-
-        if (!batch || batch.length === 0) break;
-        batch.forEach((r) => accountSet.add(r.Transaction.WS_Account_code));
-        if (batch.length < ZCQL_ROW_LIMIT) break;
-        holdOffset += ZCQL_ROW_LIMIT;
-      }
-
-      const eligibleAccounts = Array.from(accountSet);
-      // We don't early-return on empty FIFO here: the file may carry rows
-      // we need to surface as "missing_in_system" for ops to investigate.
-
-      /* ======================================================
-         STEP 2: HOLDING AS OF RECORD DATE (read materialised Holdings)
+         STEP 1+2: HOLDING AS OF RECORD DATE (read materialised Holdings)
          ------------------------------------------------------
          Read the stored Holdings ledger — the same source of truth as the
          rebuild / upload worker — as of the record date, instead of replaying
          FIFO from the source tables. Corporate actions already applied (incl.
          demerger/merger) are reflected automatically.
+
+         The accounts come from the same read. They used to come from
+         `SELECT WS_Account_code FROM Transaction`, which missed clients whose
+         shares all arrived through a merger / demerger. The apply job
+         (UpdateDividendData) and the CSV export (ExportDividendAccounts) read
+         Holdings the same way, so all three agree.
+
+         We don't early-return on an empty result: the file may carry rows
+         we need to surface as "missing_in_system" for ops to investigate.
          ====================================================== */
       const preview = [];
       const fifoByAccount = new Map();
@@ -330,10 +314,7 @@ export const getAllSecuritiesISINs = async (req, res) => {
         recordDateISO,
       );
 
-      for (const accountCode of eligibleAccounts) {
-        const holdingRows = rowsByAccount.get(accountCode) || [];
-        if (!holdingRows.length) continue;
-
+      for (const [accountCode, holdingRows] of rowsByAccount) {
         /* Re-derive rather than reading the last row's stored HOLDING. That
            running balance was frozen in settlement order at rebuild time, so it
            can already include a buy the trade-date filter above just dropped —
