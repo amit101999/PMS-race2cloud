@@ -3,7 +3,7 @@ import MainLayout from "../../layouts/MainLayout";
 import { BASE_URL } from "../../constant";
 import CustodyMatchPanel from "./custody/CustodyMatchPanel";
 import DifferenceReports from "./custody/DifferenceReports";
-import FieldMappingPanel from "./custody/FieldMappingPanel";
+import PreviousCustodianUploads from "./custody/PreviousCustodianUploads";
 import ExceptionGrid from "./custody/ExceptionGrid";
 import GateTwo from "./custody/GateTwo";
 import { todayIso } from "./custody/api";
@@ -43,11 +43,9 @@ function formatUploadedAt(iso) {
  */
 const TempTransaction = () => {
     const [businessDate, setBusinessDate] = useState(todayIso());
-    const [mappingOpen, setMappingOpen] = useState(false);
-    /* Bumped after a mapping is saved so the custody panel re-reads the day:
-       saving supersedes stored runs, so a run that was clean is now stale. */
-    const [mappingSavedAt, setMappingSavedAt] = useState(0);
     const [run, setRun] = useState(null);
+    /* The custodian history list an upload hands back, so the new file shows at once. */
+    const [custodyHistory, setCustodyHistory] = useState(null);
 
     /** @type {[Array<{ key: string; originalFileName: string; uploadedAt: string; uploadedAtMs: number; sizeBytes: number; }>, React.Dispatch<React.SetStateAction<any[]>>]} */
     const [historyItems, setHistoryItems] = useState([]);
@@ -131,25 +129,13 @@ const TempTransaction = () => {
     }, []);
 
     return (
-        <MainLayout
-            title="Transaction Upload"
-            rightContent={
-                <button
-                    type="button"
-                    className="tt-fieldmap-btn"
-                    onClick={() => setMappingOpen(true)}
-                    title="Set which column in your file feeds each field"
-                >
-                    Field Mapping
-                </button>
-            }
-        >
+        <MainLayout title="Transaction Upload">
             <div className="temp-transaction-container">
                 <CustodyMatchPanel
-                    key={mappingSavedAt}
                     businessDate={businessDate}
                     onBusinessDateChange={setBusinessDate}
                     onRunChange={setRun}
+                    onCustodyUploaded={setCustodyHistory}
                 />
 
                 <ExceptionGrid run={run} />
@@ -214,16 +200,12 @@ const TempTransaction = () => {
                     </div>
                 </div>
 
+                <PreviousCustodianUploads latest={custodyHistory} />
+
                 {/* Keyed off the run so a match that has just finished with
                     differences shows up without a reload. */}
                 <DifferenceReports refreshToken={run?.runId ? `${run.runId}:${run.status}` : ""} />
             </div>
-
-            <FieldMappingPanel
-                open={mappingOpen}
-                onClose={() => setMappingOpen(false)}
-                onSaved={() => setMappingSavedAt(Date.now())}
-            />
         </MainLayout>
     );
 };

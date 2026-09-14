@@ -183,23 +183,3 @@
   opacity: 0.6;
   cursor: not-allowed;
 }
-
-/* Opens the Field Mapping panel. Lives in the top bar rather than in a card:
-   mapping is setup, and a settings control inside the daily workflow reads as
-   another step in it. */
-.tt-fieldmap-btn {
-    padding: 8px 15px;
-    border: 1px solid #d1d5db;
-    border-radius: 8px;
-    background: #fff;
-    font-size: 13px;
-    font-weight: 600;
-    color: #374151;
-    cursor: pointer;
-    white-space: nowrap;
-}
-
-.tt-fieldmap-btn:hover {
-    border-color: #2563eb;
-    color: #2563eb;
-}

@@ -143,6 +143,29 @@ export const parseDate = (v) => {
   return null;
 };
 
+const ISO_DATE_SHAPE = /^(\d{4})-(\d{2})-(\d{2})$/;
+
+/**
+ * Parse a date cell that must be exactly yyyy-mm-dd, or null.
+ *
+ * The strict counterpart of parseDate, for the columns where the standard
+ * format is required: the FA file's dates (the import accepts nothing else) and
+ * the Residential custodian trade date.
+ */
+export const parseIsoDate = (v) => {
+  const s = text(v);
+  const m = s.match(ISO_DATE_SHAPE);
+  if (!m) return null;
+  const [, y, mo, d] = m.map(Number);
+  return isRealDate(y, mo, d) ? s : null;
+};
+
+/** Row-error message for a value parseIsoDate refused. */
+export const isoDateErrorMessage = (column, raw) =>
+  ISO_DATE_SHAPE.test(text(raw))
+    ? `${column} "${raw}" is not a real calendar date.`
+    : `${column} "${raw}" is not in the standard date format. Use YYYY-MM-DD, for example 2026-07-03.`;
+
 /**
  * Parse an 8-digit compact date, resolving yyyymmdd vs ddmmyyyy.
  *
@@ -193,6 +216,22 @@ export const contractNoDatePart = (v) => {
 };
 
 /**
+ * The trade date carried in an NDPMS contract number, as ISO yyyy-mm-dd, or null.
+ *
+ * The first 8 digits are always ddmmyyyy - 210820261 is 21 Aug 2026. Read in
+ * that order only: guessing between orders let a value like 01022026 land on
+ * the wrong date whenever both readings happened to be real calendar dates.
+ */
+export const parseContractNoDate = (v) => {
+  const digits = contractNoDatePart(v);
+  if (!digits) return null;
+  const d = Number(digits.slice(0, 2));
+  const mo = Number(digits.slice(2, 4));
+  const y = Number(digits.slice(4, 8));
+  return y >= 1900 && y <= 2999 && isRealDate(y, mo, d) ? `${y}-${pad2(mo)}-${pad2(d)}` : null;
+};
+
+/**
  * Normalise a transaction type to BUY / SELL, or null when unrecognised.
  *
  * ORDER IS LOAD-BEARING. Rule 2 must run before anything that inspects the
@@ -211,8 +250,8 @@ export const normTranType = (raw, side = SIDE.FA) => {
 
   if (t.startsWith("BY-")) return TRAN_TYPE.BUY;
   if (side === SIDE.FA && (t === "SQB" || t === "OPI")) return TRAN_TYPE.BUY;
-  if (t === "BUY" || t === "B") return TRAN_TYPE.BUY;
-  if (t === "SELL" || t === "SL+" || t === "S") return TRAN_TYPE.SELL;
+  if (t === "BUY" || t === "B" || t === "BY+") return TRAN_TYPE.BUY;
+  if (t === "SELL" || t === "SL+" || t === "SL" || t === "S") return TRAN_TYPE.SELL;
 
   return null;
 };
