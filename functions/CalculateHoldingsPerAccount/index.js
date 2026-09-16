@@ -264,10 +264,26 @@ function createdTimeFloorFromMs(ms) {
   );
 }
 
+/* ===== TRADE_DATE_MIGRATION: OLD (settlement basis for ALL buys) — retained, do not delete =====
 const getEffectiveDate = (r) => {
   const setDate = r.SETDATE || r.setdate;
   const tradeDate = r.TRANDATE || r.trandate;
   return isBuyType(r.Tran_Type || r.tranType)
+    ? setDate || tradeDate
+    : tradeDate || setDate;
+};
+   ============================================================================================= */
+
+/* ===== TRADE_DATE_MIGRATION: NEW (trade basis; OPI keeps settlement) =====
+   Nothing dispatches this function any more (the live path is
+   CalculateHoldingMaster -> CalculateHoldingWorkers), but it is still deployed,
+   so it carries the same rule as CalculateHoldingWorkers. */
+const isOpiType = (type) => /^OPI/i.test(String(type || ""));
+
+const getEffectiveDate = (r) => {
+  const setDate = r.SETDATE || r.setdate;
+  const tradeDate = r.TRANDATE || r.trandate;
+  return isOpiType(r.Tran_Type || r.tranType)
     ? setDate || tradeDate
     : tradeDate || setDate;
 };
@@ -426,10 +442,21 @@ function runFifoEngine(
 
   const isBuy = (type) => /^BY-|SQB|OPI/.test(String(type || "").toUpperCase());
 
+  /* ===== TRADE_DATE_MIGRATION: OLD — retained, do not delete =====
   const getTxnEventDate = (t) => {
     const setDate = t.SETDATE || t.setdate;
     const tradeDate = t.TRANDATE || t.trandate;
     return isBuy(t.Tran_Type || t.tranType) ? setDate || tradeDate : tradeDate || setDate;
+  };
+     ============================================================== */
+
+  /* ===== TRADE_DATE_MIGRATION: NEW (OPI keeps settlement) ===== */
+  const getTxnEventDate = (t) => {
+    const setDate = t.SETDATE || t.setdate;
+    const tradeDate = t.TRANDATE || t.trandate;
+    return isOpiType(t.Tran_Type || t.tranType)
+      ? setDate || tradeDate
+      : tradeDate || setDate;
   };
 
   const events = [
@@ -958,8 +985,19 @@ async function appendBuyRowsCheap(zcql, accountCode, isin, newBuyTxns, counters)
   let holding = Number(tail?.HOLDING) || 0;
   let cost = Number(tail?.HOLDING_VALUE) || 0;
 
+  /* ===== TRADE_DATE_MIGRATION =====
+     The SQL `ORDER BY SETDATE ASC` only ordered buys correctly while every buy
+     was settlement-dated. Buys are now split (OPI -> SETDATE, BY-/SQB -> TRANDATE),
+     so sort here — same as appendBuyRowsCheap in CalculateHoldingWorkers. */
+  const sortedBuyTxns = [...newBuyTxns].sort((a, b) => {
+    const eA = String(getEffectiveDate(a) || "");
+    const eB = String(getEffectiveDate(b) || "");
+    if (eA !== eB) return eA.localeCompare(eB);
+    return String(a.ROWID || "").localeCompare(String(b.ROWID || ""));
+  });
+
   let appended = 0;
-  for (const t of newBuyTxns) {
+  for (const t of sortedBuyTxns) {
     const tranType = t.Tran_Type;
     const qty = Math.abs(Number(t.QTY) || 0);
     if (!qty) continue;

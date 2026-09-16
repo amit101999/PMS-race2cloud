@@ -1,23 +1,88 @@
 const { Readable } = require("stream");
 const catalyst = require("zcatalyst-sdk-node");
-const { runFifoEngine } = require("./fifo.js");
+const {
+  QTY_EPS,
+  holdingsEffectiveDate,
+  recomputeHoldingsSnapshot,
+  nextISODate,
+} = require("./holdingsSnapshot.js");
 
 const BATCH_SIZE = 270;
 
-/**
- * OPI (opening/initial-position) rows keep the settlement-date eligibility
- * rule; every other transaction type now uses Transaction Date. Mirrors the
- * isOpi() used inside fifo.js's getTxnEventDate().
- */
-const isOpiType = (type) => String(type || "").trim().toUpperCase() === "OPI";
+const esc = (s) => String(s ?? "").replace(/'/g, "''");
 
-/** Effective date used to test a transaction against the RecordDate cutoff. */
-const txnEffectiveDate = (t) => {
-  const tradeDate = t.TRANDATE || t.trandate;
-  const setDate = t.SETDATE || t.setdate;
-  const tranType = t.Tran_Type || t.tranType;
-  return isOpiType(tranType) ? setDate || tradeDate : tradeDate || setDate;
-};
+/**
+ * Every Holdings row for ONE ISIN that is effective on or before the record
+ * date, grouped by account in FIFO insert order.
+ *
+ * PORT of `fetchHoldingsRowsByAccountForIsin` in
+ * appsail-nodejs/util/analytics/holdingsFromTable.js, which the dividend
+ * PREVIEW reads, and identical to the copy in functions/UpdateDividendData —
+ * keep all three in sync so preview, export and apply see the same rows.
+ * Keyset (`ROWID > cursor`) rather than OFFSET so each page doesn't re-scan the
+ * whole ISIN.
+ */
+async function fetchHoldingsRowsByAccountForIsin(zcql, isin, recordDateISO) {
+  const cutoff = nextISODate(recordDateISO);
+  const byAccount = new Map();
+  let lastRowId = "0";
+
+  while (true) {
+    const batch = await zcql.executeZCQLQuery(`
+      SELECT ROWID, WS_Account_code, TRANSACTION_DATE, SETTLEMENT_DATE, TYPE,
+             QUANTITY, PRICE, TOTAL_AMOUNT, HOLDING, WAP, HOLDING_VALUE,
+             CA_DATE, CREATEDTIME
+      FROM Holdings
+      WHERE ISIN = '${esc(isin)}'
+        AND ROWID > ${lastRowId}
+        AND (SETTLEMENT_DATE < '${cutoff}' OR TRANSACTION_DATE < '${cutoff}')
+      ORDER BY ROWID ASC
+      LIMIT ${BATCH_SIZE}
+    `);
+    if (!batch || batch.length === 0) break;
+
+    let maxRowId = lastRowId;
+    for (const r of batch) {
+      const h = r.Holdings || r;
+      const rowId = String(h.ROWID ?? "");
+      // Advance the cursor over every row, including ones dropped below —
+      // filtering first could stall it and loop forever.
+      if (rowId && (rowId.length > maxRowId.length || (rowId.length === maxRowId.length && rowId > maxRowId))) {
+        maxRowId = rowId;
+      }
+      const code = String(h.WS_Account_code ?? "").trim();
+      if (!code) continue;
+
+      // The SQL ORs both dates — it can't express the OPI exception or the
+      // merger/demerger CA_DATE rule. Apply the real per-type rule here.
+      const eff = holdingsEffectiveDate(h);
+      if (eff && eff >= cutoff) continue;
+
+      if (!byAccount.has(code)) byAccount.set(code, []);
+      byAccount.get(code).push(h);
+    }
+
+    // Guard against a non-advancing cursor (non-numeric / duplicate ROWIDs).
+    if (maxRowId === lastRowId) break;
+    lastRowId = maxRowId;
+    if (batch.length < BATCH_SIZE) break;
+  }
+
+  // Rows arrive in global ROWID order; restore CREATEDTIME, ROWID order per account.
+  for (const rows of byAccount.values()) {
+    rows.sort((a, b) => {
+      const ta = String(a.CREATEDTIME ?? "");
+      const tb = String(b.CREATEDTIME ?? "");
+      if (ta !== tb) return ta < tb ? -1 : 1;
+      const ra = String(a.ROWID ?? "0");
+      const rb = String(b.ROWID ?? "0");
+      if (ra.length !== rb.length) return ra.length - rb.length;
+      return ra < rb ? -1 : ra > rb ? 1 : 0;
+    });
+  }
+
+  return byAccount;
+}
 
 /**
  * @param {import("./types/job").JobRequest} jobRequest
@@ -69,28 +134,23 @@ module.exports = async (jobRequest, context) => {
     const stratus = catalystApp.stratus();
     const bucket = stratus.bucket("export-app-data");
 
-    /* ================= STEP 1: FIND ACCOUNTS WITH TRANSACTIONS FOR THIS ISIN ================= */
-    const accountSet = new Set();
-    let holdOffset = 0;
+    /* ================= STEP 1: READ THE HOLDINGS LEDGER AS AT THE RECORD DATE =================
+       Same rows, same date rule and same position maths as the dividend
+       PREVIEW, so this CSV matches what the Dividend page shows. One read gives
+       both the eligible accounts and the rows to size each one from.
 
-    while (true) {
-      const batch = await zcql.executeZCQLQuery(`
-        SELECT WS_Account_code
-        FROM Transaction
-        WHERE ISIN='${isin}'
-        LIMIT ${BATCH_SIZE} OFFSET ${holdOffset}
-      `);
+       ===== OLD LOGIC — raw-table replay. Kept for rollback (fifo.js is in git
+       history, deleted with this change). =====
+       Accounts came from `SELECT WS_Account_code FROM Transaction`, then the
+       Transaction / Bonus / Split rows ≤ RecordDate were replayed through
+       `runFifoEngine(tx, bonuses, splits, true)`. That engine was never given
+       merger or demerger inputs, so shares that arrived through a corporate
+       action counted as zero here while the preview counted them.
+       ===== END OLD LOGIC ===== */
+    const rowsByAccount = await fetchHoldingsRowsByAccountForIsin(zcql, isin, recordDateISO);
 
-      if (!batch || batch.length === 0) break;
-      batch.forEach((r) => accountSet.add(r.Transaction.WS_Account_code));
-      if (batch.length < BATCH_SIZE) break;
-      holdOffset += BATCH_SIZE;
-    }
-
-    const eligibleAccounts = Array.from(accountSet);
-
-    if (!eligibleAccounts.length) {
-      console.log("[ExportDividend] No accounts found with transactions for ISIN:", isin);
+    if (!rowsByAccount.size) {
+      console.log("[ExportDividend] No accounts with Holdings rows for ISIN:", isin);
       await zcql.executeZCQLQuery(
         `UPDATE Jobs SET status = 'COMPLETED' WHERE jobName = '${jobName}'`
       );
@@ -98,86 +158,9 @@ module.exports = async (jobRequest, context) => {
       return;
     }
 
-    console.log(`[ExportDividend] Found ${eligibleAccounts.length} accounts for ISIN: ${isin}`);
+    console.log(`[ExportDividend] Found ${rowsByAccount.size} accounts for ISIN: ${isin}`);
 
-    /* ================= STEP 2: FETCH TX / BONUS / SPLIT ================= */
-    const fetchAll = async (table, dateCol) => {
-      const out = [];
-      let off = 0;
-      while (true) {
-        const r = await zcql.executeZCQLQuery(`
-          SELECT *
-          FROM ${table}
-          WHERE ISIN='${isin}' AND ${dateCol} <='${recordDateISO}'
-          LIMIT ${BATCH_SIZE} OFFSET ${off}
-        `);
-        if (!r || r.length === 0) break;
-        out.push(...r);
-        if (r.length < BATCH_SIZE) break;
-        off += BATCH_SIZE;
-      }
-      return out;
-    };
-
-    /*
-     * Transaction fetch needs its own query instead of the generic fetchAll()
-     * above: the WHERE clause is widened with an OR so no eligible row is
-     * excluded before the exact per-row cutoff check runs below (buys/sells
-     * are eligible by TRANDATE now; OPI rows still need SETDATE, so both
-     * columns have to be considered at fetch time).
-     *
-     * SETTLEMENT-DATE RULE (disabled — kept for future restore):
-     * const txRows = await fetchAll("Transaction", "SETDATE");
-     */
-    const txRowsRaw = [];
-    {
-      let off = 0;
-      while (true) {
-        const r = await zcql.executeZCQLQuery(`
-          SELECT *
-          FROM Transaction
-          WHERE ISIN='${isin}'
-            AND (TRANDATE <='${recordDateISO}' OR SETDATE <='${recordDateISO}')
-          LIMIT ${BATCH_SIZE} OFFSET ${off}
-        `);
-        if (!r || r.length === 0) break;
-        txRowsRaw.push(...r);
-        if (r.length < BATCH_SIZE) break;
-        off += BATCH_SIZE;
-      }
-    }
-    const txRows = txRowsRaw.filter((row) => {
-      const t = row.Transaction || row;
-      const effDate = txnEffectiveDate(t);
-      return !effDate || effDate <= recordDateISO;
-    });
-    const bonusRows = await fetchAll("Bonus", "ExDate");
-    const splitRows = await fetchAll("Split", "Issue_Date");
-
-    /* ================= GROUP DATA ================= */
-    const txByAcc = {};
-    txRows.forEach((r) => {
-      const t = r.Transaction;
-      (txByAcc[t.WS_Account_code] ||= []).push(t);
-    });
-
-    const bonusByAcc = {};
-    bonusRows.forEach((r) => {
-      const b = r.Bonus;
-      (bonusByAcc[b.WS_Account_code] ||= []).push(b);
-    });
-
-    const splits = splitRows.map((r) => {
-      const s = r.Split;
-      return {
-        issueDate: s.Issue_Date,
-        ratio1: Number(s.Ratio1) || 0,
-        ratio2: Number(s.Ratio2) || 0,
-        isin: s.ISIN,
-      };
-    });
-
-    /* ================= STEP 3: FIFO + BUILD CSV ================= */
+    /* ================= STEP 2: HOLDING + BUILD CSV ================= */
     const UTF8_BOM = "\uFEFF";
     const csvLines = [];
     csvLines.push(
@@ -187,16 +170,12 @@ module.exports = async (jobRequest, context) => {
 
     let eligibleCount = 0;
 
-    for (const accountCode of eligibleAccounts) {
-      const tx = txByAcc[accountCode] || [];
-      if (!tx.length) continue;
+    for (const [accountCode, holdingRows] of rowsByAccount) {
+      // Re-derive rather than read the last row's stored HOLDING — that running
+      // balance can be stale for the trade-date rule. Identical call to the preview's.
+      const holdingAsOnRecordDate = recomputeHoldingsSnapshot(holdingRows).HOLDING;
+      if (holdingAsOnRecordDate <= QTY_EPS) continue;
 
-      const bonuses = bonusByAcc[accountCode] || [];
-
-      const fifo = runFifoEngine(tx, bonuses, splits, true);
-      if (!fifo || fifo.holdings <= 1e-6) continue;
-
-      const holdingAsOnRecordDate = fifo.holdings;
       const dividendAmount = holdingAsOnRecordDate * rateNum;
       const exDateValue = exDateForDisplay || "";
 
@@ -217,7 +196,7 @@ module.exports = async (jobRequest, context) => {
     }
 
     console.log(
-      `[ExportDividend] ${eligibleAccounts.length} accounts checked, ${eligibleCount} eligible for dividend`
+      `[ExportDividend] ${rowsByAccount.size} accounts checked, ${eligibleCount} eligible for dividend`
     );
 
     /* ================= UPLOAD COMPLETE CSV ================= */

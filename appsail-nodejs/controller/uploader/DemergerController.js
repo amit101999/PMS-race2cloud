@@ -60,13 +60,26 @@ const upperEq = (a, b) => String(a || "").trim().toUpperCase() === b;
    filter, correct while every buy type was settlement-dated. OPI now stays on
    SETTLEMENT_DATE while BY-/SQB move to TRANSACTION_DATE, and ZCQL has no CASE,
    so the SQL widens to an OR superset and this predicate applies the precise cut.
+   MERGER / DEMERGER rows are the second exception: the rebuild emits one row per
+   surviving lot and preserves each lot's ORIGINAL trade date in TRANSACTION_DATE,
+   stamping the event's record date on CA_DATE. Dating them by TRANSACTION_DATE
+   scatters one event across the timeline at dates years before it happened, so a
+   demerger over an ISIN a merger already touched would judge those lots eligible
+   by their pre-merger trade date. Fall back to the lot date only for legacy rows
+   written before CA_DATE was stamped.
    NOTE: this filter decides which lots are ELIGIBLE for the demerger, so it moves
-   entitlement quantities — not just dates. Keep in sync with the twin in
+   entitlement quantities — not just dates. Mirrors `holdingsEffectiveDate` in
+   util/analytics/holdingsFromTable.js; keep in sync with the twin in
    functions/DemergerFn/demergerApplyCore.js. */
 const holdingsEligibilityDate = (row) => {
   const setD = String(row.SETTLEMENT_DATE || "").slice(0, 10);
   const txD = String(row.TRANSACTION_DATE || "").slice(0, 10);
-  return /^OPI/i.test(String(row.TYPE || "").trim()) ? setD || txD : txD || setD;
+  const typ = String(row.TYPE || "").trim().toUpperCase();
+  if (typ === "MERGER" || typ === "DEMERGER") {
+    const caD = String(row.CA_DATE || "").slice(0, 10);
+    if (caD) return caD;
+  }
+  return /^OPI/i.test(typ) ? setD || txD : txD || setD;
 };
 
 async function fetchHoldingRowsByAccountForIsin(zcql, isin, recordDateISO) {
@@ -76,7 +89,8 @@ async function fetchHoldingRowsByAccountForIsin(zcql, isin, recordDateISO) {
   while (true) {
     const batch = await zcql.executeZCQLQuery(`
       SELECT ROWID, WS_Account_code, TRANSACTION_DATE, SETTLEMENT_DATE, TYPE, ISIN,
-             QUANTITY, PRICE, TOTAL_AMOUNT, HOLDING, WAP, HOLDING_VALUE, STATUS, CREATEDTIME
+             QUANTITY, PRICE, TOTAL_AMOUNT, HOLDING, WAP, HOLDING_VALUE, STATUS,
+             CA_DATE, CREATEDTIME
       FROM Holdings
       WHERE ISIN = '${escSql(isin)}'
         AND (TRANSACTION_DATE <= '${escSql(recordDateISO)}' OR SETTLEMENT_DATE <= '${escSql(recordDateISO)}')
@@ -174,7 +188,12 @@ function computeSurvivingLotsFromHoldingRows(rows) {
       // SPLIT / MERGER / DEMERGER each produce one Holdings row per resulting lot.
       // The first row of a new event wipes the prior queue; subsequent rows of the
       // SAME event are added additively (one per resulting lot).
-      const eventKey = `${buyDate}|${type}`;
+      // Key on the event date, not buyDate: MERGER / DEMERGER rows keep each
+      // lot's ORIGINAL trade date, so keying on it made every lot look like a
+      // new event and only the last lot survived. holdingsEligibilityDate gives
+      // CA_DATE for those types (trade date for SPLIT and legacy rows), matching
+      // recomputeHoldingsSnapshot in util/analytics/holdingsFromTable.js.
+      const eventKey = `${holdingsEligibilityDate(row)}|${type}`;
       if (lastReplaceEventKey !== eventKey) {
         queue = [];
         lastReplaceEventKey = eventKey;

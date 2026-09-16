@@ -14,512 +14,104 @@
  *      React UI can poll `/dividend/apply-status?jobName=...`.
  *   2. Idempotency check on (ISIN, RecordDate) in `Dividend`.
  *   3. INSERT one master row into `Dividend`.
- *   4. Discover all accounts that ever traded the ISIN.
- *   5. Fetch Transaction / Bonus / Split rows ≤ RecordDate for the ISIN.
- *   6. Run FIFO engine per account (card mode) to get holding-on-record-date.
- *   7. INSERT one row into `Dividend_Record` per eligible account.
- *   8. APPEND one row into `Cash_Balance_Per_Transaction` per eligible
+ *   4. Read the Holdings ledger for the ISIN as at the RecordDate — the same
+ *      rows, date rule and position maths as the dividend preview.
+ *   5. Re-derive each account's holding on the RecordDate from those rows.
+ *   6. INSERT one row into `Dividend_Record` per eligible account.
+ *   7. APPEND one row into `Cash_Balance_Per_Transaction` per eligible
  *      account (running balance + monotonic Sequence per account).
- *   9. UPDATE the `Jobs` row to status='COMPLETED' (or 'FAILED' on error).
+ *   8. UPDATE the `Jobs` row to status='COMPLETED' (or 'FAILED' on error).
  */
 
 const catalyst = require("zcatalyst-sdk-node");
+const {
+  QTY_EPS,
+  holdingsEffectiveDate,
+  recomputeHoldingsSnapshot,
+  nextISODate,
+} = require("./holdingsSnapshot.js");
 
 const ZCQL_ROW_LIMIT = 270;
 
 const esc = (s) => String(s ?? "").replace(/'/g, "''");
 
 /**
- * OPI (opening/initial-position) rows keep the settlement-date eligibility
- * rule; every other transaction type now uses Transaction Date. Mirrors the
- * isOpi() used inside runFifoEngine()'s getTxnEventDate().
+ * Every Holdings row for ONE ISIN that is effective on or before the record
+ * date, grouped by account in FIFO insert order.
+ *
+ * PORT of `fetchHoldingsRowsByAccountForIsin` in
+ * appsail-nodejs/util/analytics/holdingsFromTable.js, which the dividend
+ * PREVIEW reads — keep the two in sync so preview and apply see the same rows.
+ * Keyset (`ROWID > cursor`) rather than OFFSET so each page doesn't re-scan the
+ * whole ISIN.
  */
-const isOpiType = (type) => String(type || "").trim().toUpperCase() === "OPI";
+async function fetchHoldingsRowsByAccountForIsin(zcql, isin, recordDateISO) {
+  const cutoff = nextISODate(recordDateISO);
+  const byAccount = new Map();
+  let lastRowId = "0";
 
-/** Effective date used to test a transaction against the RecordDate cutoff. */
-const txnEffectiveDate = (t) => {
-  const tradeDate = t.TRANDATE || t.trandate;
-  const setDate = t.SETDATE || t.setdate;
-  const tranType = t.Tran_Type || t.tranType;
-  return isOpiType(tranType) ? setDate || tradeDate : tradeDate || setDate;
-};
+  while (true) {
+    const batch = await zcql.executeZCQLQuery(`
+      SELECT ROWID, WS_Account_code, TRANSACTION_DATE, SETTLEMENT_DATE, TYPE,
+             QUANTITY, PRICE, TOTAL_AMOUNT, HOLDING, WAP, HOLDING_VALUE,
+             CA_DATE, CREATEDTIME
+      FROM Holdings
+      WHERE ISIN = '${esc(isin)}'
+        AND ROWID > ${lastRowId}
+        AND (SETTLEMENT_DATE < '${cutoff}' OR TRANSACTION_DATE < '${cutoff}')
+      ORDER BY ROWID ASC
+      LIMIT ${ZCQL_ROW_LIMIT}
+    `);
+    if (!batch || batch.length === 0) break;
 
-/**
- * Quantity epsilon for normal (non-corporate-action) FIFO math. Snaps tiny
- * floating-point residue to exactly zero so fully-sold positions end at 0 and
- * consumed lots leave the queue. Genuine fractional quantities are preserved.
- * Corporate-action rounding is intentional and unaffected.
- */
-const QTY_EPS = 1e-6;
-const snapQty = (n) => {
-  const v = Number(n) || 0;
-  return Math.abs(v) < QTY_EPS ? 0 : v;
-};
+    let maxRowId = lastRowId;
+    for (const r of batch) {
+      const h = r.Holdings || r;
+      const rowId = String(h.ROWID ?? "");
+      // Advance the cursor over every row, including ones dropped below —
+      // filtering first could stall it and loop forever.
+      if (rowId && (rowId.length > maxRowId.length || (rowId.length === maxRowId.length && rowId > maxRowId))) {
+        maxRowId = rowId;
+      }
+      const code = String(h.WS_Account_code ?? "").trim();
+      if (!code) continue;
+
+      // The SQL ORs both dates — it can't express the OPI exception or the
+      // merger/demerger CA_DATE rule. Apply the real per-type rule here.
+      const eff = holdingsEffectiveDate(h);
+      if (eff && eff >= cutoff) continue;
+
+      if (!byAccount.has(code)) byAccount.set(code, []);
+      byAccount.get(code).push(h);
+    }
+
+    // Guard against a non-advancing cursor (non-numeric / duplicate ROWIDs).
+    if (maxRowId === lastRowId) break;
+    lastRowId = maxRowId;
+    if (batch.length < ZCQL_ROW_LIMIT) break;
+  }
+
+  // Rows arrive in global ROWID order; restore CREATEDTIME, ROWID order per account.
+  for (const rows of byAccount.values()) {
+    rows.sort((a, b) => {
+      const ta = String(a.CREATEDTIME ?? "");
+      const tb = String(b.CREATEDTIME ?? "");
+      if (ta !== tb) return ta < tb ? -1 : 1;
+      const ra = String(a.ROWID ?? "0");
+      const rb = String(b.ROWID ?? "0");
+      if (ra.length !== rb.length) return ra.length - rb.length;
+      return ra < rb ? -1 : ra > rb ? 1 : 0;
+    });
+  }
+
+  return byAccount;
+}
 
 const normalizeDate = (d) => {
   const dt = new Date(d);
   dt.setUTCHours(0, 0, 0, 0);
   return dt.toISOString().split("T")[0];
 };
-
-/* =========================================================================
-   FIFO ENGINE — inlined verbatim from
-   appsail-nodejs/util/analytics/transactionHistory/fifo.js
-   (converted from ESM to CommonJS, behavior unchanged).
-   ========================================================================= */
-
-/**
- * Tie-breaker for events that share the same date.
- * SPLIT must be processed BEFORE BONUS so that bonus shares (stored in the DB
- * as the post-split count) are not multiplied a second time by the split.
- */
-const EVENT_TYPE_PRIORITY = {
-  TXN: 0,
-  SPLIT: 1,
-  BONUS: 2,
-  DEMERGER: 3,
-  MERGER: 4,
-};
-
-function runFifoEngine(
-  transactions = [],
-  bonuses = [],
-  splits = [],
-  card = false,
-  demergers = [],
-  mergers = [],
-) {
-  const activeIsin =
-    transactions[0]?.ISIN ||
-    transactions[0]?.isin ||
-    bonuses[0]?.ISIN ||
-    bonuses[0]?.isin ||
-    splits[0]?.isin ||
-    demergers[0]?.ISIN ||
-    demergers[0]?.isin ||
-    mergers[0]?.ISIN ||
-    mergers[0]?.isin ||
-    null;
-
-  let holdings = 0;
-  let lotCounter = 0;
-
-  const buyQueue = [];
-  const output = [];
-  let lastMergerEventKey = null;
-
-  const normalizeFifoDate = (rawDate) => {
-    if (!rawDate) return null;
-    const [y, m, d] = rawDate.split("-").map(Number);
-    const fullYear = y < 100 ? 2000 + y : y;
-    return `${fullYear}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
-  };
-
-  const isBuy = (type) => /^BY-|SQB|OPI/.test(String(type || "").toUpperCase());
-  const isSell = (t) => /^SL\+|SQS|OPO|NF-/.test(String(t).toUpperCase());
-  const isOpi = (type) => String(type || "").trim().toUpperCase() === "OPI";
-
-  const getTxnEventDate = (t) => {
-    const tradeDate = t.TRANDATE || t.trandate;
-    const setDate = t.SETDATE || t.setdate;
-    const tranType = t.Tran_Type || t.tranType;
-    /*
-     * SETTLEMENT-DATE RULE (disabled for BY-/SQB buys and all sells — kept
-     * for future restore):
-     * Buys used to be keyed by their settlement date (SETDATE) rather than
-     * trade date, since a buy only makes you the beneficial owner once it
-     * settles.
-     *
-     * return isBuy(tranType) ? setDate || tradeDate : tradeDate || setDate;
-     *
-     * Current rule: dividend eligibility is based on Transaction Date for
-     * everything EXCEPT OPI (opening/initial-position) entries, which keep
-     * using Settlement Date.
-     */
-    return isOpi(tranType) ? setDate || tradeDate : tradeDate || setDate;
-  };
-
-  const events = [
-    ...transactions
-      .filter((t) => (t.ISIN || t.isin) === activeIsin)
-      .map((t) => {
-        const eventDate = getTxnEventDate(t);
-        return {
-          type: "TXN",
-          date: normalizeFifoDate(eventDate),
-          data: {
-            tranType: t.Tran_Type || t.tranType,
-            qty: t.QTY || t.qty,
-            netrate: t.NETRATE || t.netrate,
-            netAmount: t.NETAMOUNT || t.netAmount || t.Net_Amount || 0,
-            trandate: eventDate,
-            originalTrandate: t.TRANDATE || t.trandate || null,
-            setdate: t.SETDATE || t.setdate || null,
-            isin: t.ISIN || t.isin,
-          },
-        };
-      }),
-
-    ...bonuses
-      .filter((b) => (b.ISIN || b.isin) === activeIsin)
-      .map((b) => ({
-        type: "BONUS",
-        date: normalizeFifoDate(b.ExDate || b.exDate),
-        data: {
-          bonusShare: b.BonusShare || b.bonusShare,
-          exDate: b.ExDate || b.exDate,
-          isin: b.ISIN || b.isin,
-        },
-      })),
-
-    ...splits
-      .filter((s) => s.isin === activeIsin)
-      .map((s) => ({
-        type: "SPLIT",
-        date: normalizeFifoDate(s.issueDate),
-        data: {
-          ratio1: s.ratio1,
-          ratio2: s.ratio2,
-          issueDate: s.issueDate,
-          isin: s.isin,
-        },
-      })),
-
-    ...demergers
-      .filter((d) => (d.ISIN || d.isin) === activeIsin)
-      .map((d) => {
-        const td = d.TRANDATE || d.trandate;
-        return {
-          type: "DEMERGER",
-          date: normalizeFifoDate(td),
-          data: {
-            qty: d.QTY ?? d.qty,
-            price: d.PRICE ?? d.price,
-            totalAmount:
-              Number(d.TOTAL_AMOUNT ?? d.total_amount ?? d.HOLDING_VALUE ?? 0) || 0,
-            trandate: td,
-            setdate: d.SETDATE || d.setdate || td,
-            isin: d.ISIN || d.isin,
-          },
-        };
-      }),
-
-    ...mergers
-      .filter((m) => (m.ISIN || m.isin) === activeIsin)
-      .map((m) => {
-        const td = m.TRANDATE || m.trandate;
-        return {
-          type: "MERGER",
-          date: normalizeFifoDate(td),
-          data: {
-            qty: Number(m.Quantity ?? m.quantity ?? m.Holding ?? 0) || 0,
-            price: Number(m.WAP ?? m.wap ?? 0) || 0,
-            totalAmount: Number(m.Total_Amount ?? m.total_amount ?? m.HoldingValue ?? 0) || 0,
-            trandate: td,
-            setdate: m.SETDATE || m.setdate || td,
-            isin: m.ISIN || m.isin,
-            oldIsin: m.OldISIN || m.oldIsin || "",
-          },
-        };
-      }),
-  ].sort((a, b) => {
-    const dateDiff = new Date(a.date) - new Date(b.date);
-    if (dateDiff !== 0) return dateDiff;
-    return (EVENT_TYPE_PRIORITY[a.type] ?? 99) - (EVENT_TYPE_PRIORITY[b.type] ?? 99);
-  });
-
-  const getCostOfHoldings = () =>
-    buyQueue.reduce((sum, lot) => sum + lot.qty * lot.price, 0);
-  const getWAP = () => (holdings > 0 ? getCostOfHoldings() / holdings : 0);
-
-  for (const e of events) {
-    const t = e.data;
-
-    if (e.type === "TXN") {
-      const qty = Math.abs(Number(t.qty) || 0);
-      if (!qty) continue;
-
-      const price = Number(t.netrate) || (t.netAmount && qty ? t.netAmount / qty : 0);
-
-      if (
-        String(t.tranType).toUpperCase() === "OPI" &&
-        qty == 1 &&
-        Number(price) === 0 &&
-        Number(t.netAmount) === 0
-      ) {
-        continue;
-      }
-
-      if (isBuy(t.tranType)) {
-        const lotId = ++lotCounter;
-        buyQueue.push({
-          lotId,
-          originalQty: qty,
-          qty,
-          price,
-          buyDate: normalizeFifoDate(t.trandate),
-          isActive: true,
-        });
-        holdings += qty;
-        output.push({
-          lotId,
-          trandate: t.trandate,
-          originalTrandate: t.originalTrandate,
-          setdate: t.setdate,
-          tranType: t.tranType,
-          qty,
-          price,
-          netAmount: t.netAmount,
-          holdings,
-          costOfHoldings: getCostOfHoldings(),
-          averageCostOfHoldings: getWAP(),
-          profitLoss: null,
-          isActive: true,
-          isin: t.ISIN || t.isin,
-        });
-      }
-
-      if (isSell(t.tranType)) {
-        const sellQty = Math.min(qty, holdings);
-        let remaining = sellQty;
-        let fifoCost = 0;
-        while (remaining > 0 && buyQueue.length) {
-          const lot = buyQueue[0];
-          const used = Math.min(lot.qty, remaining);
-          fifoCost += used * lot.price;
-          lot.qty -= used;
-          remaining -= used;
-          if (snapQty(lot.qty) === 0) {
-            lot.isActive = false;
-            buyQueue.shift();
-          }
-        }
-        holdings = snapQty(holdings - sellQty);
-        output.push({
-          trandate: t.trandate,
-          originalTrandate: t.originalTrandate,
-          setdate: t.setdate,
-          tranType: t.tranType,
-          qty,
-          price,
-          netAmount: t.netAmount,
-          holdings,
-          costOfHoldings: getCostOfHoldings(),
-          averageCostOfHoldings: getWAP(),
-          profitLoss: sellQty * price - fifoCost,
-          isActive: false,
-          isin: t.ISIN || t.isin,
-        });
-      }
-    }
-
-    if (e.type === "BONUS") {
-      const qty = Number(e.data.bonusShare) || 0;
-      if (!qty) continue;
-      const lotId = ++lotCounter;
-      buyQueue.push({
-        lotId,
-        originalQty: qty,
-        qty,
-        price: 0,
-        buyDate: normalizeFifoDate(e.data.exDate),
-        isActive: true,
-      });
-      holdings += qty;
-      output.push({
-        lotId,
-        trandate: e.data.exDate,
-        tranType: "BONUS",
-        qty,
-        price: 0,
-        netAmount: 0,
-        holdings,
-        costOfHoldings: getCostOfHoldings(),
-        averageCostOfHoldings: getWAP(),
-        profitLoss: null,
-        isActive: true,
-        isin: e.data.isin,
-      });
-    }
-
-    if (e.type === "SPLIT") {
-      if (!buyQueue.length) continue;
-      const ratio1 = Number(e.data.ratio1);
-      const ratio2 = Number(e.data.ratio2);
-      if (!ratio1 || !ratio2) continue;
-
-      const multiplier = ratio2 / ratio1;
-      const splitDate = normalizeFifoDate(e.data.issueDate);
-      const activeLots = buyQueue.filter((l) => l.isActive);
-      if (!activeLots.length) continue;
-
-      for (const oldLot of activeLots) {
-        oldLot.isActive = false;
-        const oldRow = output.find((r) => r.lotId === oldLot.lotId && r.isActive);
-        if (oldRow) oldRow.isActive = false;
-      }
-      buyQueue.length = 0;
-
-      let runningHoldings = 0;
-      let runningCost = 0;
-
-      for (let i = 0; i < activeLots.length; i++) {
-        const oldLot = activeLots[i];
-        const newQty = oldLot.qty * multiplier;
-        const newPrice = oldLot.price / multiplier;
-        const newLotId = ++lotCounter;
-        buyQueue.push({
-          lotId: newLotId,
-          originalQty: newQty,
-          qty: newQty,
-          price: newPrice,
-          buyDate: splitDate,
-          isActive: true,
-        });
-        runningHoldings += newQty;
-        runningCost += newQty * newPrice;
-        const runningWAP = runningHoldings > 0 ? runningCost / runningHoldings : 0;
-
-        const buyRowIndex = output.findIndex((r) => r.lotId === oldLot.lotId);
-        let insertIndex = output.length;
-        for (let j = buyRowIndex + 1; j < output.length; j++) {
-          if (new Date(output[j].trandate) > new Date(splitDate)) {
-            insertIndex = j;
-            break;
-          }
-        }
-        output.splice(insertIndex, 0, {
-          lotId: newLotId,
-          trandate: splitDate,
-          tranType: "SPLIT",
-          qty: newQty,
-          price: newPrice,
-          netAmount: Number((newQty * newPrice).toFixed(2)),
-          holdings: runningHoldings,
-          costOfHoldings: runningCost,
-          averageCostOfHoldings: runningWAP,
-          profitLoss: null,
-          isActive: true,
-          isin: e.data.isin,
-        });
-      }
-      holdings = runningHoldings;
-    }
-
-    if (e.type === "DEMERGER") {
-      const qty = Math.abs(Number(e.data.qty) || 0);
-      if (!qty) continue;
-
-      let price = Number(e.data.price) || 0;
-      let totalAmount = Number(e.data.totalAmount) || 0;
-      if (!price && totalAmount && qty) price = totalAmount / qty;
-      if (!totalAmount && price && qty) totalAmount = qty * price;
-
-      const activeLots = buyQueue.filter((l) => l.isActive);
-      for (const oldLot of activeLots) {
-        oldLot.isActive = false;
-        const oldRow = output.find((r) => r.lotId === oldLot.lotId && r.isActive);
-        if (oldRow) oldRow.isActive = false;
-      }
-      buyQueue.length = 0;
-
-      const demergerDate = normalizeFifoDate(e.data.trandate);
-      const lotId = ++lotCounter;
-      buyQueue.push({
-        lotId,
-        originalQty: qty,
-        qty,
-        price,
-        buyDate: demergerDate,
-        isActive: true,
-      });
-      holdings = qty;
-      output.push({
-        lotId,
-        trandate: e.data.trandate,
-        originalTrandate: e.data.trandate,
-        setdate: e.data.setdate,
-        tranType: "DEMERGER",
-        qty,
-        price,
-        netAmount: totalAmount,
-        holdings,
-        costOfHoldings: getCostOfHoldings(),
-        averageCostOfHoldings: getWAP(),
-        profitLoss: null,
-        isActive: true,
-        isin: e.data.isin,
-      });
-    }
-
-    if (e.type === "MERGER") {
-      const qty = Math.abs(Number(e.data.qty) || 0);
-      if (!qty) continue;
-
-      let price = Number(e.data.price) || 0;
-      let totalAmount = Number(e.data.totalAmount) || 0;
-      if (!price && totalAmount && qty) price = totalAmount / qty;
-      if (!totalAmount && price && qty) totalAmount = qty * price;
-
-      const mergerDate = normalizeFifoDate(e.data.trandate);
-      const eventKey = `${mergerDate}|${e.data.oldIsin || ""}`;
-
-      if (eventKey !== lastMergerEventKey) {
-        const activeLots = buyQueue.filter((l) => l.isActive);
-        for (const oldLot of activeLots) {
-          oldLot.isActive = false;
-          const oldRow = output.find((r) => r.lotId === oldLot.lotId && r.isActive);
-          if (oldRow) oldRow.isActive = false;
-        }
-        buyQueue.length = 0;
-        holdings = 0;
-        lastMergerEventKey = eventKey;
-      }
-
-      const lotId = ++lotCounter;
-      buyQueue.push({
-        lotId,
-        originalQty: qty,
-        qty,
-        price,
-        buyDate: mergerDate,
-        isActive: true,
-      });
-      holdings += qty;
-      output.push({
-        lotId,
-        trandate: e.data.trandate,
-        originalTrandate: e.data.trandate,
-        setdate: e.data.setdate,
-        tranType: "MERGER",
-        qty,
-        price,
-        netAmount: totalAmount,
-        holdings,
-        costOfHoldings: getCostOfHoldings(),
-        averageCostOfHoldings: getWAP(),
-        profitLoss: null,
-        isActive: true,
-        isin: e.data.isin,
-      });
-    }
-  }
-
-  if (card) {
-    if (!output.length) {
-      return { isin: "", holdings: 0, holdingValue: 0, averageCostOfHoldings: 0 };
-    }
-    const last = output[output.length - 1];
-    return {
-      isin: last.isin || "",
-      holdings: last.holdings || 0,
-      holdingValue: last.costOfHoldings || 0,
-      averageCostOfHoldings: last.averageCostOfHoldings || 0,
-    };
-  }
-
-  return output;
-}
 
 /* =========================================================================
    JOB ENTRY POINT
@@ -678,24 +270,28 @@ module.exports = async (jobRequest, context) => {
     `);
     console.log(`Dividend master row inserted for ${isin}/${recordDateISO}`);
 
-    /* ---- 4. Discover candidate accounts ---- */
-    const accountSet = new Set();
-    let holdOffset = 0;
-    while (true) {
-      const batch = await zcql.executeZCQLQuery(`
-        SELECT WS_Account_code FROM Transaction
-        WHERE ISIN='${esc(isin)}'
-        LIMIT ${ZCQL_ROW_LIMIT} OFFSET ${holdOffset}
-      `);
-      if (!batch || batch.length === 0) break;
-      batch.forEach((r) => accountSet.add(r.Transaction.WS_Account_code));
-      if (batch.length < ZCQL_ROW_LIMIT) break;
-      holdOffset += ZCQL_ROW_LIMIT;
-    }
-    const eligibleAccounts = Array.from(accountSet);
-    console.log(`Candidate accounts discovered: ${eligibleAccounts.length}`);
+    /* ---- 4. Read the Holdings ledger as at the RecordDate ----
+     * Same rows, same date rule and same position maths as the dividend
+     * PREVIEW (DividendUploader.previewStockDividend), so the amount applied is
+     * the amount that was previewed. One read gives both the eligible accounts
+     * and the rows to size each one from.
+     *
+     * ===== OLD LOGIC — raw-table replay. Kept for rollback (the inline
+     * runFifoEngine is in git history, deleted with this change). =====
+     * Accounts came from `SELECT WS_Account_code FROM Transaction`, then the
+     * Transaction / Bonus / Split rows ≤ RecordDate were replayed through
+     * `runFifoEngine(tx, bonuses, splits, true)`. That engine was never given
+     * merger or demerger inputs, so shares that arrived through a corporate
+     * action counted as zero here while the preview counted them.
+     * ===== END OLD LOGIC ===== */
+    const rowsByAccount = await fetchHoldingsRowsByAccountForIsin(
+      zcql,
+      isin,
+      recordDateISO,
+    );
+    console.log(`Accounts with Holdings rows as at ${recordDateISO}: ${rowsByAccount.size}`);
 
-    if (eligibleAccounts.length === 0) {
+    if (rowsByAccount.size === 0) {
       console.log("No eligible accounts. Job complete (master row inserted only).");
       await zcql.executeZCQLQuery(
         `UPDATE Jobs SET status = 'COMPLETED' WHERE jobName = '${jobName}'`
@@ -704,101 +300,7 @@ module.exports = async (jobRequest, context) => {
       return;
     }
 
-    /* ---- 5. Fetch Transactions ≤ recordDate for ISIN ----
-     * The WHERE clause below is intentionally widened with an OR so no
-     * eligible row is excluded before the exact per-row cutoff check runs
-     * (below). Buys/sells are eligible by TRANDATE now; only OPI rows still
-     * need SETDATE, so both columns have to be considered at fetch time.
-     *
-     * SETTLEMENT-DATE RULE (disabled — kept for future restore):
-     * `WHERE ISIN='${esc(isin)}' AND SETDATE <= '${recordDateISO}'
-     *  ORDER BY SETDATE ASC, ROWID ASC`
-     */
-    const txRows = [];
-    const seenTxnRowIds = new Set();
-    let txOffset = 0;
-    while (true) {
-      const batch = await zcql.executeZCQLQuery(`
-        SELECT * FROM Transaction
-        WHERE ISIN='${esc(isin)}'
-          AND (TRANDATE <= '${recordDateISO}' OR SETDATE <= '${recordDateISO}')
-        ORDER BY TRANDATE ASC, ROWID ASC
-        LIMIT ${ZCQL_ROW_LIMIT} OFFSET ${txOffset}
-      `);
-      if (!batch || batch.length === 0) break;
-      for (const row of batch) {
-        const t = row.Transaction || row;
-        if (t.ROWID != null && seenTxnRowIds.has(t.ROWID)) continue;
-        if (t.ROWID != null) seenTxnRowIds.add(t.ROWID);
-        // Exact cutoff: the OR above is a widened net, this is the real rule.
-        const effDate = txnEffectiveDate(t);
-        if (effDate && effDate > recordDateISO) continue;
-        txRows.push(row);
-      }
-      if (batch.length < ZCQL_ROW_LIMIT) break;
-      txOffset += ZCQL_ROW_LIMIT;
-    }
-
-    /* ---- 6. Fetch Bonuses ≤ recordDate for ISIN ---- */
-    const bonusRows = [];
-    let bonusOffset = 0;
-    while (true) {
-      const batch = await zcql.executeZCQLQuery(`
-        SELECT * FROM Bonus
-        WHERE ISIN='${esc(isin)}' AND ExDate <= '${recordDateISO}'
-        ORDER BY ExDate ASC, ROWID ASC
-        LIMIT ${ZCQL_ROW_LIMIT} OFFSET ${bonusOffset}
-      `);
-      if (!batch || batch.length === 0) break;
-      bonusRows.push(...batch);
-      if (batch.length < ZCQL_ROW_LIMIT) break;
-      bonusOffset += ZCQL_ROW_LIMIT;
-    }
-
-    /* ---- 7. Fetch Splits ≤ recordDate for ISIN ---- */
-    const splitRows = [];
-    let splitOffset = 0;
-    while (true) {
-      const batch = await zcql.executeZCQLQuery(`
-        SELECT * FROM Split
-        WHERE ISIN='${esc(isin)}' AND Issue_Date <= '${recordDateISO}'
-        ORDER BY Issue_Date ASC, ROWID ASC
-        LIMIT ${ZCQL_ROW_LIMIT} OFFSET ${splitOffset}
-      `);
-      if (!batch || batch.length === 0) break;
-      splitRows.push(...batch);
-      if (batch.length < ZCQL_ROW_LIMIT) break;
-      splitOffset += ZCQL_ROW_LIMIT;
-    }
-
-    console.log(
-      `Fetched: ${txRows.length} txn(s), ${bonusRows.length} bonus(es), ${splitRows.length} split(s)`,
-    );
-
-    /* ---- 8. Group by account ---- */
-    const txByAccount = {};
-    txRows.forEach((r) => {
-      const t = r.Transaction;
-      (txByAccount[t.WS_Account_code] ||= []).push(t);
-    });
-
-    const bonusByAccount = {};
-    bonusRows.forEach((r) => {
-      const b = r.Bonus;
-      (bonusByAccount[b.WS_Account_code] ||= []).push(b);
-    });
-
-    const splits = splitRows.map((r) => {
-      const s = r.Split;
-      return {
-        issueDate: s.Issue_Date,
-        ratio1: Number(s.Ratio1) || 0,
-        ratio2: Number(s.Ratio2) || 0,
-        isin: s.ISIN,
-      };
-    });
-
-    /* ---- 9. FIFO + INSERT INTO Dividend_Record + Cash_Balance_Per_Transaction
+    /* ---- 5. Holding + INSERT INTO Dividend_Record + Cash_Balance_Per_Transaction
      *        per eligible account.
      *
      *        Cash_Balance_Per_Transaction insert rules (append-only):
@@ -812,7 +314,6 @@ module.exports = async (jobRequest, context) => {
      *            entitlement date in both date columns).
      * ---- */
     let insertedCount = 0;
-    let skippedNoTxn = 0;
     let skippedFlat = 0;
     let skippedFiltered = 0;
     let insertErrors = 0;
@@ -820,7 +321,7 @@ module.exports = async (jobRequest, context) => {
     let cashSkippedDup = 0;
     let cashErrors = 0;
 
-    for (const accountCode of eligibleAccounts) {
+    for (const [accountCode, holdingRows] of rowsByAccount) {
       // Apply Matched Only / Apply All Reconciled: skip accounts that are
       // not in the allow-list passed by the controller.
       if (accountFilter && !accountFilter.has(accountCode)) {
@@ -828,20 +329,14 @@ module.exports = async (jobRequest, context) => {
         continue;
       }
 
-      const transactions = txByAccount[accountCode] || [];
-      if (!transactions.length) {
-        skippedNoTxn++;
-        continue;
-      }
-
-      const bonuses = bonusByAccount[accountCode] || [];
-      const fifo = runFifoEngine(transactions, bonuses, splits, true);
-      if (!fifo || fifo.holdings <= 1e-6) {
+      // Re-derive rather than read the last row's stored HOLDING — that running
+      // balance can be stale for the trade-date rule. Identical call to the preview's.
+      const holding = recomputeHoldingsSnapshot(holdingRows).HOLDING;
+      if (holding <= QTY_EPS) {
         skippedFlat++;
         continue;
       }
 
-      const holding = fifo.holdings;
       const dividendAmount = Math.round(holding * rate * 100) / 100;
 
       try {
@@ -1018,7 +513,7 @@ module.exports = async (jobRequest, context) => {
 
     console.log(
       `UpdateDividendData done. Master=1, Records inserted=${insertedCount}, ` +
-        `skipped(noTxn)=${skippedNoTxn}, skipped(flat)=${skippedFlat}, ` +
+        `skipped(flat)=${skippedFlat}, ` +
         `skipped(filtered)=${skippedFiltered}, errors=${insertErrors}, ` +
         `CashRows inserted=${cashInsertedCount}, CashRows skipped(dup)=${cashSkippedDup}, CashRows errors=${cashErrors}`,
     );

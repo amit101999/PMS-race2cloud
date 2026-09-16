@@ -368,6 +368,22 @@ async function fetchAllForIsinAsOnDate({ zcql, table, isin, dateColumn, asOnDate
   return out;
 }
 
+/* ===== TRADE_DATE_MIGRATION =====
+   OPI → settlement date (SETDATE); every other type (BY-, SQB and all sells)
+   → transaction date (TRANDATE). OPI rows are inception / opening positions
+   where TRANDATE is the original acquisition date and SETDATE is the PMS
+   onboarding date — genuinely different events, so OPI stays settlement-dated.
+   Keep in sync with the twin in appsail-nodejs/util/merger/mergerEngine.js. */
+const isOpiType = (type) => /^OPI/i.test(String(type || ""));
+
+const txnEffectiveDate = (t) => {
+  const setDate = t.SETDATE || t.setdate;
+  const tradeDate = t.TRANDATE || t.trandate;
+  return isOpiType(t.Tran_Type || t.tranType)
+    ? setDate || tradeDate
+    : tradeDate || setDate;
+};
+
 /** Transactions need both TRANDATE and SETDATE compared (matches existing analytics filter). */
 async function fetchTransactionsForIsinAsOnDate({ zcql, isin, asOnDateISO }) {
   const cutoff = nextDayIso(asOnDateISO);
@@ -394,7 +410,16 @@ async function fetchTransactionsForIsinAsOnDate({ zcql, isin, asOnDateISO }) {
     if (batch.length < ZCQL_ROW_LIMIT) break;
     offset += ZCQL_ROW_LIMIT;
   }
-  return out;
+
+  // The SQL above deliberately ORs both dates — it cannot express the OPI
+  // exception on its own, so it returns a superset. Apply the precise per-type
+  // cut here, otherwise an OPI lot acquired before the record date but
+  // onboarded after it is replayed by the FIFO and inflates the entitlement.
+  // The preview does exactly this (mergerEngine.js); without it apply ≠ preview.
+  return out.filter((t) => {
+    const effectiveDate = txnEffectiveDate(t);
+    return !effectiveDate || effectiveDate < cutoff;
+  });
 }
 
 async function ensureSecurityListForNewIsin(zcql, newIsin, secCode, secName) {
