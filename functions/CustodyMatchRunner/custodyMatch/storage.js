@@ -36,7 +36,17 @@ export const FOLDER = {
    * is older than the retention window would break every future upload.
    */
   FIELD_MAPS: "field-maps",
+  /*
+   * Copies of the most recent custodian uploads, kept so they can be downloaded
+   * again. Outside the date folders for the same reason as the mappings:
+   * replacing or removing a file, clearing a day and the cleanup cron all work
+   * on date folders, and none of them should erase the record of an upload.
+   */
+  CUSTODY_HISTORY: "Custodian-History",
 };
+
+/** How many custodian uploads Previous Uploads keeps. Older copies are deleted. */
+export const CUSTODY_HISTORY_LIMIT = 5;
 
 export const SIDE_KEY = {
   FA: "fa",
@@ -230,6 +240,54 @@ export const parseFaRawKey = (key) => {
     businessDate,
     uploadedAtMs: Number(m[1]),
     originalFileName: m[2],
+  };
+};
+
+/**
+ * Custodian-History/<uploadedAtMs>-<SCHEME>-<TYPE>-<yyyymmdd>-<name>
+ *
+ * Everything the Previous Uploads table shows is in the key, so listing needs
+ * no tracking table — the same idea as the day-folder keys above.
+ */
+export const buildCustodyHistoryKey = ({
+  uploadedAtMs,
+  scheme,
+  fileType,
+  businessDate,
+  originalFileName = "file.csv",
+}) => {
+  const type = sanitiseToken(fileType);
+  if (!CUSTODY_FILE_TYPES.includes(type)) {
+    throw new Error(`Unknown custodian file type "${fileType}".`);
+  }
+  const s = sanitiseToken(scheme);
+  if (!s) throw new Error("A custodian file must name its scheme.");
+  const date = assertBusinessDate(businessDate).replace(/-/g, "");
+
+  return `${FOLDER.CUSTODY_HISTORY}/${Number(uploadedAtMs)}-${s}-${type}-${date}-${sanitiseFileName(originalFileName)}`;
+};
+
+/** @returns {{key,uploadedAtMs,scheme,fileType,businessDate,originalFileName}|null} */
+export const parseCustodyHistoryKey = (key) => {
+  const parts = String(key || "").split("/");
+  if (parts.length !== 2 || parts[0] !== FOLDER.CUSTODY_HISTORY) return null;
+
+  const pattern = new RegExp(
+    String.raw`^(\d+)-([A-Z0-9_]+)-(${CUSTODY_FILE_TYPES.join("|")})-(\d{8})-(.+)$`,
+  );
+  const m = parts[1].match(pattern);
+  if (!m) return null;
+
+  const businessDate = `${m[4].slice(0, 4)}-${m[4].slice(4, 6)}-${m[4].slice(6, 8)}`;
+  if (!DATE_PATTERN.test(businessDate)) return null;
+
+  return {
+    key,
+    uploadedAtMs: Number(m[1]),
+    scheme: m[2],
+    fileType: m[3],
+    businessDate,
+    originalFileName: m[5],
   };
 };
 
@@ -551,6 +609,66 @@ export const listStoredDates = async (catalystApp, { bucket = null } = {}) => {
   return [...dates].sort().reverse();
 };
 
+/* --------------------------------------------------------------------------
+ * Custodian upload history
+ * ------------------------------------------------------------------------ */
+
+const newestFirst = (a, b) => b.uploadedAtMs - a.uploadedAtMs;
+
+/** Every stored history copy, newest first. */
+export const listCustodyHistory = async (catalystApp, { bucket = null } = {}) => {
+  const b = bucket || getBucket(catalystApp);
+  const objects = await listAllObjects(b, `${FOLDER.CUSTODY_HISTORY}/`);
+
+  const items = [];
+  for (const o of objects) {
+    const parsed = parseCustodyHistoryKey(o.key);
+    if (parsed) items.push({ ...parsed, sizeBytes: o.sizeBytes });
+  }
+  return items.sort(newestFirst);
+};
+
+/**
+ * Store a copy of an uploaded custodian file and delete copies beyond the limit.
+ *
+ * Returns the copies that remain, newest first. Stratus's listing lags a fresh
+ * write by around twenty seconds, so the new copy is added to the list by hand
+ * rather than trusting the listing to contain it yet.
+ */
+export const saveToCustodyHistory = async (
+  catalystApp,
+  { buffer, scheme, fileType, businessDate, originalFileName, uploadedAtMs },
+  { bucket = null } = {},
+) => {
+  const b = bucket || getBucket(catalystApp);
+  const key = buildCustodyHistoryKey({
+    uploadedAtMs,
+    scheme,
+    fileType,
+    businessDate,
+    originalFileName,
+  });
+  await putBuffer(b, key, buffer, "text/csv");
+
+  const listed = (await listCustodyHistory(catalystApp, { bucket: b })).filter((f) => f.key !== key);
+  const all = [{ ...parseCustodyHistoryKey(key), sizeBytes: buffer.length }, ...listed].sort(
+    newestFirst,
+  );
+
+  const kept = all.slice(0, CUSTODY_HISTORY_LIMIT);
+  const expired = all.slice(CUSTODY_HISTORY_LIMIT);
+  if (expired.length > 0) {
+    const result = await deleteKeys(b, expired.map((f) => f.key));
+    if (result.failed.length > 0) {
+      // An old copy left behind is harmless: the list only ever shows the newest
+      // five, and the next upload tries to delete it again.
+      console.warn("saveToCustodyHistory: could not delete old copies:", result.failed);
+    }
+  }
+
+  return kept;
+};
+
 // ---------------------------------------------------------------- download URL
 
 /**
@@ -617,6 +735,20 @@ export const writeFieldMapBlob = async (catalystApp, type, blob, { bucket = null
   const key = buildFieldMapKey(type);
   await putJson(b, key, blob);
   return key;
+};
+
+/**
+ * Delete one stored mapping.
+ *
+ * Nothing stored is already the goal, so a missing object is not an error.
+ * Returns whether there was a file to delete.
+ */
+export const deleteFieldMapBlob = async (catalystApp, type, { bucket = null } = {}) => {
+  const b = bucket || getBucket(catalystApp);
+  const key = buildFieldMapKey(type);
+  if (!(await objectExists(b, key))) return false;
+  await b.deleteObject(key);
+  return true;
 };
 
 /** Read every stored mapping at once, keyed by type. Missing ones come back null. */

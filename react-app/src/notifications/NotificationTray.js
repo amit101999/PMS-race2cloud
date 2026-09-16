@@ -26,7 +26,7 @@ function relativeTime(ts) {
  * Reusable as-is by any feature that calls useJobNotifications().trackJob(...).
  */
 export default function NotificationTray() {
-  const { jobs, dismissJob } = useJobNotifications();
+  const { jobs, dismissJob, clearAll } = useJobNotifications();
   const [open, setOpen] = useState(false);
   const [flash, setFlash] = useState(false);
   const rootRef = useRef(null);
@@ -82,6 +82,11 @@ export default function NotificationTray() {
         <div className="job-tray-panel" role="dialog" aria-label="Notifications">
           <div className="job-tray-panel-header">
             <span>Notifications</span>
+            {jobs.length > 0 && (
+              <button type="button" className="job-tray-clear" onClick={clearAll}>
+                Clear all
+              </button>
+            )}
           </div>
 
           {jobs.length === 0 ? (
@@ -91,7 +96,7 @@ export default function NotificationTray() {
               {jobs.map((job) => {
                 const meta = STATUS_META[job.status] || STATUS_META.in_progress;
                 return (
-                  <li key={job.id} className="job-tray-item">
+                  <li key={job.rowId || job.id} className="job-tray-item">
                     <div className="job-tray-item-top">
                       <span className={`job-status-pill ${meta.cls}`}>
                         {job.status === "in_progress" && <span className="job-status-dot" />}
@@ -100,9 +105,9 @@ export default function NotificationTray() {
                       <button
                         type="button"
                         className="job-tray-dismiss"
-                        onClick={() => dismissJob(job.id)}
-                        aria-label="Dismiss notification"
-                        title="Dismiss"
+                        onClick={() => dismissJob(job.rowId)}
+                        aria-label="Delete notification"
+                        title="Delete"
                       >
                         ×
                       </button>

@@ -21,8 +21,20 @@
  * changes until somebody edits a profile.
  */
 
-import { CUSTODY_FORMAT, FA_HEADERS } from "./constants.js";
-import { detectSeparator, firstLineOf, splitHeaderCells } from "./normalize.js";
+import { CUSTODY_FORMAT, FA_HEADERS, SIDE } from "./constants.js";
+import {
+  detectSeparator,
+  firstLineOf,
+  isValidIsinShape,
+  normIsin,
+  normTranType,
+  num,
+  parseContractNoDate,
+  parseDate,
+  parseIsoDate,
+  splitHeaderCells,
+  text,
+} from "./normalize.js";
 
 /** Which file a profile describes. One profile per type, shared across schemes. */
 export const PROFILE_TYPE = {
@@ -40,6 +52,15 @@ export const PROFILE_VERSION = 1;
 export const SOURCE_BY = {
   NAME: "name",
   INDEX: "index",
+  /**
+   * "This field has no column in my file."
+   *
+   * Stored rather than simply omitted. Every field has to be answered before a
+   * mapping can be saved, and an omitted field is indistinguishable from one
+   * the user has not reached yet — persisting the absence is what stops the
+   * next upload asking again about a column the file has never carried.
+   */
+  ABSENT: "absent",
 };
 
 /** Value-level rewrites applied after a column is located. */
@@ -66,87 +87,112 @@ export const MAP_ERROR = {
 /**
  * The canonical fields, per profile type.
  *
- * `required` marks the five that build the match key (Actual Code + ISIN +
- * Transaction Date + Transaction Type, compared on Quantity). A profile missing
- * any of them is rejected at save time rather than producing silent nonsense.
+ * `matchKey` marks the five that build the match key (Actual Code + ISIN +
+ * Transaction Date + Transaction Type, compared on Quantity). They must point
+ * at a real column: they cannot be left unanswered and cannot be declared
+ * absent, because without them the comparison has nothing to compare.
  *
- * `kind` is a hint for the UI and for per-field validation; it does not change
- * how the column is located.
+ * `required` marks a field the mapping screen will not let the user leave
+ * unanswered. Every field carries it — but "answered" includes answering
+ * SOURCE_BY.ABSENT, so a file that genuinely lacks a column is still mappable.
+ * The two flags are deliberately separate: `matchKey` decides what makes a
+ * FILE unreadable, `required` decides what makes a MAPPING incomplete.
+ *
+ * `allowShared` lets a field reuse a column another field has already taken.
+ * Only NDPMS `ref` has it, and for a concrete reason — see the note there.
+ *
+ * `kind` is what a column's contents are checked against before the mapping is
+ * accepted; it does not change how the column is located.
  */
 export const FIELD_CATALOG = {
   [PROFILE_TYPE.FA]: [
-    { field: "accountCode", label: "Account Code", kind: "code", required: true },
-    { field: "isin", label: "ISIN", kind: "isin", required: true },
-    { field: "tranDate", label: "Transaction Date", kind: "date", required: true },
-    { field: "tranType", label: "Transaction Type", kind: "type", required: true },
-    { field: "quantity", label: "Quantity", kind: "number", required: true },
+    { field: "accountCode", label: "Account Code", kind: "code", required: true, matchKey: true },
+    { field: "isin", label: "ISIN", kind: "isin", required: true, matchKey: true },
+    { field: "tranDate", label: "Transaction Date", kind: "isoDate", required: true, matchKey: true },
+    { field: "tranType", label: "Transaction Type", kind: "type", required: true, matchKey: true },
+    { field: "quantity", label: "Quantity", kind: "number", required: true, matchKey: true },
 
-    { field: "brokerCode", label: "Broker Code", kind: "code", required: false },
-    { field: "exchange", label: "Exchange", kind: "text", required: false },
-    { field: "settlementDate", label: "Settlement Date", kind: "date", required: false },
-    { field: "rate", label: "Rate", kind: "number", required: false },
-    { field: "brokerage", label: "Brokerage", kind: "number", required: false },
-    { field: "serviceTax", label: "Service Tax", kind: "number", required: false },
-    { field: "stt", label: "STT", kind: "number", required: false },
-    { field: "ref", label: "Transaction Ref", kind: "text", required: false },
-    { field: "description", label: "Description", kind: "text", required: false },
-    { field: "netAmount", label: "Net Amount", kind: "number", required: false },
+    { field: "brokerCode", label: "Broker Code", kind: "code", required: true },
+    { field: "exchange", label: "Exchange", kind: "text", required: true },
+    { field: "settlementDate", label: "Settlement Date", kind: "isoDate", required: true },
+    { field: "rate", label: "Rate", kind: "number", required: true },
+    { field: "brokerage", label: "Brokerage", kind: "number", required: true },
+    { field: "serviceTax", label: "Service Tax", kind: "number", required: true },
+    { field: "stt", label: "STT", kind: "number", required: true },
+    { field: "ref", label: "Transaction Ref", kind: "text", required: true },
+    { field: "description", label: "Description", kind: "text", required: true },
+    { field: "netAmount", label: "Net Amount", kind: "number", required: true },
 
     // Not used by matching, but carried through to the production import. A
     // remapped file that cannot fill these would silently lose Security_code
     // and PORTFOLIOID on every row it writes to the Transaction table.
-    { field: "setDateFlag", label: "Settlement Date Flag", kind: "text", required: false },
-    { field: "mktRate", label: "Market Rate", kind: "number", required: false },
-    { field: "cashSymbolCode", label: "Cash Symbol Code", kind: "code", required: false },
-    { field: "accruedInterest", label: "Accrued Interest", kind: "number", required: false },
-    { field: "blockId", label: "Block / Portfolio ID", kind: "code", required: false },
-    { field: "chequeNumber", label: "Cheque Number", kind: "text", required: false },
-    { field: "chequeDetail", label: "Cheque Detail", kind: "text", required: false },
-    { field: "bankRef", label: "Bank Ref", kind: "text", required: false },
-    { field: "netRate", label: "Net Rate", kind: "number", required: false },
-    { field: "cashSetdate", label: "Cash Settlement Date", kind: "date", required: false },
+    { field: "setDateFlag", label: "Settlement Date Flag", kind: "text", required: true },
+    { field: "mktRate", label: "Market Rate", kind: "number", required: true },
+    { field: "cashSymbolCode", label: "Cash Symbol Code", kind: "code", required: true },
+    { field: "accruedInterest", label: "Accrued Interest", kind: "number", required: true },
+    { field: "blockId", label: "Block / Portfolio ID", kind: "code", required: true },
+    { field: "chequeNumber", label: "Cheque Number", kind: "text", required: true },
+    { field: "chequeDetail", label: "Cheque Detail", kind: "text", required: true },
+    { field: "bankRef", label: "Bank Ref", kind: "text", required: true },
+    { field: "netRate", label: "Net Rate", kind: "number", required: true },
+    { field: "cashSetdate", label: "Cash Settlement Date", kind: "isoDate", required: true },
   ],
 
   [PROFILE_TYPE.CUSTODY_RESIDENTIAL]: [
-    { field: "actualCode", label: "Actual Code", kind: "code", required: true },
-    { field: "isin", label: "ISIN", kind: "isin", required: true },
-    { field: "tranDate", label: "Transaction Date", kind: "date", required: true },
-    { field: "tranType", label: "Transaction Type", kind: "type", required: true },
-    { field: "quantity", label: "Quantity", kind: "number", required: true },
+    { field: "actualCode", label: "Actual Code", kind: "code", required: true, matchKey: true },
+    { field: "isin", label: "ISIN", kind: "isin", required: true, matchKey: true },
+    { field: "tranDate", label: "Transaction Date", kind: "isoDate", required: true, matchKey: true },
+    { field: "tranType", label: "Transaction Type", kind: "type", required: true, matchKey: true },
+    { field: "quantity", label: "Quantity", kind: "number", required: true, matchKey: true },
 
-    { field: "fallbackCode", label: "Fallback Code", kind: "code", required: false },
-    { field: "rate", label: "Rate", kind: "number", required: false },
-    { field: "brokerage", label: "Brokerage", kind: "number", required: false },
-    { field: "stt", label: "STT", kind: "number", required: false },
-    { field: "netAmount", label: "Net Amount", kind: "number", required: false },
-    { field: "settlementDate", label: "Settlement Date", kind: "date", required: false },
-    { field: "ref", label: "Trade / Contract Ref", kind: "text", required: false },
-    { field: "exchange", label: "Exchange", kind: "text", required: false },
-    { field: "brokerCode", label: "Broker Code", kind: "code", required: false },
+    { field: "fallbackCode", label: "Fallback Code", kind: "code", required: true },
+    { field: "rate", label: "Rate", kind: "number", required: true },
+    { field: "brokerage", label: "Brokerage", kind: "number", required: true },
+    { field: "stt", label: "STT", kind: "number", required: true },
+    { field: "netAmount", label: "Net Amount", kind: "number", required: true },
+    { field: "settlementDate", label: "Settlement Date", kind: "date", required: true },
+    { field: "ref", label: "Trade / Contract Ref", kind: "text", required: true },
+    { field: "exchange", label: "Exchange", kind: "text", required: true },
+    { field: "brokerCode", label: "Broker Code", kind: "code", required: true },
   ],
 
   [PROFILE_TYPE.CUSTODY_NDPMS]: [
-    { field: "actualCode", label: "Actual Code", kind: "code", required: true },
-    { field: "isin", label: "ISIN", kind: "isin", required: true },
+    { field: "actualCode", label: "Actual Code", kind: "code", required: true, matchKey: true },
+    { field: "isin", label: "ISIN", kind: "isin", required: true, matchKey: true },
     {
       field: "tranDate",
       label: "Transaction Date",
       kind: "date",
       required: true,
+      matchKey: true,
       // NDPMS carries no date column; it is derived from ContractNo.
       allowTransforms: [TRANSFORM.NONE, TRANSFORM.DATE_FROM_FIRST_8],
     },
-    { field: "tranType", label: "Transaction Type", kind: "type", required: true },
-    { field: "quantity", label: "Quantity", kind: "number", required: true },
+    { field: "tranType", label: "Transaction Type", kind: "type", required: true, matchKey: true },
+    { field: "quantity", label: "Quantity", kind: "number", required: true, matchKey: true },
 
-    { field: "rate", label: "Rate", kind: "number", required: false },
-    { field: "brokerage", label: "Brokerage", kind: "number", required: false },
-    { field: "stt", label: "STT", kind: "number", required: false },
-    { field: "netAmount", label: "Net Amount", kind: "number", required: false },
-    { field: "settlementDate", label: "Settlement Date", kind: "date", required: false },
-    { field: "ref", label: "Trade / Contract Ref", kind: "text", required: false },
-    { field: "exchange", label: "Exchange", kind: "text", required: false },
-    { field: "brokerCode", label: "Broker Code", kind: "code", required: false },
+    { field: "rate", label: "Rate", kind: "number", required: true },
+    { field: "brokerage", label: "Brokerage", kind: "number", required: true },
+    { field: "stt", label: "STT", kind: "number", required: true },
+    { field: "netAmount", label: "Net Amount", kind: "number", required: true },
+    { field: "settlementDate", label: "Settlement Date", kind: "date", required: true },
+    {
+      field: "ref",
+      label: "Trade / Contract Ref",
+      kind: "text",
+      required: true,
+      /*
+       * The one field allowed to reuse a column another field has taken.
+       *
+       * NDPMS files have no date column at all — Transaction Date is the first
+       * eight digits of ContractNo — so ContractNo legitimately feeds both this
+       * field and tranDate. Without this flag the shipped NDPMS mapping could
+       * not be rebuilt through the screen at all.
+       */
+      allowShared: true,
+    },
+    { field: "exchange", label: "Exchange", kind: "text", required: true },
+    { field: "brokerCode", label: "Broker Code", kind: "code", required: true },
   ],
 };
 
@@ -250,9 +296,23 @@ const catalogFor = (type) => FIELD_CATALOG[type] || null;
 export const catalogEntry = (type, field) =>
   (catalogFor(type) || []).find((e) => e.field === field) || null;
 
-/** @returns {string[]} the required field names for a type. */
+/**
+ * @returns {string[]} every field the mapping screen must see an answer for.
+ * Answering SOURCE_BY.ABSENT counts — see checkProfileComplete.
+ */
 export const requiredFields = (type) =>
   (catalogFor(type) || []).filter((e) => e.required).map((e) => e.field);
+
+/**
+ * @returns {string[]} the fields that build the match key.
+ *
+ * These are the ones that decide whether a FILE can be read at all, which is a
+ * different question from whether a MAPPING is finished. Everything that used
+ * to branch on `required` and meant "the run cannot proceed without this"
+ * branches on this instead.
+ */
+export const matchKeyFields = (type) =>
+  (catalogFor(type) || []).filter((e) => e.matchKey).map((e) => e.field);
 
 /** A deep-enough copy that callers can edit a default without mutating it. */
 export const defaultProfile = (type) => {
@@ -331,6 +391,22 @@ export const validateProfile = (type, profile) => {
       });
     }
 
+    if (source.by === SOURCE_BY.ABSENT) {
+      /*
+       * "Not present in this file" is a real answer, but never for a match-key
+       * field: the comparison is built from those five, so a run without one of
+       * them would compare nothing and report every row as missing.
+       */
+      if (entry.matchKey) {
+        errors.push({
+          code: MAP_ERROR.BAD_SOURCE,
+          field,
+          message: `${entry.label} cannot be marked as not present — it is part of the match key.`,
+        });
+      }
+      continue;
+    }
+
     if (source.by === SOURCE_BY.NAME) {
       const name = String(source.name ?? "").trim();
       if (!name) {
@@ -355,12 +431,22 @@ export const validateProfile = (type, profile) => {
       errors.push({
         code: MAP_ERROR.BAD_SOURCE,
         field,
-        message: `${entry.label} must be mapped by column name or by position.`,
+        message: `${entry.label} must be mapped by column name, by position, or marked as not present.`,
       });
     }
   }
 
-  for (const field of requiredFields(type)) {
+  /*
+   * Only the match key is enforced here, NOT every required field.
+   *
+   * validateProfile is what fromStoredProfile uses to decide whether a stored
+   * blob is readable, and a mapping saved before every field became required
+   * is still perfectly readable — it simply has fields nobody has answered yet.
+   * Demanding completeness here would silently discard those profiles and fall
+   * back to the built-in default. Completeness is a save-time rule, and it
+   * lives in checkProfileComplete.
+   */
+  for (const field of matchKeyFields(type)) {
     if (!entries[field]) {
       const entry = catalogEntry(type, field);
       errors.push({
@@ -376,6 +462,28 @@ export const validateProfile = (type, profile) => {
   }
 
   return { ok: errors.length === 0, errors };
+};
+
+/**
+ * Is every field answered?
+ *
+ * Separate from validateProfile on purpose. validateProfile answers "can this
+ * mapping be used", which an older, partial profile still can. This answers
+ * "has the user finished", which is what the save endpoint and the mapping
+ * screen enforce. Answering SOURCE_BY.ABSENT counts as answered.
+ *
+ * @returns {{ok:boolean, missing:Array<{field:string,label:string}>}}
+ */
+export const checkProfileComplete = (type, profile) => {
+  const catalog = catalogFor(type);
+  if (!catalog) return { ok: false, missing: [] };
+
+  const entries = profile && typeof profile === "object" ? profile : {};
+  const missing = catalog
+    .filter((entry) => entry.required && !entries[entry.field])
+    .map((entry) => ({ field: entry.field, label: entry.label }));
+
+  return { ok: missing.length === 0, missing };
 };
 
 /**
@@ -419,6 +527,158 @@ export const readHeaderColumns = (buffer) => {
   return { separator, columns };
 };
 
+/** Sample values echoed back per column, so a message can quote the data. */
+const SAMPLE_VALUES_SHOWN = 5;
+
+/**
+ * What a column's contents may be used as.
+ *
+ * Mirrors the `kind` values in FIELD_CATALOG. Ordered most specific first: a
+ * column of ISINs is also valid free text, but calling it text tells the user
+ * nothing about why it cannot feed Quantity.
+ */
+export const COLUMN_KIND = {
+  ISIN: "isin",
+  /** A date in the standard YYYY-MM-DD format only. */
+  ISO_DATE: "isoDate",
+  /** A date in any accepted format (DD-MM-YYYY, YYYY-MM-DD, ...). */
+  DATE: "date",
+  TYPE: "type",
+  NUMBER: "number",
+  CODE: "code",
+  TEXT: "text",
+};
+
+const KIND_ORDER = [
+  COLUMN_KIND.ISIN,
+  COLUMN_KIND.ISO_DATE,
+  COLUMN_KIND.DATE,
+  COLUMN_KIND.TYPE,
+  COLUMN_KIND.NUMBER,
+  COLUMN_KIND.CODE,
+  COLUMN_KIND.TEXT,
+];
+
+/**
+ * One test per kind, run against a single non-blank cell.
+ *
+ * These are the SAME functions the parsers use, deliberately. A column that
+ * passes here and fails during the real parse would be the worst outcome: the
+ * mapping screen would have promised something the run then refuses.
+ */
+const KIND_TESTS = {
+  [COLUMN_KIND.NUMBER]: (v) => num(v) !== null,
+  [COLUMN_KIND.DATE]: (v) => parseDate(v) !== null,
+  [COLUMN_KIND.ISO_DATE]: (v) => parseIsoDate(v) !== null,
+  [COLUMN_KIND.ISIN]: (v) => isValidIsinShape(normIsin(v)),
+  // Side matters: SQB and OPI are BUY codes on the FA side only.
+  [COLUMN_KIND.TYPE]: (v, side) => normTranType(v, side) !== null,
+  // Any non-blank cell is a usable code or free text.
+  [COLUMN_KIND.CODE]: () => true,
+  [COLUMN_KIND.TEXT]: () => true,
+};
+
+/** Does this cell yield a real date once DATE_FROM_FIRST_8 is applied? */
+const readsAsCompactDate = (v) => parseContractNoDate(v) !== null;
+
+/**
+ * Describe each column by what is actually under it.
+ *
+ * Takes sample rows as POSITIONAL arrays, not objects keyed by heading: the FA
+ * template repeats "filler" three times, and any object keyed by name collapses
+ * those three into one.
+ *
+ * Detection is strict — every non-blank sample must pass. One value that is not
+ * a date means the column is not a date. A tolerant rule would pass a column
+ * that then fails during the real parse, where the failure is far more
+ * expensive to diagnose than a red row on the mapping screen.
+ *
+ * Blank cells are ignored, and a column that is blank throughout the sample is
+ * reported as compatible with everything: it is common for an optional column
+ * to be empty in the first few rows, and refusing it would block a mapping the
+ * file can perfectly well support.
+ *
+ * @param {Array<{index:number,name:string,label:string,duplicate:boolean}>} columns from readHeaderColumns
+ * @param {Array<string[]>} sampleRows positional cells, header row excluded
+ * @param {object} [opts]
+ * @param {string} [opts.type] PROFILE_TYPE, which decides the transaction-type side
+ * @returns {Array<object>} the same columns, each with samples and compatibility
+ */
+export const describeColumns = (columns, sampleRows = [], { type = null } = {}) => {
+  const side = type === PROFILE_TYPE.FA ? SIDE.FA : SIDE.CUSTODY;
+  const rows = Array.isArray(sampleRows) ? sampleRows : [];
+
+  return (columns || []).map((col) => {
+    const values = rows.map((row) => (Array.isArray(row) ? row[col.index] : undefined));
+    const filled = values.map(text).filter((v) => v !== "");
+    const unjudgeable = filled.length === 0;
+
+    const compatibleKinds = unjudgeable
+      ? [...KIND_ORDER]
+      : KIND_ORDER.filter((kind) => filled.every((v) => KIND_TESTS[kind](v, side)));
+
+    /*
+     * Compatibility under a transform is tracked separately because the check
+     * has to run on the TRANSFORMED value. NDPMS Transaction Date maps to
+     * ContractNo, whose raw value ("20260703000123") is a number, not a date —
+     * judged as-is, the only correct answer would be rejected.
+     */
+    const transformCompatible = {
+      [TRANSFORM.DATE_FROM_FIRST_8]:
+        unjudgeable || filled.every(readsAsCompactDate) ? [COLUMN_KIND.DATE] : [],
+    };
+
+    /*
+     * The first row that rules each kind out, so the screen can say "row 600
+     * has abc" instead of only "this column is not numbers". Row numbers count
+     * the header as row 1, the same as upload errors.
+     */
+    const firstMismatch = (test) => {
+      const i = values.findIndex((v) => text(v) !== "" && !test(text(v)));
+      return i === -1 ? null : { row: i + 2, value: text(values[i]) };
+    };
+    const mismatch = {};
+    for (const kind of KIND_ORDER) {
+      if (!compatibleKinds.includes(kind)) {
+        mismatch[kind] = firstMismatch((v) => KIND_TESTS[kind](v, side));
+      }
+    }
+    const transformMismatch = {
+      [TRANSFORM.DATE_FROM_FIRST_8]: transformCompatible[TRANSFORM.DATE_FROM_FIRST_8].length
+        ? null
+        : firstMismatch(readsAsCompactDate),
+    };
+
+    return {
+      ...col,
+      samples: filled.slice(0, SAMPLE_VALUES_SHOWN),
+      sampleCount: values.length,
+      blankCount: values.length - filled.length,
+      // null when the column was blank throughout — "unknown", not "text".
+      detectedKind: unjudgeable ? null : compatibleKinds[0] || COLUMN_KIND.TEXT,
+      compatibleKinds,
+      transformCompatible,
+      mismatch,
+      transformMismatch,
+    };
+  });
+};
+
+/**
+ * Can this column feed this field, under this transform?
+ *
+ * The single rule behind both the disabled options and the red row error, kept
+ * here so the screen and the server cannot disagree about it.
+ */
+export const isColumnCompatible = (column, entry, transform = TRANSFORM.NONE) => {
+  if (!column || !entry) return false;
+  const kinds =
+    transform && transform !== TRANSFORM.NONE
+      ? column.transformCompatible?.[transform] || []
+      : column.compatibleKinds || [];
+  return kinds.includes(entry.kind);
+};
+
 /**
  * Bind a profile to one file's actual header row.
  *
@@ -456,16 +716,24 @@ export const resolveFieldMap = (type, profile, rawHeaders, { strict = false } = 
     const entry = catalogEntry(type, field);
     let resolved = -1;
 
+    if (source.by === SOURCE_BY.ABSENT) {
+      // The user has said this column is not in the file. Not an error at any
+      // strictness — saying so is exactly what this answer means. Match-key
+      // fields cannot reach here; validateProfile refuses them above.
+      unmappedOptional.push(field);
+      continue;
+    }
+
     if (source.by === SOURCE_BY.NAME) {
       const key = normHeader(source.name);
       resolved = nameToIndex.has(key) ? nameToIndex.get(key) : -1;
-      if (resolved === -1 && (entry.required || strict)) {
+      if (resolved === -1 && (entry.matchKey || strict)) {
         errors.push({
           code: MAP_ERROR.COLUMN_NOT_IN_FILE,
           field,
           label: entry.label,
           expected: source.name,
-          required: Boolean(entry.required),
+          required: Boolean(entry.matchKey),
           message: `${entry.label} is mapped to a column named "${source.name}", which this file does not have.`,
           hint: "Rename the column in the file to match, or open Field Mapping and change the mapping to the name the file uses.",
         });
@@ -479,13 +747,13 @@ export const resolveFieldMap = (type, profile, rawHeaders, { strict = false } = 
        * fields nobody chose, naming column numbers instead of headings.
        * Required fields are still enforced either way.
        */
-      if (resolved === -1 && entry.required) {
+      if (resolved === -1 && entry.matchKey) {
         errors.push({
           code: MAP_ERROR.INDEX_OUT_OF_RANGE,
           field,
           label: entry.label,
           expected: `column ${source.index + 1}`,
-          required: Boolean(entry.required),
+          required: Boolean(entry.matchKey),
           message: `${entry.label} is mapped to column ${source.index + 1}, but this file has only ${headers.length}.`,
           hint: "Open Field Mapping and re-pick the column.",
         });
@@ -493,7 +761,7 @@ export const resolveFieldMap = (type, profile, rawHeaders, { strict = false } = 
     }
 
     if (resolved === -1) {
-      if (!entry.required) unmappedOptional.push(field);
+      if (!entry.matchKey) unmappedOptional.push(field);
       continue;
     }
 

@@ -8,6 +8,7 @@ import {
   getDay,
   health,
   listRunDates,
+  listCustodyUploads,
   listSchemes,
   uploadCustodyFile,
   uploadFaFile,
@@ -23,6 +24,7 @@ import {
   startRun,
 } from "../../controller/custodyMatch/CustodyMatchRun.js";
 import {
+  deleteFieldMap,
   getAllFieldMaps,
   getFieldMap,
   previewHeaders,
@@ -69,6 +71,9 @@ router.get("/field-map/:type", getFieldMap);
 // PUT /api/custody-match/field-map/:type — save a profile (supersedes stored runs)
 router.put("/field-map/:type", saveFieldMap);
 
+// DELETE /api/custody-match/field-map/:type — remove a saved profile (supersedes stored runs)
+router.delete("/field-map/:type", deleteFieldMap);
+
 // GET /api/custody-match/schemes — schemes already used, with their layout
 router.get("/schemes", listSchemes);
 
@@ -92,6 +97,9 @@ router.post("/custody-file", uploadCustodyFile);
 
 // GET /api/custody-match/download?key=… — 1-hour presigned GET
 router.get("/download", downloadObject);
+
+// GET /api/custody-match/custody-history — the last few custodian uploads, for download
+router.get("/custody-history", listCustodyUploads);
 
 /* ── matching ──────────────────────────────────────────────────────────── */
 

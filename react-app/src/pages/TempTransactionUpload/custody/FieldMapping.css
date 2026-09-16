@@ -84,10 +84,6 @@
     max-width: 74ch;
 }
 
-.fm-saved {
-    margin: 8px 0 16px;
-}
-
 .fm-sub {
     margin: 0 0 16px;
     font-size: 13px;
@@ -207,33 +203,6 @@
 .fm-samplebtn:hover {
     border-color: #2563eb;
     color: #2563eb;
-}
-
-.fm-count {
-    padding: 9px 13px;
-    border-radius: 8px;
-    background: #fef3c7;
-    color: #92400e;
-    font-size: 12.5px;
-    font-weight: 600;
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    flex-wrap: wrap;
-}
-
-.fm-count--ok {
-    background: #dcfce7;
-    color: #166534;
-}
-
-.fm-dirty {
-    padding: 1px 8px;
-    border-radius: 999px;
-    background: rgba(255, 255, 255, 0.7);
-    font-size: 11px;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
 }
 
 .fm-table {
@@ -397,6 +366,12 @@
     color: #92400e;
 }
 
+.fm-ready {
+    font-size: 12.5px;
+    color: #166534;
+    font-weight: 600;
+}
+
 .fm-ghost,
 .fm-primary {
     padding: 9px 16px;
@@ -426,8 +401,25 @@
     background: #1d4ed8;
 }
 
+.fm-danger {
+    padding: 9px 16px;
+    border-radius: 8px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    background: #fff;
+    border: 1px solid #fca5a5;
+    color: #b91c1c;
+}
+
+.fm-danger:hover:not(:disabled) {
+    background: #fef2f2;
+    border-color: #dc2626;
+}
+
 .fm-ghost:disabled,
-.fm-primary:disabled {
+.fm-primary:disabled,
+.fm-danger:disabled {
     opacity: 0.55;
     cursor: not-allowed;
 }
@@ -438,4 +430,135 @@
     line-height: 1.5;
     color: #9ca3af;
     max-width: 74ch;
+}
+
+/* ── dropdown mapping ──────────────────────────────────────────────────
+   Headings are chosen from the file, never typed, so the text box that used
+   to sit here is gone. .fm-text is kept above: nothing renders it today, but
+   it is the shared look these selects are matched to. */
+
+.fm-select {
+    flex: 1;
+    min-width: 220px;
+    max-width: 100%;
+    padding: 6px 9px;
+    border: 1px solid #d1d5db;
+    border-radius: 6px;
+    font-size: 13px;
+    color: #111827;
+    background: #fff;
+}
+
+.fm-select:focus {
+    outline: none;
+    border-color: #2563eb;
+    box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
+}
+
+.fm-select:disabled {
+    background: #f9fafb;
+    color: #9ca3af;
+}
+
+.fm-select--bad {
+    border-color: #dc2626;
+    background: #fef2f2;
+}
+
+.fm-select optgroup[disabled] {
+    color: #9ca3af;
+    font-style: italic;
+}
+
+.fm-row--key .fm-fieldname {
+    font-weight: 600;
+    color: #111827;
+}
+
+.fm-row--bad td {
+    background: #fef2f2;
+}
+
+.fm-rowerror {
+    margin: 6px 0 0;
+    font-size: 12px;
+    line-height: 1.45;
+    color: #b91c1c;
+    font-weight: 500;
+}
+
+.fm-samples {
+    margin: 6px 0 0;
+    font-size: 11.5px;
+    color: #6b7280;
+    font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+    overflow-wrap: anywhere;
+}
+
+/* ── detected layout strip ─────────────────────────────────────────── */
+
+.fm-detect {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+    padding: 9px 12px;
+    margin-bottom: 14px;
+    border-radius: 8px;
+    background: #f3f4f6;
+    font-size: 12.5px;
+    color: #374151;
+}
+
+.fm-detect--warn {
+    background: #fef3c7;
+    color: #92400e;
+}
+
+.fm-detect .fm-transform {
+    margin-top: 0;
+    width: auto;
+    min-width: 200px;
+}
+
+/* ── the file this mapping is for ──────────────────────────────────── */
+
+.fm-filename {
+    margin: 6px 0 0;
+    font-size: 12px;
+    font-weight: 600;
+    color: #2563eb;
+    word-break: break-all;
+}
+
+/* ── "already stored for this date" ────────────────────────────────── */
+
+.fm-conflict {
+    padding: 12px 14px;
+    margin-bottom: 16px;
+    border-radius: 8px;
+    background: #fef3c7;
+    color: #92400e;
+    font-size: 13px;
+    line-height: 1.5;
+}
+
+.fm-conflict p {
+    margin: 0 0 10px;
+}
+
+.fm-conflict-actions {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.fm-cleared-list {
+    margin: 8px 0;
+    padding-left: 20px;
+}
+
+.fm-cleared-list li {
+    margin-bottom: 4px;
 }

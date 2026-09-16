@@ -100,6 +100,9 @@ export const deleteUploadedFile = (key) =>
 export const clearDay = (date, side) =>
   request(`/day/${date}?side=${side}`, { method: "DELETE" });
 
+/** The last few custodian uploads, newest first, kept for download. */
+export const getCustodyHistory = () => request("/custody-history");
+
 export const getDownloadUrl = (key) =>
   request(`/download?key=${encodeURIComponent(key)}`);
 
@@ -139,6 +142,19 @@ export const getFieldMaps = () => request("/field-map");
 export const saveFieldMap = (type, profile, updatedBy) =>
   json(`/field-map/${type}`, "PUT", { profile, updatedBy });
 
+/** Deletes the saved mapping for one file type, so every field is mapped again. */
+export const deleteFieldMap = (type) => request(`/field-map/${type}`, { method: "DELETE" });
+
+/**
+ * Read a file's columns without uploading it.
+ *
+ * Comes back with each column's position, a disambiguated label, a few sample
+ * values and what those values can be used as — everything the mapping
+ * dropdowns need. The file is not stored. Every row is read to decide what a
+ * column holds, so a bad value anywhere in it is caught here.
+ */
+export const previewHeaders = (file, type) => form("/field-map/preview", { file, type });
+
 export const PROFILE_TYPE = {
   FA: "FA",
   CUSTODY_RESIDENTIAL: "CUSTODY_RESIDENTIAL",
@@ -157,7 +173,52 @@ export const PROFILE_HELP = {
   CUSTODY_NDPMS: "The deal allocation file for NRE / NRO (NDPMS) accounts.",
 };
 
-export const SOURCE_BY = { NAME: "name", INDEX: "index" };
+export const SOURCE_BY = { NAME: "name", INDEX: "index", ABSENT: "absent" };
+
+/**
+ * Can this column feed this field, under this transform?
+ *
+ * The type rules themselves live on the server — it reads the file and decides
+ * what each column can be used as. This only reads off that answer, so the two
+ * cannot disagree about a verdict.
+ */
+export const isColumnCompatible = (column, entry, transform = "NONE") => {
+  if (!column || !entry) return false;
+  const kinds =
+    transform && transform !== "NONE"
+      ? column.transformCompatible?.[transform] || []
+      : column.compatibleKinds || [];
+  return kinds.includes(entry.kind);
+};
+
+/** Plain-language description of what a column holds, for the "why not" line. */
+export const KIND_BLURB = {
+  isin: "ISINs",
+  isoDate: "dates in YYYY-MM-DD format",
+  date: "dates",
+  type: "buy/sell codes",
+  number: "numbers",
+  code: "short codes",
+  text: "free text",
+};
+
+/** Short form for a one-line error: `"abc" is not a number`. */
+export const KIND_SHORT = {
+  isin: "an ISIN",
+  isoDate: "YYYY-MM-DD",
+  date: "a date",
+  type: "a buy/sell code",
+  number: "a number",
+  code: "a code",
+  text: "text",
+};
+
+/** Same normalisation the server uses to match a saved heading to a column. */
+export const normHeader = (h) =>
+  String(h || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[\s._\-/()]+/g, "");
 
 export const TRANSFORM_LABEL = {
   NONE: "Use the value as-is",

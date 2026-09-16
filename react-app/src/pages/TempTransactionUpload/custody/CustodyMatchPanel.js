@@ -1,8 +1,26 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import FieldMappingPanel from "./FieldMappingPanel";
 import UploadErrorDetails from "./UploadErrorDetails";
 import * as api from "./api";
 import "./CustodyMatch.css";
+
+/**
+ * The custodian slot a user drops a file into, as a mapping profile.
+ *
+ * Two names for one thing: the upload endpoint takes a fileType, the mapping
+ * takes a profile type. Kept as one pair of lookups so a third spelling cannot
+ * appear somewhere else.
+ */
+const PROFILE_FOR_FILE_TYPE = {
+    [api.CUSTODY_FILE_TYPE.RESIDENTIAL]: api.PROFILE_TYPE.CUSTODY_RESIDENTIAL,
+    [api.CUSTODY_FILE_TYPE.NDPMS]: api.PROFILE_TYPE.CUSTODY_NDPMS,
+};
+
+const FILE_TYPE_FOR_PROFILE = {
+    [api.PROFILE_TYPE.CUSTODY_RESIDENTIAL]: api.CUSTODY_FILE_TYPE.RESIDENTIAL,
+    [api.PROFILE_TYPE.CUSTODY_NDPMS]: api.CUSTODY_FILE_TYPE.NDPMS,
+};
 
 /** How often the screen asks the job how it is getting on. */
 const POLL_MS = 2500;
@@ -165,7 +183,12 @@ const DatePicker = ({ dates, loading, error, selected, onToggle, onAll, onNone, 
  * The exception grid and Gate 2 live in a separate component; this one hands the
  * finished run up to the parent through `onRunChange`.
  */
-const CustodyMatchPanel = ({ businessDate, onBusinessDateChange, onRunChange }) => {
+const CustodyMatchPanel = ({
+    businessDate,
+    onBusinessDateChange,
+    onRunChange,
+    onCustodyUploaded,
+}) => {
     /* Schemes already used, from the stored custodian keys. Each entry knows its
        own layout, so choosing a scheme fills the account type as well. */
     const [schemes, setSchemes] = useState([]);
@@ -210,6 +233,16 @@ const CustodyMatchPanel = ({ businessDate, onBusinessDateChange, onRunChange }) 
     const [pickerError, setPickerError] = useState("");
     const [selectedDates, setSelectedDates] = useState(new Set());
 
+    /*
+     * The file waiting on its mapping.
+     *
+     * Picking a file no longer uploads it. It is held here while the mapping
+     * panel confirms which column feeds which field, and goes up only when that
+     * panel says so — which is what makes the mapping a gate rather than a
+     * screen somebody may or may not have visited.
+     */
+    const [pending, setPending] = useState(null);
+
     const faInputRef = useRef(null);
     const pollRef = useRef(null);
 
@@ -234,20 +267,28 @@ const CustodyMatchPanel = ({ businessDate, onBusinessDateChange, onRunChange }) 
         loadDay();
     }, [loadDay]);
 
-    useEffect(() => {
-        let cancelled = false;
-        api
-            .getSchemes()
-            .then((res) => {
-                if (!cancelled) setSchemes(res.schemes || []);
-            })
+    /**
+     * The schemes the picker offers.
+     *
+     * Derived from the files already filed, so it CHANGES as files are added —
+     * which is why it cannot be read once on mount. Uploading the first file for
+     * a scheme is exactly the moment the list stops being empty, and reading it
+     * only at mount left the row showing the "new scheme" text box until the
+     * user reloaded the page by hand.
+     */
+    const loadSchemes = useCallback(async () => {
+        try {
+            const res = await api.getSchemes();
+            setSchemes(res.schemes || []);
+        } catch {
             // A missing scheme list must not take the panel down; the row simply
             // offers nothing to pick until the call succeeds.
-            .catch(() => {});
-        return () => {
-            cancelled = true;
-        };
+        }
     }, []);
+
+    useEffect(() => {
+        loadSchemes();
+    }, [loadSchemes]);
 
     useEffect(() => {
         if (onRunChange) onRunChange(run);
@@ -299,14 +340,16 @@ const CustodyMatchPanel = ({ businessDate, onBusinessDateChange, onRunChange }) 
         [day, removedKeys],
     );
 
-    const uploadCustody = async (file, replace = false) => {
-        if (!file) return;
+    /**
+     * Send a custodian file that the mapping panel has cleared.
+     *
+     * Throws rather than handling its own errors: the panel started this upload
+     * and is still on screen, so it is the panel that shows what went wrong —
+     * including the "already stored for this date" prompt, which used to bounce
+     * the user out to a window.confirm here.
+     */
+    const uploadCustody = async (file, { fileType, replace = false }) => {
         const scheme = draft.scheme.trim();
-        if (!scheme) {
-            setAddError({ message: "Choose a scheme before choosing a file." });
-            return;
-        }
-
         setAddBusy(true);
         setAddError(null);
         setAddWarnings([]);
@@ -314,7 +357,7 @@ const CustodyMatchPanel = ({ businessDate, onBusinessDateChange, onRunChange }) 
             const res = await api.uploadCustodyFile({
                 file,
                 scheme,
-                fileType: draft.fileType,
+                fileType,
                 businessDate,
                 replace,
             });
@@ -329,20 +372,21 @@ const CustodyMatchPanel = ({ businessDate, onBusinessDateChange, onRunChange }) 
             // scheme is the case this screen exists for, and clearing after
             // every file would mean re-picking both each time.
             await loadDay();
-        } catch (err) {
-            if (err.detail?.code === "FILE_ALREADY_EXISTS") {
-                const ok = window.confirm(
-                    `${err.message}\n\nOnly that one file is replaced — the other schemes ` +
-                        "and the other dates in this run are left alone.\n\nReplace it?",
-                );
-                if (ok) {
-                    await uploadCustody(file, true);
-                    return;
-                }
-                setAddBusy(false);
-                return;
-            }
-            setAddError({ message: err.message, detail: err.detail });
+            // This upload may be the first file for its scheme, in which case
+            // the scheme only exists from now on. Re-read so the picker offers
+            // it without waiting for a page reload.
+            await loadSchemes();
+            /*
+             * A scheme that was being typed is a known one now that a file has
+             * been filed under it. Without this the row stays a text box even
+             * though the list beneath it has just gained the entry — the scheme
+             * is kept selected, only the control it is shown in changes.
+             */
+            setDraft((d) => (d.newScheme ? { ...d, newScheme: false } : d));
+            // Null when the server could not keep the history copy; the list
+            // then stays as it was rather than being emptied.
+            if (onCustodyUploaded && res.uploadHistory) onCustodyUploaded(res.uploadHistory);
+            return res;
         } finally {
             setAddBusy(false);
         }
@@ -373,8 +417,8 @@ const CustodyMatchPanel = ({ businessDate, onBusinessDateChange, onRunChange }) 
 
     /* ── transaction file ─────────────────────────────────────────────── */
 
-    const uploadFa = async (file, replace = false) => {
-        if (!file) return;
+    /** Same contract as uploadCustody: the mapping panel owns the errors. */
+    const uploadFa = async (file, { replace = false }) => {
         setFaBusy(true);
         setFaError(null);
         setFaWarnings([]);
@@ -385,28 +429,29 @@ const CustodyMatchPanel = ({ businessDate, onBusinessDateChange, onRunChange }) 
                 onBusinessDateChange(res.businessDate);
             }
             await loadDay();
-        } catch (err) {
-            if (err.detail?.code === "FILE_ALREADY_EXISTS") {
-                const existing = err.detail.existing?.[0];
-                const ok = window.confirm(
-                    `${err.message}\n\nStored file: ${existing?.fileName || "unknown"}\n\n` +
-                        "Delete it and stage this one instead?",
-                );
-                if (ok) {
-                    await uploadFa(file, true);
-                    return;
-                }
-                setFaBusy(false);
-                return;
-            }
-            setFaError({ message: err.message, detail: err.detail });
-            if (faInputRef.current) faInputRef.current.value = "";
+            return res;
         } finally {
             setFaBusy(false);
         }
     };
 
-    /* ── gate 1 ───────────────────────────────────────────────────────── */
+    /**
+     * What the mapping panel calls once every field has been answered.
+     *
+     * `profileType` comes back from the panel rather than from the draft, so a
+     * layout the user corrected there — a Residential file dropped into the
+     * NDPMS slot — is uploaded as what it actually is.
+     */
+    const uploadPending = async ({ profileType, replace }) => {
+        if (!pending) return null;
+        if (pending.kind === "fa") return uploadFa(pending.file, { replace });
+        return uploadCustody(pending.file, {
+            fileType: FILE_TYPE_FOR_PROFILE[profileType] || pending.fileType,
+            replace,
+        });
+    };
+
+    /* ─── gate 1 ───────── */
 
     const blockers = [];
     if (!faFile) blockers.push("No transaction file staged.");
@@ -498,8 +543,17 @@ const CustodyMatchPanel = ({ businessDate, onBusinessDateChange, onRunChange }) 
      * one after a day is cleared — would have nothing to pick and no way to
      * proceed.
      */
-    /* Nothing filed yet means there is nothing to pick from — type it instead. */
-    const typingScheme = draft.newScheme || schemeOptions.length === 0;
+    /*
+     * The dropdown is always the control; the text box appears only when the
+     * user asks for it with "+ New scheme…".
+     *
+     * It used to flip to a text box whenever the list was empty, which made the
+     * row change shape depending on how much had been filed — and on a fresh
+     * system, where the list is always empty, the dropdown was never seen at
+     * all. An empty list still offers "+ New scheme…", so there is no state in
+     * which the row cannot be filled in.
+     */
+    const typingScheme = draft.newScheme;
 
     const pickScheme = (value) => {
         setAddError(null);
@@ -618,7 +672,7 @@ const CustodyMatchPanel = ({ businessDate, onBusinessDateChange, onRunChange }) 
                             </select>
                         )}
 
-                        {draft.newScheme && schemeOptions.length > 0 ? (
+                        {draft.newScheme ? (
                             <button
                                 type="button"
                                 className="cm-scheme-back"
@@ -653,7 +707,22 @@ const CustodyMatchPanel = ({ businessDate, onBusinessDateChange, onRunChange }) 
                             onChange={(e) => {
                                 const f = e.target.files[0];
                                 e.target.value = "";
-                                uploadCustody(f);
+                                if (!f) return;
+                                if (!draft.scheme.trim()) {
+                                    setAddError({
+                                        message: "Choose a scheme before choosing a file.",
+                                    });
+                                    return;
+                                }
+                                setAddError(null);
+                                // Held, not uploaded. The mapping panel sends it
+                                // once every field has been answered.
+                                setPending({
+                                    kind: "custody",
+                                    file: f,
+                                    fileType: draft.fileType,
+                                    profileType: PROFILE_FOR_FILE_TYPE[draft.fileType],
+                                });
                             }}
                         />
                     </div>
@@ -684,7 +753,13 @@ const CustodyMatchPanel = ({ businessDate, onBusinessDateChange, onRunChange }) 
                         onChange={(e) => {
                             const f = e.target.files[0];
                             e.target.value = "";
-                            uploadFa(f);
+                            if (!f) return;
+                            setFaError(null);
+                            setPending({
+                                kind: "fa",
+                                file: f,
+                                profileType: api.PROFILE_TYPE.FA,
+                            });
                         }}
                     />
                     {faFile ? (
@@ -817,6 +892,19 @@ const CustodyMatchPanel = ({ businessDate, onBusinessDateChange, onRunChange }) 
                     onClose={() => setPickerOpen(false)}
                 />
             ) : null}
+
+            {/* The gate. A file picked above sits here until every field has
+                been answered; closing without uploading simply drops it.
+                onSaved refreshes the day in place rather than remounting this
+                panel, which would take the modal down mid-upload. */}
+            <FieldMappingPanel
+                open={Boolean(pending)}
+                file={pending?.file || null}
+                requestedType={pending?.profileType || null}
+                onUpload={uploadPending}
+                onClose={() => setPending(null)}
+                onSaved={loadDay}
+            />
         </>
     );
 };

@@ -20,6 +20,7 @@ import MergerRouter from "./router/MergerRouter.js";
 import ClientRouter from "./router/clientRouter/ClientRouter.js";
 import SecurityRouter from "./router/securityRouter/SecurityRouter.js";
 import CustodyMatchRouter from "./router/custodyMatchRouter/CustodyMatchRouter.js";
+import NotificationRouter from "./router/NotificationRouter.js";
 
 // app.use(
 //   cors({
@@ -70,6 +71,7 @@ app.use("/api/merger", MergerRouter);
 app.use("/api/client", ClientRouter);
 app.use("/api/security", SecurityRouter);
 app.use("/api/custody-match", CustodyMatchRouter);
+app.use("/api/notifications", NotificationRouter);
 
 // Fill each row with account codes. One job is triggered per row, 10 at a time.
 const accounts = [

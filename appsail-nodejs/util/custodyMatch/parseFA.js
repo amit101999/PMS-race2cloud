@@ -31,11 +31,12 @@ import {
   firstLineOf,
   isValidIsinChecksum,
   isValidIsinShape,
+  isoDateErrorMessage,
   normCode,
   normIsin,
   normTranType,
   num,
-  parseDate,
+  parseIsoDate,
   splitHeaderCells,
   text,
 } from "./normalize.js";
@@ -327,26 +328,43 @@ export const parseFaFile = (buffer, { businessDate = null, options = {}, profile
           fail(
             rowNumber,
             ROW_ERROR.UNKNOWN_TRAN_TYPE,
-            `"${rawType}" is not a recognised transaction type. Expected BY-*, SQB, OPI, BUY or B for a buy; SELL, SL+ or S for a sell.`,
+            `"${rawType}" is not a recognised transaction type. Expected BY-*, BY+, SQB, OPI, BUY or B for a buy; SELL, SL+, SL or S for a sell.`,
             colName.tranType,
             rawType,
           );
           rejected = true;
         }
 
-        const tranDate = parseDate(rawDate);
+        // Every FA date must be YYYY-MM-DD: the import accepts nothing else and
+        // stores the value as it is, so anything looser only fails later.
+        const tranDate = parseIsoDate(rawDate);
         if (!rawDate) {
           fail(rowNumber, ROW_ERROR.MISSING_DATE, `${colName.tranDate} is blank.`, colName.tranDate, "");
           rejected = true;
         } else if (!tranDate) {
           fail(
             rowNumber,
-            ROW_ERROR.BAD_DATE,
-            `"${rawDate}" is not a readable date. Expected yyyy-mm-dd or dd/mm/yyyy.`,
+            ROW_ERROR.BAD_DATE_FORMAT,
+            isoDateErrorMessage(colName.tranDate, rawDate),
             colName.tranDate,
             rawDate,
           );
           rejected = true;
+        }
+
+        // The settlement dates are required too, and held to the same format.
+        // Placeholders such as 0, null or NA are not dates, so they fail the
+        // format check like any other value.
+        for (const field of ["settlementDate", "cashSetdate"]) {
+          if (!(field in at)) continue;
+          const raw = get(field);
+          if (!raw) {
+            fail(rowNumber, ROW_ERROR.MISSING_DATE, `${colName[field]} is blank.`, colName[field], "");
+            rejected = true;
+          } else if (!parseIsoDate(raw)) {
+            fail(rowNumber, ROW_ERROR.BAD_DATE_FORMAT, isoDateErrorMessage(colName[field], raw), colName[field], raw);
+            rejected = true;
+          }
         }
         /*
          * A row dated differently from the run is NOT a problem: a run covers
@@ -400,7 +418,7 @@ export const parseFaFile = (buffer, { businessDate = null, options = {}, profile
           brokerage: displayNum(get("brokerage")),
           stt: displayNum(get("stt")),
           netAmount: displayNum(get("netAmount")),
-          settlementDate: parseDate(get("settlementDate")),
+          settlementDate: parseIsoDate(get("settlementDate")),
           ref: get("ref"),
           exchange: get("exchange"),
           brokerCode: get("brokerCode"),

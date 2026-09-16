@@ -11,13 +11,20 @@
  * works unchanged.
  */
 
+import csvParser from "csv-parser";
+import { Readable } from "stream";
+
 import { FA_HEADERS } from "../../util/custodyMatch/constants.js";
+import { detectCustodyFormat } from "../../util/custodyMatch/parseCustody.js";
 import {
   FIELD_CATALOG,
+  FORMAT_TO_PROFILE_TYPE,
   PROFILE_TYPE,
   PROFILE_TYPES,
   TRANSFORM,
+  checkProfileComplete,
   defaultProfile,
+  describeColumns,
   fromStoredProfile,
   isDefaultProfile,
   readHeaderColumns,
@@ -28,6 +35,7 @@ import {
   SOURCE_BY,
 } from "../../util/custodyMatch/fieldMap.js";
 import {
+  deleteFieldMapBlob,
   readAllFieldMapBlobs,
   readFieldMapBlob,
   writeFieldMapBlob,
@@ -89,6 +97,10 @@ const viewFor = (type, blob) => {
     // Flagged separately from isDefault: a saved profile can still be identical
     // to the built-in one, and the screen should not claim it was customised.
     matchesBuiltIn: isDefaultProfile(type, read.profile),
+    // Fields nobody has answered yet. A mapping stored before every field
+    // became required loads fine and simply arrives with gaps, which is exactly
+    // the state the screen renders as empty rows.
+    missingFields: checkProfileComplete(type, read.profile).missing,
   };
 };
 
@@ -141,6 +153,33 @@ export const getFieldMap = async (req, res) => {
 };
 
 /**
+ * Supersede every run for a date still holding files.
+ *
+ * Called after a mapping changes, because a clean run produced under the old
+ * mapping must not keep Gate 2 open for data the new one reads differently.
+ * Best-effort on purpose: the mapping change has already happened by this point,
+ * and failing the request would tell the user it had not. A stale run is a
+ * smaller problem than a mapping change the user believes did not go through.
+ */
+const supersedeStoredDates = async (app) => {
+  const superseded = [];
+  const supersedeErrors = [];
+  try {
+    for (const date of await listStoredDates(app)) {
+      try {
+        await supersedeRunsForDate(app, date);
+        superseded.push(date);
+      } catch (e) {
+        supersedeErrors.push({ date, message: e.message });
+      }
+    }
+  } catch (e) {
+    supersedeErrors.push({ date: null, message: e.message });
+  }
+  return { superseded, supersedeErrors };
+};
+
+/**
  * PUT /api/custody-match/field-map/:type
  * Body: { profile: { field: {by, name|index, transform} }, updatedBy? }
  *
@@ -177,32 +216,32 @@ export const saveFieldMap = async (req, res) => {
       });
     }
 
+    /*
+     * Completeness is enforced at save, not in validateProfile.
+     *
+     * validateProfile answers "can this mapping be used", which a profile saved
+     * before every field became required still can. This answers "has the user
+     * finished" — a stricter question, and the right one to ask of something
+     * arriving from the mapping screen. Answering "not present in this file"
+     * counts as answered, so a narrow file is still saveable.
+     */
+    const complete = checkProfileComplete(type, profile);
+    if (!complete.ok) {
+      return fail(res, 400, {
+        code: "INCOMPLETE_PROFILE",
+        message: `${complete.missing.length} field(s) have not been answered yet.`,
+        missingFields: complete.missing,
+        hint: "Pick a column for each one, or mark it as not present in this file.",
+      });
+    }
+
     const blob = toStoredProfile(type, profile, {
       updatedBy: req.body?.updatedBy || "",
       updatedAtMs: Date.now(),
     });
     const key = await writeFieldMapBlob(app, type, blob);
 
-    /*
-     * Supersede every date still holding files. Best-effort on purpose: the
-     * mapping IS saved by this point, and failing the request would tell the
-     * user their edit was lost when it was not. A stale run is a smaller problem
-     * than a mapping the user believes did not save.
-     */
-    const superseded = [];
-    const supersedeErrors = [];
-    try {
-      for (const date of await listStoredDates(app)) {
-        try {
-          await supersedeRunsForDate(app, date);
-          superseded.push(date);
-        } catch (e) {
-          supersedeErrors.push({ date, message: e.message });
-        }
-      }
-    } catch (e) {
-      supersedeErrors.push({ date: null, message: e.message });
-    }
+    const { superseded, supersedeErrors } = await supersedeStoredDates(app);
 
     return res.json({
       success: true,
@@ -225,11 +264,82 @@ export const saveFieldMap = async (req, res) => {
 };
 
 /**
+ * DELETE /api/custody-match/field-map/:type
+ *
+ * Removes the saved mapping so the user can map every field again from scratch.
+ * Only the one file type is touched. Afterwards reads fall back to the built-in
+ * default, and the mapping screen shows every field as unanswered.
+ *
+ * Stored runs are superseded for the same reason Save does it: files already
+ * matched were read under the mapping that no longer exists.
+ */
+export const deleteFieldMap = async (req, res) => {
+  try {
+    const app = req.catalystApp;
+    if (!app) return noApp(res);
+
+    const type = String(req.params.type || "").toUpperCase();
+    if (!PROFILE_TYPES.includes(type)) return badType(res, type);
+
+    const deleted = await deleteFieldMapBlob(app, type);
+
+    // Nothing was stored, so no run was produced under a custom mapping.
+    const { superseded, supersedeErrors } = deleted
+      ? await supersedeStoredDates(app)
+      : { superseded: [], supersedeErrors: [] };
+
+    return res.json({
+      success: true,
+      deleted,
+      map: viewFor(type, null),
+      supersededDates: superseded,
+      supersedeErrors,
+      message:
+        superseded.length > 0
+          ? `Mapping cleared. ${superseded.length} stored date(s) must be matched again before they can be imported.`
+          : "Mapping cleared.",
+    });
+  } catch (err) {
+    console.error("deleteFieldMap failed:", err);
+    return fail(res, 500, {
+      code: "FIELD_MAP_DELETE_FAILED",
+      message: `Could not clear the field mapping: ${err.message}`,
+    });
+  }
+};
+
+/**
+ * Every data row as POSITIONAL arrays.
+ *
+ * All rows, not a sample: a column that is fine for five rows and holds "abc"
+ * on row 600 must not be accepted by the mapping only to fail at upload.
+ *
+ * `headers: false` is the whole point. csv-parser keyed by heading would
+ * collapse the FA template's three "filler" columns into one, and those are
+ * exactly the columns the mapping screen exists to tell apart.
+ *
+ * Uses the same CSV reader the parsers use rather than splitting on the
+ * separator, so a quoted comma inside a Description cell does not shift every
+ * column to its right and make the type check judge the wrong data.
+ */
+const readDataRows = (buffer, separator) =>
+  new Promise((resolve, reject) => {
+    const rows = [];
+    Readable.from(buffer)
+      .pipe(csvParser({ headers: false, separator, skipLines: 1 }))
+      // headers:false yields { "0": "...", "1": "..." } — restore the order.
+      .on("data", (row) => rows.push(Object.keys(row).map((k) => row[k])))
+      .on("end", () => resolve(rows))
+      .on("error", reject);
+  });
+
+/**
  * POST /api/custody-match/field-map/preview  (multipart, field name "file")
  *
- * Reads ONLY row 1 and hands back the columns, so the mapping screen offers the
- * user's real headings instead of asking them to type names. The file is never
- * stored: this is a look at the shape, not an upload.
+ * Reads row 1 plus every data row and hands back the columns, so the
+ * mapping screen can offer the user's real headings as a dropdown AND say what
+ * each column actually holds. The file is never stored: this is a look at the
+ * shape, not an upload.
  *
  * Columns carry their position and a disambiguated label because the FA template
  * repeats the name "filler" three times and picking the right one is the point.
@@ -263,18 +373,55 @@ export const previewHeaders = async (req, res) => {
     }
 
     const requestedType = String(req.body?.type || "").toUpperCase();
-    const type = PROFILE_TYPES.includes(requestedType) ? requestedType : null;
+    const asked = PROFILE_TYPES.includes(requestedType) ? requestedType : null;
+
+    /*
+     * What the columns say this file IS, as opposed to the slot it was dropped
+     * into. A custodian file in the wrong slot mislabels the scheme on every
+     * exception it goes on to produce, so the screen opens the detected layout
+     * and lets the user override rather than discovering it at upload time.
+     *
+     * FA is never auto-detected: detectCustodyFormat only knows the two
+     * custodian layouts, and the FA file arrives through its own control.
+     */
+    let detectedType = null;
+    if (asked !== PROFILE_TYPE.FA) {
+      try {
+        const detected = detectCustodyFormat(file.data);
+        detectedType = detected.format ? FORMAT_TO_PROFILE_TYPE[detected.format] || null : null;
+      } catch {
+        // Detection is a convenience. A file it cannot place still maps fine
+        // under whichever layout the user picked.
+      }
+    }
+
+    const type = asked || detectedType;
+
+    let sampleRows = [];
+    try {
+      sampleRows = await readDataRows(file.data, separator);
+    } catch (sampleErr) {
+      /*
+       * Without rows every column reads as "unknown", which describeColumns
+       * treats as compatible with everything. The mapping still works, and the
+       * upload still checks every row, so this should not block the screen.
+       */
+      console.warn("previewHeaders: could not read data rows:", sampleErr.message);
+    }
+
+    const described = describeColumns(columns, sampleRows, { type });
 
     return res.json({
       success: true,
       fileName: name,
       separator,
-      columns,
+      columns: described,
+      sampleRowCount: sampleRows.length,
       duplicateNames: [...new Set(columns.filter((c) => c.duplicate).map((c) => c.name))],
-      // When the caller says which layout this sample is for, suggest a mapping
-      // by matching headings against the built-in names. The user still confirms.
-      suggested: type ? suggestProfile(type, columns) : null,
       type,
+      // Both reported so the screen can show "Detected: NRE/NRO — change".
+      requestedType: asked,
+      detectedType,
     });
   } catch (err) {
     console.error("previewHeaders failed:", err);
@@ -285,39 +432,10 @@ export const previewHeaders = async (req, res) => {
   }
 };
 
-/**
- * Seed a mapping from a sample file by matching each field's default column name
- * against the file's headings. Fields with no match are left unset so the screen
- * shows them as still needing a choice, rather than guessing.
- */
-const suggestProfile = (type, columns) => {
-  const norm = (h) =>
-    String(h || "").trim().toLowerCase().replace(/[\s._\-/()]+/g, "");
-  const byNorm = new Map();
-  columns.forEach((c) => {
-    if (!byNorm.has(norm(c.name))) byNorm.set(norm(c.name), c);
-  });
-
-  const base = defaultProfile(type);
-  const out = {};
-
-  for (const [field, source] of Object.entries(base)) {
-    if (source.by === "name") {
-      const hit = byNorm.get(norm(source.name));
-      if (hit) out[field] = { by: "name", name: hit.name, transform: source.transform };
-    } else if (source.index < columns.length) {
-      // Index-addressed defaults only carry over when the file is at least as
-      // wide as the template; otherwise the position means something else.
-      out[field] = { by: "index", index: source.index, transform: source.transform };
-    }
-  }
-
-  return out;
-};
-
 export default {
   getAllFieldMaps,
   getFieldMap,
   saveFieldMap,
+  deleteFieldMap,
   previewHeaders,
 };

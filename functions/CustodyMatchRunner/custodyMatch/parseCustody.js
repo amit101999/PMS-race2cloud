@@ -38,12 +38,14 @@ import {
   firstLineOf,
   isValidIsinChecksum,
   isValidIsinShape,
+  isoDateErrorMessage,
   normCode,
   normIsin,
   normTranType,
   num,
-  parseCompactDate,
+  parseContractNoDate,
   parseDate,
+  parseIsoDate,
   splitHeaderCells,
   text,
 } from "./normalize.js";
@@ -60,6 +62,12 @@ import {
  * type and the file".
  */
 const TOO_MANY_MISMATCHED = 5;
+
+/** Amount columns: every row must carry a number, zero or more. */
+const AMOUNT_FIELDS = ["rate", "brokerage", "stt", "netAmount"];
+
+/** Text columns that must be filled in on every row; any value is accepted. */
+const REQUIRED_TEXT_FIELDS = ["ref", "exchange", "brokerCode"];
 
 /** Case / space / punctuation-insensitive header form, so "Client Code" and "CLIENT_CODE" collapse together. */
 const normHeader = (h) =>
@@ -237,7 +245,7 @@ export const detectCustodyFormat = (buffer, { profiles = null } = {}) => {
  * @param {string} [opts.scheme]       scheme tag from the filename; stamped on every row and every exception.
  * @param {string} [opts.fileType]     RESIDENTIAL | NDPMS, from the filename suffix. Cross-checked against the detected layout.
  * @param {string} [opts.fileName]     for error messages.
- * @param {string} [opts.businessDate] yyyy-mm-dd; also disambiguates ContractNo dates.
+ * @param {string} [opts.businessDate] yyyy-mm-dd
  * @param {object} [opts.options]      overrides for DEFAULT_OPTIONS.
  * @param {object} [opts.profiles]     user-defined field mappings, keyed by PROFILE_TYPE.
  */
@@ -420,9 +428,21 @@ export const parseCustodyFile = (
         const dateCol = columnOf.tranDate;
         if (transformOf.tranDate !== TRANSFORM.DATE_FROM_FIRST_8) {
           const rawDate = cell("tranDate");
-          tranDate = parseDate(rawDate);
+          // Residential trade dates must be in the standard YYYY-MM-DD format.
+          // An NDPMS file mapped to a real date column keeps the wider reading.
+          const residential = format === CUSTODY_FORMAT.RESIDENT;
+          tranDate = residential ? parseIsoDate(rawDate) : parseDate(rawDate);
           if (!rawDate) {
             fail(rowNumber, ROW_ERROR.MISSING_DATE, `${dateCol} is blank.`, dateCol, "");
+            rejected = true;
+          } else if (!tranDate && residential) {
+            fail(
+              rowNumber,
+              ROW_ERROR.BAD_DATE_FORMAT,
+              isoDateErrorMessage(dateCol, rawDate),
+              dateCol,
+              rawDate,
+            );
             rejected = true;
           } else if (!tranDate) {
             fail(
@@ -447,34 +467,16 @@ export const parseCustodyFile = (
             );
             rejected = true;
           } else {
-            const parsed = parseCompactDate(digits);
-            tranDate = parsed.date;
+            tranDate = parseContractNoDate(rawContract);
             if (!tranDate) {
               fail(
                 rowNumber,
                 ROW_ERROR.BAD_DATE,
-                `The first 8 digits of ${dateCol} ("${digits}") are not a valid date in either yyyymmdd or ddmmyyyy order.`,
+                `The first 8 digits of ${dateCol} ("${digits}") are not a valid ddmmyyyy date.`,
                 dateCol,
                 rawContract,
               );
               rejected = true;
-            } else if (parsed.ambiguous) {
-              // Both readings are valid calendar dates. Let the business date settle it
-              // rather than silently preferring one order.
-              const alt = parseCompactDate(
-                `${digits.slice(4, 8)}${digits.slice(2, 4)}${digits.slice(0, 2)}`,
-              );
-              if (businessDate && alt.date === businessDate && tranDate !== businessDate) {
-                tranDate = alt.date;
-              }
-              warnings.push({
-                row: rowNumber,
-                code: WARNING.CONTRACT_DATE_AMBIGUOUS,
-                message: `${dateCol} "${digits}" reads as a valid date in both yyyymmdd and ddmmyyyy order; used ${tranDate}.`,
-                column: dateCol,
-                value: digits,
-                fileName,
-              });
             }
           }
         }
@@ -501,7 +503,7 @@ export const parseCustodyFile = (
           fail(
             rowNumber,
             ROW_ERROR.UNKNOWN_TRAN_TYPE,
-            `"${rawType}" is not a recognised transaction type. Expected BUY or B for a buy; SELL, SL+ or S for a sell.`,
+            `"${rawType}" is not a recognised transaction type. Expected BUY, B, BY+ or BY-* for a buy; SELL, SL+, SL or S for a sell.`,
             columnOf.tranType,
             rawType,
           );
@@ -529,6 +531,57 @@ export const parseCustodyFile = (
             rawQty,
           );
           rejected = true;
+        }
+
+        // ---- the columns shown in the report --------------------------------
+        /*
+         * Not part of the match, but carried into the difference report, where a
+         * blank or unreadable value would otherwise show up as a silent 0 or an
+         * empty cell. A field with no column (an older mapping that marked it as
+         * not present) has nothing to check.
+         */
+        for (const field of AMOUNT_FIELDS) {
+          const column = columnOf[field];
+          if (!column) continue;
+          const raw = cell(field);
+          const value = num(raw);
+          if (!raw) {
+            fail(rowNumber, ROW_ERROR.MISSING_VALUE, `${column} is blank.`, column, "");
+            rejected = true;
+          } else if (value === null) {
+            fail(rowNumber, ROW_ERROR.BAD_NUMBER, `${column} "${raw}" is not a number.`, column, raw);
+            rejected = true;
+          } else if (value < 0) {
+            fail(
+              rowNumber,
+              ROW_ERROR.NEGATIVE_NUMBER,
+              `${column} cannot be negative; found ${raw}.`,
+              column,
+              raw,
+            );
+            rejected = true;
+          }
+        }
+
+        if (columnOf.settlementDate) {
+          const column = columnOf.settlementDate;
+          const raw = cell("settlementDate");
+          if (!raw) {
+            fail(rowNumber, ROW_ERROR.MISSING_VALUE, `${column} is blank.`, column, "");
+            rejected = true;
+          } else if (!parseDate(raw)) {
+            fail(rowNumber, ROW_ERROR.BAD_DATE, `${column} "${raw}" is not a readable date.`, column, raw);
+            rejected = true;
+          }
+        }
+
+        for (const field of REQUIRED_TEXT_FIELDS) {
+          const column = columnOf[field];
+          if (!column) continue;
+          if (!cell(field)) {
+            fail(rowNumber, ROW_ERROR.MISSING_VALUE, `${column} is blank.`, column, "");
+            rejected = true;
+          }
         }
 
         if (rejected) return;

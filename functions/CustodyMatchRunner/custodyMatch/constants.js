@@ -105,6 +105,26 @@ export const CUSTODY_FILE_TYPE = {
   NDPMS: "NDPMS",
 };
 
+/**
+ * Schemes the picker always offers, whether or not a file has been filed yet.
+ *
+ * A scheme is normally DISCOVERED — it exists because a file for it exists,
+ * which is the one definition that cannot drift. That works from the second
+ * upload onwards, but on a fresh system the list is empty and every scheme has
+ * to be typed from memory. These are the ones known up front; anything filed
+ * beyond them still appears automatically.
+ *
+ * `scheme` must be in the stored form — uppercase, with anything outside
+ * A-Z 0-9 _ replaced by an underscore — or a filed file would list separately
+ * from its own entry here. `fileType` is the layout pre-selected when the
+ * scheme is picked; the user can still change it beside the picker.
+ *
+ * Add to this list as new schemes are taken on.
+ */
+export const PREDEFINED_SCHEMES = [
+  { scheme: "ETERNAL", fileType: CUSTODY_FILE_TYPE.RESIDENTIAL },
+];
+
 export const CUSTODY_TYPE_TO_FORMAT = {
   [CUSTODY_FILE_TYPE.RESIDENTIAL]: CUSTODY_FORMAT.RESIDENT,
   [CUSTODY_FILE_TYPE.NDPMS]: CUSTODY_FORMAT.NDPMS,
@@ -180,12 +200,16 @@ export const ROW_ERROR = {
   BAD_ISIN: "BAD_ISIN",
   MISSING_ISIN: "MISSING_ISIN",
   BAD_DATE: "BAD_DATE",
+  BAD_DATE_FORMAT: "BAD_DATE_FORMAT",
   MISSING_DATE: "MISSING_DATE",
   BAD_CONTRACT_NO: "BAD_CONTRACT_NO",
   UNKNOWN_TRAN_TYPE: "UNKNOWN_TRAN_TYPE",
   MISSING_TRAN_TYPE: "MISSING_TRAN_TYPE",
   BAD_QUANTITY: "BAD_QUANTITY",
   ZERO_QUANTITY: "ZERO_QUANTITY",
+  MISSING_VALUE: "MISSING_VALUE",
+  BAD_NUMBER: "BAD_NUMBER",
+  NEGATIVE_NUMBER: "NEGATIVE_NUMBER",
 };
 
 /** Non-fatal observations. Surfaced to the user; never block. */

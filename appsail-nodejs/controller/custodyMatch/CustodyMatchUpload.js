@@ -15,13 +15,14 @@
  * existing error renderer works without changes.
  */
 
-import { CUSTODY_FILE_TYPE } from "../../util/custodyMatch/constants.js";
+import { CUSTODY_FILE_TYPE, PREDEFINED_SCHEMES } from "../../util/custodyMatch/constants.js";
 import { PROFILE_TYPE } from "../../util/custodyMatch/fieldMap.js";
 import { parseFaFile, validateFaHeader } from "../../util/custodyMatch/parseFA.js";
 import { parseCustodyFile } from "../../util/custodyMatch/parseCustody.js";
 import {
   BUCKET_NAME,
   CUSTODY_FILE_TYPES,
+  CUSTODY_HISTORY_LIMIT,
   SIDE_KEY,
   buildCustodyKey,
   buildFaRawKey,
@@ -33,9 +34,12 @@ import {
   getBucket,
   getBuffer,
   listDay,
+  listCustodyHistory,
   listKnownSchemes,
   loadFieldMapProfiles,
+  parseCustodyHistoryKey,
   putBuffer,
+  saveToCustodyHistory,
   signedGetUrl,
 } from "../../util/custodyMatch/storage.js";
 import { supersedeRunsForDate } from "../../util/custodyMatch/runStore.js";
@@ -172,15 +176,33 @@ export const getDay = async (req, res) => {
  * GET /api/custody-match/schemes
  *
  * The schemes the picker offers, each with the layout it was last filed under.
- * Derived from the stored keys rather than a master table — a scheme exists here
- * because a file for it exists, which is the only definition that cannot drift.
+ *
+ * Two sources, and the order matters. First the ones DISCOVERED from the stored
+ * keys — a scheme exists there because a file for it exists, which is the only
+ * definition that cannot drift, and those carry a real last-used date. Then the
+ * configured ones that have never been filed, so a fresh system still offers
+ * something to pick instead of an empty list.
+ *
+ * A configured scheme that HAS been filed is dropped from the second list: the
+ * discovered entry knows the layout actually used and the date it was used on.
  */
 export const listSchemes = async (req, res) => {
   try {
     const catalystApp = req.catalystApp;
     if (!catalystApp) return noApp(res);
 
-    const schemes = await listKnownSchemes(catalystApp);
+    const discovered = await listKnownSchemes(catalystApp);
+    const filed = new Set(discovered.map((s) => s.scheme));
+
+    const schemes = [
+      ...discovered,
+      ...PREDEFINED_SCHEMES.filter((s) => !filed.has(s.scheme)).map((s) => ({
+        ...s,
+        // Never filed, so there is no date to report.
+        lastUsedDate: "",
+      })),
+    ];
+
     return res.json({ success: true, schemes, count: schemes.length });
   } catch (err) {
     console.error("[CustodyMatchUpload] listSchemes:", err);
@@ -566,6 +588,30 @@ export const uploadCustodyFile = async (req, res) => {
     await putBuffer(bucket, key, file.data, "text/csv");
 
     /*
+     * Keep a copy for Previous Uploads. Best-effort: the file IS stored for
+     * matching by now, and failing the request over the history copy would tell
+     * the user their upload did not work when it did.
+     */
+    let uploadHistory = null;
+    try {
+      const kept = await saveToCustodyHistory(
+        catalystApp,
+        {
+          buffer: file.data,
+          scheme,
+          fileType,
+          businessDate,
+          originalFileName: file.name,
+          uploadedAtMs,
+        },
+        { bucket },
+      );
+      uploadHistory = kept.map(toHistoryItem);
+    } catch (historyErr) {
+      console.error("[CustodyMatchUpload] could not save upload history copy:", historyErr);
+    }
+
+    /*
      * A file whose range straddles another file's is stored — the user asked for
      * anything but an exact repeat to be added — but the days they share would
      * then be counted twice in the comparison, so say so.
@@ -607,11 +653,48 @@ export const uploadCustodyFile = async (req, res) => {
       replacedSlot: sameSlot.length > 0,
       supersededRuns: superseded.runIds,
       files: after.custody.files,
+      uploadHistory,
     });
   } catch (error) {
     console.error("[CustodyMatchUpload] uploadCustodyFile:", error);
     return fail(res, 500, {
       message: error.message || "Could not store the custodian file.",
+    });
+  }
+};
+
+/** One Previous Uploads row, as the screen reads it. */
+const toHistoryItem = (item) => ({
+  key: item.key,
+  fileName: item.originalFileName,
+  scheme: item.scheme,
+  fileType: item.fileType,
+  businessDate: item.businessDate,
+  uploadedAtMs: item.uploadedAtMs,
+  sizeBytes: item.sizeBytes,
+});
+
+/**
+ * GET /api/custody-match/custody-history
+ *
+ * The most recent custodian uploads, newest first, for download. These are
+ * copies kept outside the date folders, so they are still here after the
+ * working file was replaced, removed or swept by the cleanup cron.
+ */
+export const listCustodyUploads = async (req, res) => {
+  try {
+    const catalystApp = req.catalystApp;
+    if (!catalystApp) return noApp(res);
+
+    const items = (await listCustodyHistory(catalystApp))
+      .slice(0, CUSTODY_HISTORY_LIMIT)
+      .map(toHistoryItem);
+
+    return res.json({ success: true, items, count: items.length });
+  } catch (error) {
+    console.error("[CustodyMatchUpload] listCustodyUploads:", error);
+    return fail(res, 500, {
+      message: error.message || "Could not read previous custodian uploads.",
     });
   }
 };
@@ -752,7 +835,8 @@ export const downloadObject = async (req, res) => {
     if (!catalystApp) return noApp(res);
 
     const key = String(req.query.key || "").trim();
-    if (!key || !/^(FA-Transaction|Custodian-Transaction)\/\d{4}-\d{2}-\d{2}\//.test(key)) {
+    const isDayObject = /^(FA-Transaction|Custodian-Transaction)\/\d{4}-\d{2}-\d{2}\//.test(key);
+    if (!key || !(isDayObject || parseCustodyHistoryKey(key))) {
       return fail(res, 400, {
         code: "BAD_KEY",
         message: "key must be a custody-matching object key.",
