@@ -13,6 +13,7 @@ import DividendPage from "./pages/Dividend/DividendPage";
 import DemergerPage from "./pages/DemergerPage/DemergerPage";
 import MergerPage from "./pages/MergerPage/MergerPage";
 import TempTransaction from "./pages/TempTransactionUpload/TempTransaction";
+import HoldingComparison from "./pages/HoldingComparison/HoldingComparison";
 import UpdateISINPage from "./pages/update-isin/UpdateISINPage";
 import CashBalancePage from "./pages/CashBalancePage/CashBalancePage";
 import ClientPage from "./pages/Master/ClientPage";
@@ -34,6 +35,7 @@ function App() {
           <Route path="/bhav-copy" element={<BhavCopyUploadPage />} />
           {/* <Route path="/transaction-upload" element={<TransactionUploadPage />} /> */}
           <Route path="/temp-transaction" element={<TempTransaction />} />
+          <Route path="/holding-comparison" element={<HoldingComparison />} />
           <Route path="/updateISIN" element={<UpdateISINPage />} />
           <Route path="/cash-balance" element={<CashBalancePage />} />
           <Route path="/reports" element={<ReportsPage />} />

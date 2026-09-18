@@ -42,6 +42,8 @@ import {
 } from "../../util/custodyMatch/storage.js";
 import { supersedeRunsForDate } from "../../util/custodyMatch/runStore.js";
 import { listStoredDates } from "../../util/custodyMatch/storage.js";
+import { supersedeRuns as supersedeHoldingComparisonRuns } from "../../util/holdingComparison/runStore.js";
+import { stripTitleRows } from "../../util/holdingComparison/parse.js";
 
 const fail = (res, status, body) => res.status(status).json({ success: false, ...body });
 
@@ -180,6 +182,31 @@ const supersedeStoredDates = async (app) => {
 };
 
 /**
+ * Supersede whatever a mapping change for this type affects.
+ *
+ * The holdings mapping belongs to Holding Comparison, so changing it retires
+ * that module's runs and leaves custody matching alone — and the reverse for
+ * the three custody-matching types.
+ */
+const supersedeForType = async (app, type) => {
+  if (type !== PROFILE_TYPE.CUSTODY_HOLDINGS) return supersedeStoredDates(app);
+  try {
+    const { runIds } = await supersedeHoldingComparisonRuns(app);
+    return { superseded: runIds, supersedeErrors: [] };
+  } catch (e) {
+    return { superseded: [], supersedeErrors: [{ date: null, message: e.message }] };
+  }
+};
+
+/** The save/clear message, worded for the module the type belongs to. */
+const supersedeMessage = (type, verb, superseded) => {
+  if (superseded.length === 0) return `Mapping ${verb}.`;
+  return type === PROFILE_TYPE.CUSTODY_HOLDINGS
+    ? `Mapping ${verb}. ${superseded.length} earlier holding comparison(s) must be run again.`
+    : `Mapping ${verb}. ${superseded.length} stored date(s) must be matched again before they can be imported.`;
+};
+
+/**
  * PUT /api/custody-match/field-map/:type
  * Body: { profile: { field: {by, name|index, transform} }, updatedBy? }
  *
@@ -241,7 +268,7 @@ export const saveFieldMap = async (req, res) => {
     });
     const key = await writeFieldMapBlob(app, type, blob);
 
-    const { superseded, supersedeErrors } = await supersedeStoredDates(app);
+    const { superseded, supersedeErrors } = await supersedeForType(app, type);
 
     return res.json({
       success: true,
@@ -249,10 +276,7 @@ export const saveFieldMap = async (req, res) => {
       map: viewFor(type, blob),
       supersededDates: superseded,
       supersedeErrors,
-      message:
-        superseded.length > 0
-          ? `Mapping saved. ${superseded.length} stored date(s) must be matched again before they can be imported.`
-          : "Mapping saved.",
+      message: supersedeMessage(type, "saved", superseded),
     });
   } catch (err) {
     console.error("saveFieldMap failed:", err);
@@ -285,7 +309,7 @@ export const deleteFieldMap = async (req, res) => {
 
     // Nothing was stored, so no run was produced under a custom mapping.
     const { superseded, supersedeErrors } = deleted
-      ? await supersedeStoredDates(app)
+      ? await supersedeForType(app, type)
       : { superseded: [], supersedeErrors: [] };
 
     return res.json({
@@ -294,10 +318,7 @@ export const deleteFieldMap = async (req, res) => {
       map: viewFor(type, null),
       supersededDates: superseded,
       supersedeErrors,
-      message:
-        superseded.length > 0
-          ? `Mapping cleared. ${superseded.length} stored date(s) must be matched again before they can be imported.`
-          : "Mapping cleared.",
+      message: supersedeMessage(type, "cleared", superseded),
     });
   } catch (err) {
     console.error("deleteFieldMap failed:", err);
@@ -363,7 +384,13 @@ export const previewHeaders = async (req, res) => {
       });
     }
 
-    const { separator, columns } = readHeaderColumns(file.data);
+    // A custodian holdings file can open with a report title row
+    // ("HOLDING REPORT AS ON:..."), so read from its real header row.
+    const data =
+      String(req.body?.type || "").toUpperCase() === PROFILE_TYPE.CUSTODY_HOLDINGS
+        ? stripTitleRows(file.data)
+        : file.data;
+    const { separator, columns } = readHeaderColumns(data);
     if (columns.length === 0) {
       return fail(res, 400, {
         code: "NO_HEADER",
@@ -385,7 +412,8 @@ export const previewHeaders = async (req, res) => {
      * custodian layouts, and the FA file arrives through its own control.
      */
     let detectedType = null;
-    if (asked !== PROFILE_TYPE.FA) {
+    // The holdings file is not a deal-allocation layout, so detection has nothing to say about it.
+    if (asked !== PROFILE_TYPE.FA && asked !== PROFILE_TYPE.CUSTODY_HOLDINGS) {
       try {
         const detected = detectCustodyFormat(file.data);
         detectedType = detected.format ? FORMAT_TO_PROFILE_TYPE[detected.format] || null : null;
@@ -399,7 +427,7 @@ export const previewHeaders = async (req, res) => {
 
     let sampleRows = [];
     try {
-      sampleRows = await readDataRows(file.data, separator);
+      sampleRows = await readDataRows(data, separator);
     } catch (sampleErr) {
       /*
        * Without rows every column reads as "unknown", which describeColumns

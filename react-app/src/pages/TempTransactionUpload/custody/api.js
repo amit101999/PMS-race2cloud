@@ -159,18 +159,22 @@ export const PROFILE_TYPE = {
   FA: "FA",
   CUSTODY_RESIDENTIAL: "CUSTODY_RESIDENTIAL",
   CUSTODY_NDPMS: "CUSTODY_NDPMS",
+  CUSTODY_HOLDINGS: "CUSTODY_HOLDINGS",
 };
 
 export const PROFILE_LABEL = {
   FA: "Transaction file (FA)",
   CUSTODY_RESIDENTIAL: "Custodian — Residential",
   CUSTODY_NDPMS: "Custodian — NRE/NRO (NDPMS)",
+  CUSTODY_HOLDINGS: "Custodian — Consolidated Holdings",
 };
 
 export const PROFILE_HELP = {
   FA: "The daily transaction file. Whatever layout you map here is rewritten into the standard 26-column format before it is imported, so the import is unaffected.",
   CUSTODY_RESIDENTIAL: "The deal allocation file for Resident accounts.",
   CUSTODY_NDPMS: "The deal allocation file for NRE / NRO (NDPMS) accounts.",
+  CUSTODY_HOLDINGS:
+    "The custodian's consolidated holdings file. Its column names differ from the standard 29-column template, so tell us which column holds each field.",
 };
 
 export const SOURCE_BY = { NAME: "name", INDEX: "index", ABSENT: "absent" };
