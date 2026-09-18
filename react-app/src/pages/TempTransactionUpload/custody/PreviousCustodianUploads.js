@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useState } from "react";
 
+import DownloadButton from "./DownloadButton";
 import * as api from "./api";
 
 const when = (ms) =>
@@ -57,7 +58,7 @@ const PreviousCustodianUploads = ({ latest }) => {
 
     return (
         <div className="temp-transaction-card upload-history-card">
-            <h3>Previous Custodian Uploads</h3>
+            <h3>Previous custodian uploads</h3>
 
             {error ? (
                 <p className="upload-history-error" role="alert">
@@ -66,7 +67,7 @@ const PreviousCustodianUploads = ({ latest }) => {
             ) : null}
 
             <div className="upload-history-table-wrapper">
-                <table className="upload-history-table">
+                <table className="upload-history-table upload-history-table--compact">
                     <thead>
                         <tr>
                             <th>Uploaded on</th>
@@ -101,14 +102,10 @@ const PreviousCustodianUploads = ({ latest }) => {
                                     <td>{api.FILE_TYPE_LABEL[item.fileType] || item.fileType}</td>
                                     <td>{item.businessDate}</td>
                                     <td className="action">
-                                        <button
-                                            type="button"
-                                            className="upload-history-download-btn"
+                                        <DownloadButton
                                             onClick={() => download(item)}
-                                            disabled={busyKey === item.key}
-                                        >
-                                            {busyKey === item.key ? "Preparing…" : "Download"}
-                                        </button>
+                                            busy={busyKey === item.key}
+                                        />
                                     </td>
                                 </tr>
                             ))

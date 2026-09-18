@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 
 import FieldMappingPanel from "./FieldMappingPanel";
 import UploadErrorDetails from "./UploadErrorDetails";
+import StatusBadge, { STATUS } from "./StatusBadge";
 import * as api from "./api";
 import "./CustodyMatch.css";
 
@@ -15,11 +16,24 @@ import "./CustodyMatch.css";
 const PROFILE_FOR_FILE_TYPE = {
     [api.CUSTODY_FILE_TYPE.RESIDENTIAL]: api.PROFILE_TYPE.CUSTODY_RESIDENTIAL,
     [api.CUSTODY_FILE_TYPE.NDPMS]: api.PROFILE_TYPE.CUSTODY_NDPMS,
+    [api.CUSTODY_FILE_TYPE.MUTUAL_FUND]: api.PROFILE_TYPE.CUSTODY_MUTUAL_FUND,
 };
 
 const FILE_TYPE_FOR_PROFILE = {
     [api.PROFILE_TYPE.CUSTODY_RESIDENTIAL]: api.CUSTODY_FILE_TYPE.RESIDENTIAL,
     [api.PROFILE_TYPE.CUSTODY_NDPMS]: api.CUSTODY_FILE_TYPE.NDPMS,
+    [api.PROFILE_TYPE.CUSTODY_MUTUAL_FUND]: api.CUSTODY_FILE_TYPE.MUTUAL_FUND,
+};
+
+/** The same two names for the transaction file: upload type <-> mapping profile. */
+const PROFILE_FOR_FA_FILE_TYPE = {
+    [api.FA_FILE_TYPE.REGULAR]: api.PROFILE_TYPE.FA,
+    [api.FA_FILE_TYPE.MUTUAL_FUND]: api.PROFILE_TYPE.FA_MUTUAL_FUND,
+};
+
+const FA_FILE_TYPE_FOR_PROFILE = {
+    [api.PROFILE_TYPE.FA]: api.FA_FILE_TYPE.REGULAR,
+    [api.PROFILE_TYPE.FA_MUTUAL_FUND]: api.FA_FILE_TYPE.MUTUAL_FUND,
 };
 
 /** How often the screen asks the job how it is getting on. */
@@ -41,6 +55,64 @@ const rangeLabel = (file) =>
     file.coveredFrom === file.coveredTo
         ? file.coveredFrom
         : `${file.coveredFrom} → ${file.coveredTo}`;
+
+/**
+ * Short, actionable phrasing for the error codes a failed run can carry.
+ * Falls back to the backend's own message for anything not listed here — never
+ * invents a reason the server did not give.
+ */
+const FRIENDLY_RUN_ERROR = {
+    FA_FILE_MISSING: "Fund Accounting file is missing. Upload a file to continue.",
+};
+
+const uploadedAtLabel = (ms) =>
+    ms ? new Date(ms).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" }) : "—";
+
+/**
+ * What a staged transaction file covers — the span of transaction dates
+ * (DATEPUR_ACQUI) its rows carry, which is what identifies the file to the
+ * user. The business date above only says which run it was filed under.
+ *
+ * Files staged before that range was recorded on the key fall back to when they
+ * were uploaded, which is all such a key knows.
+ */
+const faDateLabel = (file) =>
+    file.coveredFrom && file.coveredTo
+        ? rangeLabel(file)
+        : `Uploaded ${uploadedAtLabel(file.uploadedAtMs)}`;
+
+/** The upload drop-zone's icon — an arrow into a tray, used by both panels. */
+const UploadGlyph = () => (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <path
+            d="M12 15V4M12 4l-4.5 4.5M12 4l4.5 4.5"
+            stroke="currentColor"
+            strokeWidth="1.6"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+        />
+        <path
+            d="M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"
+            stroke="currentColor"
+            strokeWidth="1.6"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+        />
+    </svg>
+);
+
+/** A small document icon for a staged file row, used by both panels. */
+const FileGlyph = () => (
+    <svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+        <path
+            d="M4 1.5h4.5L12 5v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V2.5a1 1 0 0 1 1-1Z"
+            stroke="currentColor"
+            strokeWidth="1.1"
+            strokeLinejoin="round"
+        />
+        <path d="M8.5 1.5V5H12" stroke="currentColor" strokeWidth="1.1" strokeLinejoin="round" />
+    </svg>
+);
 
 /**
  * Columns the file and the mapping disagree about. The file was accepted — these
@@ -188,6 +260,7 @@ const CustodyMatchPanel = ({
     onBusinessDateChange,
     onRunChange,
     onCustodyUploaded,
+    onDayChange,
 }) => {
     /* Schemes already used, from the stored custodian keys. Each entry knows its
        own layout, so choosing a scheme fills the account type as well. */
@@ -225,6 +298,7 @@ const CustodyMatchPanel = ({
     const [starting, setStarting] = useState(false);
     /* Set when Match handed back a report that already existed. */
     const [reusedNote, setReusedNote] = useState("");
+    const [showFailDetails, setShowFailDetails] = useState(false);
 
     /* The date chooser, opened by Match when the files span more than one day. */
     const [pickerOpen, setPickerOpen] = useState(false);
@@ -242,6 +316,14 @@ const CustodyMatchPanel = ({
      * screen somebody may or may not have visited.
      */
     const [pending, setPending] = useState(null);
+
+    /** Which transaction file the next pick is. Stays put between uploads, as the custodian type does. */
+    const [faFileType, setFaFileType] = useState(api.FA_FILE_TYPE.REGULAR);
+
+    /* Purely visual — whether a file is currently being dragged over each
+       drop zone. Never affects what gets uploaded or how. */
+    const [custodyDragActive, setCustodyDragActive] = useState(false);
+    const [faDragActive, setFaDragActive] = useState(false);
 
     const faInputRef = useRef(null);
     const pollRef = useRef(null);
@@ -266,6 +348,13 @@ const CustodyMatchPanel = ({
     useEffect(() => {
         loadDay();
     }, [loadDay]);
+
+    /* The page shell shows a compact status summary above this panel and
+       needs the same `day` this panel already loads — exposed rather than
+       re-fetched, so there is exactly one place that reads storage for a date. */
+    useEffect(() => {
+        if (onDayChange) onDayChange(day);
+    }, [day, onDayChange]);
 
     /**
      * The schemes the picker offers.
@@ -334,9 +423,12 @@ const CustodyMatchPanel = ({
         [day, removedKeys],
     );
 
-    /* Newest first, so the first one still present is the staged file. */
-    const faFile = useMemo(
-        () => (day?.fa?.raw || []).find((f) => !removedKeys.has(f.key)) || null,
+    /*
+     * Every staged transaction file. A day holds at most one of each type, so
+     * this is the regular file, the mutual fund file, or both.
+     */
+    const faFiles = useMemo(
+        () => (day?.fa?.raw || []).filter((f) => !removedKeys.has(f.key)),
         [day, removedKeys],
     );
 
@@ -418,12 +510,12 @@ const CustodyMatchPanel = ({
     /* ── transaction file ─────────────────────────────────────────────── */
 
     /** Same contract as uploadCustody: the mapping panel owns the errors. */
-    const uploadFa = async (file, { replace = false }) => {
+    const uploadFa = async (file, { fileType, replace = false }) => {
         setFaBusy(true);
         setFaError(null);
         setFaWarnings([]);
         try {
-            const res = await api.uploadFaFile({ file, businessDate, replace });
+            const res = await api.uploadFaFile({ file, businessDate, fileType, replace });
             setFaWarnings(res.warnings || []);
             if (res.businessDate !== businessDate && onBusinessDateChange) {
                 onBusinessDateChange(res.businessDate);
@@ -444,7 +536,12 @@ const CustodyMatchPanel = ({
      */
     const uploadPending = async ({ profileType, replace }) => {
         if (!pending) return null;
-        if (pending.kind === "fa") return uploadFa(pending.file, { replace });
+        if (pending.kind === "fa") {
+            return uploadFa(pending.file, {
+                fileType: FA_FILE_TYPE_FOR_PROFILE[profileType] || pending.fileType,
+                replace,
+            });
+        }
         return uploadCustody(pending.file, {
             fileType: FILE_TYPE_FOR_PROFILE[profileType] || pending.fileType,
             replace,
@@ -454,7 +551,7 @@ const CustodyMatchPanel = ({
     /* ─── gate 1 ───────── */
 
     const blockers = [];
-    if (!faFile) blockers.push("No transaction file staged.");
+    if (faFiles.length === 0) blockers.push("No transaction file staged.");
     if (storedFiles.length === 0) blockers.push("No custodian files uploaded.");
 
     const gateOneOpen = blockers.length === 0 && !run?.isRunning && !starting;
@@ -570,82 +667,72 @@ const CustodyMatchPanel = ({
         }));
     };
 
+    /*
+     * The one path a custodian file reaches the mapping gate through, whether
+     * it arrived via Browse (the file input's onChange) or via a drop onto
+     * the zone — both call this, so there is exactly one place that decides
+     * whether a picked file is even eligible to be mapped.
+     */
+    const handleCustodyFilePicked = async (f) => {
+        if (!f) return;
+        if (!draft.scheme.trim()) {
+            setAddError({ message: "Choose a scheme before choosing a file." });
+            return;
+        }
+        setAddError(null);
+        const profileType = PROFILE_FOR_FILE_TYPE[draft.fileType];
+        setAddBusy(true);
+        try {
+            const preview = await api.previewHeaders(f, profileType);
+            if (preview?.detectedType && preview.detectedType !== profileType) {
+                setAddError({
+                    message: `Wrong account type — ${api.FILE_TYPE_LABEL[draft.fileType]} selected, but this file looks like a ${api.PROFILE_LABEL[preview.detectedType]} file.`,
+                });
+                return;
+            }
+        } catch (err) {
+            setAddError({ message: err.message, detail: err.detail });
+            return;
+        } finally {
+            setAddBusy(false);
+        }
+        setPending({ kind: "custody", file: f, fileType: draft.fileType, profileType });
+    };
+
+    /** Same idea for the transaction file: Browse and drop both land here. */
+    const handleFaFilePicked = (f) => {
+        if (!f) return;
+        setFaError(null);
+        setPending({
+            kind: "fa",
+            file: f,
+            fileType: faFileType,
+            profileType: PROFILE_FOR_FA_FILE_TYPE[faFileType],
+        });
+    };
+
+    const custodyZoneDisabled = addBusy || Boolean(run?.isRunning);
+    const faZoneDisabled = faBusy || Boolean(run?.isRunning);
+
     /* ── render ───────────────────────────────────────────────────────── */
 
     return (
         <>
+            <div className="txo-section-head">
+                <h2>Files &amp; Validation</h2>
+            </div>
+
             {/* Custody on the left, the transaction file on the right: the two
                 things Gate 1 needs, side by side rather than one below the other. */}
             <div className="cm-split">
               <div className="cm-col">
-                {/* Heading and date sit above the panel, not inside it. */}
-                <div className="cm-col-head">
-                    <h3>Custody Matching — Deal &amp; Allocation</h3>
-                    <label className="cm-date">
-                        <span>Transaction date</span>
-                        <input
-                            type="date"
-                            value={businessDate}
-                            onChange={(e) => onBusinessDateChange(e.target.value)}
-                            disabled={run?.isRunning}
-                        />
-                    </label>
-                </div>
+                <h3 className="cm-col-title">Custodian Files</h3>
 
-                <div className="temp-transaction-card">
-                {/* One row per uploaded file. Two files of the same type for the
-                    same scheme are a duplicate only when they cover the same
-                    dates; anything else is another row. */}
-                {storedFiles.length === 0 ? (
-                    <p className="cm-empty">
-                        {dayLoading ? "Loading…" : "No custodian files yet."}
-                    </p>
-                ) : (
-                    <table className="upload-history-table cm-filetable">
-                        <thead>
-                            <tr>
-                                <th>Scheme</th>
-                                <th>Type</th>
-                                <th>Dates covered</th>
-                                <th>File</th>
-                                <th className="action" aria-label="Remove" />
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {storedFiles.map((f) => (
-                                <tr key={f.key}>
-                                    <td className="cm-cell-scheme">{f.scheme}</td>
-                                    <td>{api.FILE_TYPE_LABEL[f.fileType] || f.fileType}</td>
-                                    <td className="cm-cell-dates">{rangeLabel(f)}</td>
-                                    <td className="cm-cell-file" title={f.originalFileName}>
-                                        {f.originalFileName}
-                                        <span className="cm-file-size">
-                                            {api.formatBytes(f.sizeBytes)}
-                                        </span>
-                                    </td>
-                                    <td className="action">
-                                        <button
-                                            type="button"
-                                            className="cm-remove"
-                                            onClick={() => removeCustodyFile(f)}
-                                            disabled={run?.isRunning}
-                                            aria-label={`Remove ${f.originalFileName}`}
-                                        >
-                                            ×
-                                        </button>
-                                    </td>
-                                </tr>
-                            ))}
-                        </tbody>
-                    </table>
-                )}
-
-                <div className="cm-addfile">
-                    <span className="cm-addfile-title">Add custodian file</span>
-                    <div className="cm-addfile-controls">
+                <div className="temp-transaction-card cm-filecard up-card">
+                    <div className="up-controls">
                         {typingScheme ? (
                             <input
-                                className="cm-scheme"
+                                className="up-select up-select--text"
                                 type="text"
                                 placeholder="New scheme code"
                                 value={draft.scheme}
@@ -653,16 +740,16 @@ const CustodyMatchPanel = ({
                                     setAddError(null);
                                     setDraft((d) => ({ ...d, scheme: e.target.value }));
                                 }}
-                                disabled={addBusy || run?.isRunning}
+                                disabled={custodyZoneDisabled}
                             />
                         ) : (
                             <select
-                                className="cm-scheme"
+                                className="up-select"
                                 value={draft.scheme}
                                 onChange={(e) => pickScheme(e.target.value)}
-                                disabled={addBusy || run?.isRunning}
+                                disabled={custodyZoneDisabled}
                             >
-                                <option value="">Select scheme…</option>
+                                <option value="">Scheme…</option>
                                 {schemeOptions.map((s) => (
                                     <option key={s.scheme} value={s.scheme}>
                                         {s.scheme}
@@ -677,20 +764,20 @@ const CustodyMatchPanel = ({
                                 type="button"
                                 className="cm-scheme-back"
                                 onClick={() => pickScheme("")}
-                                disabled={addBusy || run?.isRunning}
+                                disabled={custodyZoneDisabled}
                             >
                                 choose from list
                             </button>
                         ) : null}
 
                         <select
-                            className="cm-type"
+                            className="up-select"
                             value={draft.fileType}
                             onChange={(e) => {
                                 setAddError(null);
                                 setDraft((d) => ({ ...d, fileType: e.target.value }));
                             }}
-                            disabled={addBusy || run?.isRunning}
+                            disabled={custodyZoneDisabled}
                         >
                             <option value={api.CUSTODY_FILE_TYPE.RESIDENTIAL}>
                                 {api.FILE_TYPE_LABEL.RESIDENTIAL}
@@ -698,102 +785,221 @@ const CustodyMatchPanel = ({
                             <option value={api.CUSTODY_FILE_TYPE.NDPMS}>
                                 {api.FILE_TYPE_LABEL.NDPMS}
                             </option>
+                            <option value={api.CUSTODY_FILE_TYPE.MUTUAL_FUND}>
+                                {api.FILE_TYPE_LABEL.MUTUAL_FUND}
+                            </option>
                         </select>
+                    </div>
 
+                    <div
+                        className={custodyDragActive ? "up-zone is-drag" : "up-zone"}
+                        onDragEnter={(e) => {
+                            e.preventDefault();
+                            if (!custodyZoneDisabled) setCustodyDragActive(true);
+                        }}
+                        onDragOver={(e) => e.preventDefault()}
+                        onDragLeave={() => setCustodyDragActive(false)}
+                        onDrop={(e) => {
+                            e.preventDefault();
+                            setCustodyDragActive(false);
+                            if (custodyZoneDisabled) return;
+                            const f = e.dataTransfer.files && e.dataTransfer.files[0];
+                            if (f) handleCustodyFilePicked(f);
+                        }}
+                    >
                         <input
                             type="file"
                             accept=".csv"
-                            disabled={addBusy || run?.isRunning}
+                            className="up-zone-input"
+                            aria-label="Upload custodian file"
+                            disabled={custodyZoneDisabled}
                             onChange={(e) => {
                                 const f = e.target.files[0];
                                 e.target.value = "";
-                                if (!f) return;
-                                if (!draft.scheme.trim()) {
-                                    setAddError({
-                                        message: "Choose a scheme before choosing a file.",
-                                    });
-                                    return;
-                                }
-                                setAddError(null);
-                                // Held, not uploaded. The mapping panel sends it
-                                // once every field has been answered.
-                                setPending({
-                                    kind: "custody",
-                                    file: f,
-                                    fileType: draft.fileType,
-                                    profileType: PROFILE_FOR_FILE_TYPE[draft.fileType],
-                                });
+                                handleCustodyFilePicked(f);
                             }}
                         />
+                        <div className="up-zone-visual">
+                            <UploadGlyph />
+                            <span className="up-zone-title">
+                                {addBusy ? "Validating…" : "Upload custodian file"}
+                            </span>
+                            <span className="up-zone-sub">
+                                Drag &amp; drop or <span className="up-zone-browse">Browse</span>
+                            </span>
+                        </div>
                     </div>
-                    {addBusy ? <span className="cm-addfile-busy">Checking the file…</span> : null}
-                </div>
 
-                {addError ? (
-                    <UploadErrorDetails message={addError.message} detail={addError.detail} />
-                ) : null}
+                    {addError ? (
+                        <UploadErrorDetails message={addError.message} detail={addError.detail} />
+                    ) : null}
+                    <HeaderWarnings warnings={addWarnings} />
 
-                <HeaderWarnings warnings={addWarnings} />
+                    {/* One row per uploaded file. Two files of the same type for the
+                        same scheme are a duplicate only when they cover the same
+                        dates; anything else is another row. */}
+                    {storedFiles.length > 0 ? (
+                        <div className="up-filelist-wrap">
+                            <div className="up-filelist-head">Custodian files</div>
+                            <div className="up-filelist">
+                                {storedFiles.map((f) => (
+                                    <div className="up-file-row" key={f.key}>
+                                        <FileGlyph />
+                                        <div className="up-file-main">
+                                            <span className="up-file-name" title={f.originalFileName}>
+                                                {f.originalFileName}
+                                            </span>
+                                            <span className="up-file-meta">
+                                                {f.scheme} · {api.FILE_TYPE_LABEL[f.fileType] || f.fileType} ·{" "}
+                                                {rangeLabel(f)} · {api.formatBytes(f.sizeBytes)}
+                                            </span>
+                                        </div>
+                                        <StatusBadge tone={STATUS.OK}>Ready</StatusBadge>
+                                        <button
+                                            type="button"
+                                            className="up-file-remove"
+                                            onClick={() => removeCustodyFile(f)}
+                                            disabled={run?.isRunning}
+                                            aria-label={`Remove ${f.originalFileName}`}
+                                        >
+                                            &times;
+                                        </button>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    ) : null}
                 </div>
               </div>
 
               <div className="cm-col">
-                <div className="cm-col-head">
-                    <h3>Fund Accounting Daily Transaction File</h3>
-                </div>
+                <h3 className="cm-col-title">Fund Accounting</h3>
 
-                <div className="temp-transaction-card">
+                <div className="temp-transaction-card cm-filecard up-card">
+                    {/* Which transaction file this is. Mutual fund transactions
+                        arrive in their own fund-accounting file and are read
+                        through their own mapping. */}
+                    <div className="up-controls">
+                        <select
+                            className="up-select"
+                            value={faFileType}
+                            onChange={(e) => {
+                                setFaError(null);
+                                setFaFileType(e.target.value);
+                            }}
+                            disabled={faZoneDisabled}
+                        >
+                            <option value={api.FA_FILE_TYPE.REGULAR}>
+                                {api.FA_FILE_TYPE_LABEL.REGULAR}
+                            </option>
+                            <option value={api.FA_FILE_TYPE.MUTUAL_FUND}>
+                                {api.FA_FILE_TYPE_LABEL.MUTUAL_FUND}
+                            </option>
+                        </select>
+                    </div>
 
-                <div className="cm-fa">
-                    <input
-                        ref={faInputRef}
-                        type="file"
-                        accept=".csv"
-                        disabled={faBusy || run?.isRunning}
-                        onChange={(e) => {
-                            const f = e.target.files[0];
-                            e.target.value = "";
-                            if (!f) return;
-                            setFaError(null);
-                            setPending({
-                                kind: "fa",
-                                file: f,
-                                profileType: api.PROFILE_TYPE.FA,
-                            });
+                    <div
+                        className={faDragActive ? "up-zone is-drag" : "up-zone"}
+                        onDragEnter={(e) => {
+                            e.preventDefault();
+                            if (!faZoneDisabled) setFaDragActive(true);
                         }}
-                    />
-                    {faFile ? (
-                        <>
-                            <span className="cm-staged">
-                                Staged — not yet imported: {faFile.originalFileName} ·{" "}
-                                {api.formatBytes(faFile.sizeBytes)}
+                        onDragOver={(e) => e.preventDefault()}
+                        onDragLeave={() => setFaDragActive(false)}
+                        onDrop={(e) => {
+                            e.preventDefault();
+                            setFaDragActive(false);
+                            if (faZoneDisabled) return;
+                            const f = e.dataTransfer.files && e.dataTransfer.files[0];
+                            if (f) handleFaFilePicked(f);
+                        }}
+                    >
+                        <input
+                            ref={faInputRef}
+                            type="file"
+                            accept=".csv"
+                            className="up-zone-input"
+                            aria-label="Upload transaction file"
+                            disabled={faZoneDisabled}
+                            onChange={(e) => {
+                                const f = e.target.files[0];
+                                e.target.value = "";
+                                handleFaFilePicked(f);
+                            }}
+                        />
+                        <div className="up-zone-visual">
+                            <UploadGlyph />
+                            <span className="up-zone-title">
+                                {faBusy ? "Validating…" : "Upload transaction file"}
                             </span>
-                            <button
-                                type="button"
-                                className="cm-remove"
-                                onClick={() =>
-                                    removeFile(faFile, faFile.originalFileName, setFaError)
-                                }
-                                disabled={faBusy || run?.isRunning}
-                                aria-label={`Remove ${faFile.originalFileName}`}
-                            >
-                                ×
-                            </button>
-                        </>
-                    ) : (
-                        <span className="cm-staged muted">
-                            {faBusy ? "Validating…" : "No transaction file staged."}
-                        </span>
-                    )}
-                </div>
+                            <span className="up-zone-sub">
+                                Drag &amp; drop or <span className="up-zone-browse">Browse</span>
+                            </span>
+                        </div>
+                    </div>
 
-                {faError ? <UploadErrorDetails message={faError.message} detail={faError.detail} /> : null}
-                <HeaderWarnings warnings={faWarnings} />
+                    {faError ? <UploadErrorDetails message={faError.message} detail={faError.detail} /> : null}
+                    <HeaderWarnings warnings={faWarnings} />
+
+                    {faFiles.length > 0 ? (
+                        <div className="up-filelist-wrap">
+                            <div className="up-filelist-head">Uploaded file</div>
+                            <div className="up-filelist">
+                                {faFiles.map((f) => (
+                                    <div className="up-file-row" key={f.key}>
+                                        <FileGlyph />
+                                        <div className="up-file-main">
+                                            <span className="up-file-name" title={f.originalFileName}>
+                                                {f.originalFileName}
+                                            </span>
+                                            <span className="up-file-meta">
+                                                {api.FA_FILE_TYPE_LABEL[f.fileType] || f.fileType} ·{" "}
+                                                {faDateLabel(f)} · {api.formatBytes(f.sizeBytes)}
+                                            </span>
+                                        </div>
+                                        <StatusBadge tone={STATUS.OK}>Ready</StatusBadge>
+                                        <button
+                                            type="button"
+                                            className="up-file-remove"
+                                            onClick={() => removeFile(f, f.originalFileName, setFaError)}
+                                            disabled={faBusy || run?.isRunning}
+                                            aria-label={`Remove ${f.originalFileName}`}
+                                        >
+                                            &times;
+                                        </button>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    ) : null}
                 </div>
               </div>
             </div>
 
+            <div className="txo-section-head txo-section-head--tight">
+                <h2>Reconciliation</h2>
+            </div>
+
             <div className="temp-transaction-card cm-gate">
+                <div className="cm-gate-summary">
+                    <div className="cm-gate-fact">
+                        <span className="cm-gate-fact-label">Fund accounting</span>
+                        <span className="cm-gate-fact-value">
+                            {faFiles.length > 0
+                                ? `${faFiles.length} file${faFiles.length === 1 ? "" : "s"} ready`
+                                : "Not staged"}
+                        </span>
+                    </div>
+                    <div className="cm-gate-fact">
+                        <span className="cm-gate-fact-label">Custodian</span>
+                        <span className="cm-gate-fact-value">
+                            {storedFiles.length > 0
+                                ? `${storedFiles.length} file${storedFiles.length === 1 ? "" : "s"} ready`
+                                : "Not staged"}
+                        </span>
+                    </div>
+                </div>
+
                 <div className="cm-gate-row">
                     <button
                         type="button"
@@ -801,25 +1007,40 @@ const CustodyMatchPanel = ({
                         onClick={handleMatch}
                         disabled={!gateOneOpen}
                     >
-                        {run?.isRunning || starting ? "Matching…" : "Match FA vs Custody"}
+                        {run?.isRunning || starting ? "Matching…" : "Run FA vs Custody Matching"}
                     </button>
 
-                    {/* A greyed-out button with no explanation is the thing users complain
-                        about; say exactly what is still missing. */}
+                    {/* One short sentence, not the raw blocker list — a greyed-out
+                        button with no explanation is the thing users complain about,
+                        but a paragraph of reasons is just as unhelpful in a hurry. */}
                     {blockers.length > 0 && !run?.isRunning ? (
-                        <ul className="cm-blockers">
-                            {blockers.map((b) => (
-                                <li key={b}>{b}</li>
-                            ))}
-                        </ul>
+                        <p className="cm-blockers">
+                            {faFiles.length === 0 && storedFiles.length === 0
+                                ? "Upload a Fund Accounting file and at least one Custodian file."
+                                : faFiles.length === 0
+                                    ? "Upload a Fund Accounting file to continue."
+                                    : "Upload at least one Custodian file to continue."}
+                        </p>
                     ) : null}
                 </div>
 
                 {run ? (
                     <div className={`cm-progress ${run.status.toLowerCase()}`}>
                         <div className="cm-progress-head">
-                            <strong>{run.stageDetail || run.status}</strong>
-                            <span className="cm-run-id">{run.runId}</span>
+                            <span className="cm-run-status">
+                                {run.isRunning ? (
+                                    <StatusBadge tone={STATUS.PROCESSING}>{run.stageDetail || run.status}</StatusBadge>
+                                ) : run.status === "COMPLETED_CLEAN" ? (
+                                    <StatusBadge tone={STATUS.OK}>Matched</StatusBadge>
+                                ) : run.status === "COMPLETED_WITH_EXCEPTIONS" ? (
+                                    <StatusBadge tone={STATUS.WARN}>Needs review</StatusBadge>
+                                ) : run.status === "FAILED" ? (
+                                    <StatusBadge tone={STATUS.BAD}>Failed</StatusBadge>
+                                ) : (
+                                    <StatusBadge tone={STATUS.NEUTRAL}>{run.status}</StatusBadge>
+                                )}
+                            </span>
+                            <span className="cm-run-id mono">{run.runId}</span>
                         </div>
 
                         {run.isRunning ? (
@@ -829,40 +1050,72 @@ const CustodyMatchPanel = ({
                         ) : null}
 
                         <div className="cm-stats">
-                            <span>{run.counts.faRows.toLocaleString()} FA rows</span>
-                            <span>{run.counts.custodyRows.toLocaleString()} custody rows</span>
-                            <span>{run.counts.resolved.toLocaleString()} resolved to actual codes</span>
+                            <span><strong className="mono">{run.counts.faRows.toLocaleString()}</strong> FA rows</span>
+                            <span><strong className="mono">{run.counts.custodyRows.toLocaleString()}</strong> custody rows</span>
+                            <span><strong className="mono">{run.counts.resolved.toLocaleString()}</strong> resolved to actual codes</span>
                             {run.counts.unmapped > 0 ? (
-                                <span className="warn">{run.counts.unmapped} unmapped</span>
+                                <span className="warn"><strong className="mono">{run.counts.unmapped}</strong> unmapped</span>
                             ) : null}
                             {run.counts.totalKeys > 0 ? (
                                 <span>
-                                    {run.counts.comparedKeys.toLocaleString()} /{" "}
-                                    {run.counts.totalKeys.toLocaleString()} keys compared
+                                    <strong className="mono">
+                                        {run.counts.comparedKeys.toLocaleString()} / {run.counts.totalKeys.toLocaleString()}
+                                    </strong>{" "}
+                                    keys compared
                                 </span>
                             ) : null}
                         </div>
 
                         {run.status === "COMPLETED_CLEAN" ? (
-                            <p className="cm-verdict ok">
-                                Matched — no differences. The transaction file can now be imported.
-                            </p>
+                            <div className="cm-verdict ok">
+                                <p className="cm-verdict-lead">
+                                    Matched — no differences between fund accounting and custody.
+                                    The transaction file is ready to commit.
+                                </p>
+                            </div>
                         ) : null}
 
                         {run.status === "COMPLETED_WITH_EXCEPTIONS" ? (
-                            <p className="cm-verdict bad">
-                                {run.counts.exceptions.toLocaleString()} record(s) not matching.
-                            </p>
+                            <div className="cm-verdict warn">
+                                <p className="cm-verdict-lead">
+                                    Matching completed. <strong>{run.counts.exceptions.toLocaleString()}</strong>{" "}
+                                    record(s) do not agree between the two sides and need review before
+                                    committing.
+                                </p>
+                                <div className="cm-verdict-actions">
+                                    <a href="#exception-details" className="cm-secondary cm-link-btn">
+                                        Review exceptions
+                                    </a>
+                                </div>
+                            </div>
                         ) : null}
 
                         {run.status === "FAILED" ? (
                             <div className="cm-verdict bad">
-                                <p style={{ margin: 0 }}>
-                                    The run failed{run.error ? `: ${run.error.message}` : "."}
+                                <p className="cm-verdict-lead">
+                                    {FRIENDLY_RUN_ERROR[run.error?.code] ||
+                                        run.error?.message ||
+                                        "Matching failed. Try again, or view details."}
                                 </p>
-                                <button type="button" className="cm-secondary" onClick={handleRetry}>
-                                    Retry from stage {run.stage}
-                                </button>
+                                <div className="cm-verdict-actions">
+                                    <button type="button" className="cm-secondary" onClick={handleRetry}>
+                                        Retry
+                                    </button>
+                                    <button
+                                        type="button"
+                                        className="cm-linkbtn"
+                                        onClick={() => setShowFailDetails((v) => !v)}
+                                    >
+                                        {showFailDetails ? "Hide details" : "View details"}
+                                    </button>
+                                </div>
+                                {showFailDetails ? (
+                                    <p className="cm-technical-ref">
+                                        {run.error?.message ? <span>{run.error.message}<br /></span> : null}
+                                        Stage {run.stage} · <span className="mono">{run.runId}</span>
+                                        {run.error?.code ? <span className="mono"> · {run.error.code}</span> : null}
+                                    </p>
+                                ) : null}
                             </div>
                         ) : null}
                     </div>

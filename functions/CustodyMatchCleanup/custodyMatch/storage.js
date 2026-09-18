@@ -4,7 +4,7 @@
  * Bucket: temporary-files (pre-existing). Two folders, business date as the
  * first segment inside each:
  *
- *   FA-Transaction/<date>/raw-<ms>-<name>.csv          as uploaded, untouched
+ *   FA-Transaction/<date>/raw-<TYPE>-<from>-<to>-<ms>-<name>.csv   as uploaded, untouched
  *   FA-Transaction/<date>/final-<date>-FA.csv          consolidated onto actual codes
  *   FA-Transaction/<date>/difference-<date>-<runId>.csv
  *   Custodian-Transaction/<date>/<SCHEME>-<TYPE>-<ms>.csv
@@ -22,7 +22,7 @@
  * works in AppSail and inside the job function.
  */
 
-import { CUSTODY_FILE_TYPE } from "./constants.js";
+import { CUSTODY_FILE_TYPE, FA_FILE_TYPE } from "./constants.js";
 import { PROFILE_TYPES, defaultProfile, fromStoredProfile } from "./fieldMap.js";
 
 export const BUCKET_NAME = "temporary-files";
@@ -57,7 +57,11 @@ export const SIDE_KEY = {
 export const CUSTODY_FILE_TYPES = [
   CUSTODY_FILE_TYPE.RESIDENTIAL,
   CUSTODY_FILE_TYPE.NDPMS,
+  CUSTODY_FILE_TYPE.MUTUAL_FUND,
 ];
+
+/** Transaction files a day may hold — at most one of each. */
+export const FA_FILE_TYPES = [FA_FILE_TYPE.REGULAR, FA_FILE_TYPE.MUTUAL_FUND];
 
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -97,12 +101,38 @@ export const faDayPrefix = (businessDate) =>
 export const custodyDayPrefix = (businessDate) =>
   `${FOLDER.CUSTODY}/${assertBusinessDate(businessDate)}/`;
 
+/**
+ * FA/<date>/raw-<TYPE>-<FIRST>-<LAST>-<uploadedAtMs>-<name>
+ *
+ * The type is in the key for the same reason the custodian keys carry theirs:
+ * the regular and mutual fund transaction files both live in the day folder and
+ * each has to be found, replaced and re-read as its own file.
+ *
+ * The range is the span of DATEPUR_ACQUI the rows actually cover, carried here
+ * for the same reason the custodian key carries its own: it is what identifies
+ * the file to a user, and reading it off the key costs nothing, where reopening
+ * a staged file on every screen load would.
+ */
 export const buildFaRawKey = ({
   businessDate,
+  fileType = FA_FILE_TYPE.REGULAR,
+  coveredFrom,
+  coveredTo,
   originalFileName,
   uploadedAtMs = Date.now(),
-}) =>
-  `${faDayPrefix(businessDate)}raw-${uploadedAtMs}-${sanitiseFileName(originalFileName)}`;
+}) => {
+  const type = sanitiseToken(fileType);
+  if (!FA_FILE_TYPES.includes(type)) {
+    throw new Error(
+      `Unknown transaction file type "${fileType}". Expected ${FA_FILE_TYPES.join(" or ")}.`,
+    );
+  }
+
+  const from = assertBusinessDate(coveredFrom || businessDate).replace(/-/g, "");
+  const to = assertBusinessDate(coveredTo || coveredFrom || businessDate).replace(/-/g, "");
+
+  return `${faDayPrefix(businessDate)}raw-${type}-${from}-${to}-${uploadedAtMs}-${sanitiseFileName(originalFileName)}`;
+};
 
 export const buildFaFinalKey = (businessDate) =>
   `${faDayPrefix(businessDate)}final-${assertBusinessDate(businessDate)}-FA.csv`;
@@ -224,7 +254,15 @@ export const parseCustodyKey = (key) => {
   };
 };
 
-/** @returns {{businessDate,originalFileName,uploadedAtMs,key}|null} */
+/**
+ * Three key shapes, newest first. Order matters: the ranged form ends in the
+ * older form's shape, so trying the older pattern first would read the range's
+ * first date as the timestamp.
+ *
+ * coveredFrom/coveredTo are null for a key written before the range was stored.
+ *
+ * @returns {{businessDate,fileType,coveredFrom,coveredTo,originalFileName,uploadedAtMs,key}|null}
+ */
 export const parseFaRawKey = (key) => {
   const parts = String(key || "").split("/");
   if (parts.length < 3 || parts[0] !== FOLDER.FA) return null;
@@ -232,14 +270,56 @@ export const parseFaRawKey = (key) => {
   if (!DATE_PATTERN.test(businessDate)) return null;
 
   const name = lastSegment(key);
-  const m = name.match(/^raw-(\d+)-(.+)$/);
-  if (!m) return null;
+  const types = FA_FILE_TYPES.join("|");
+  const spread = (c) => `${c.slice(0, 4)}-${c.slice(4, 6)}-${c.slice(6, 8)}`;
+
+  const ranged = name.match(
+    new RegExp(String.raw`^raw-(${types})-(\d{8})-(\d{8})-(\d+)-(.+)$`),
+  );
+  if (ranged) {
+    const coveredFrom = spread(ranged[2]);
+    const coveredTo = spread(ranged[3]);
+    if (DATE_PATTERN.test(coveredFrom) && DATE_PATTERN.test(coveredTo)) {
+      return {
+        key,
+        businessDate,
+        fileType: ranged[1],
+        coveredFrom,
+        coveredTo,
+        uploadedAtMs: Number(ranged[4]),
+        originalFileName: ranged[5],
+      };
+    }
+  }
+
+  const m = name.match(new RegExp(String.raw`^raw-(${types})-(\d+)-(.+)$`));
+  if (m) {
+    return {
+      key,
+      businessDate,
+      fileType: m[1],
+      coveredFrom: null,
+      coveredTo: null,
+      uploadedAtMs: Number(m[2]),
+      originalFileName: m[3],
+    };
+  }
+
+  /*
+   * Keys written before the mutual fund transaction file existed carry no type.
+   * They can only be the regular file, since it was the only one there was.
+   */
+  const untyped = name.match(/^raw-(\d+)-(.+)$/);
+  if (!untyped) return null;
 
   return {
     key,
     businessDate,
-    uploadedAtMs: Number(m[1]),
-    originalFileName: m[2],
+    fileType: FA_FILE_TYPE.REGULAR,
+    coveredFrom: null,
+    coveredTo: null,
+    uploadedAtMs: Number(untyped[1]),
+    originalFileName: untyped[2],
   };
 };
 
@@ -502,6 +582,15 @@ export const listDay = async (catalystApp, businessDate, { bucket = null } = {})
     fa: {
       raw: faRaw,
       latestRaw: faRaw[0] || null,
+      /*
+       * The latest file of each transaction type. A day may hold the regular
+       * file and the mutual fund file at once, and replacing one must not be
+       * read as replacing the other — faRaw is newest-first, so the first hit
+       * for a type is that type's current file.
+       */
+      latestByType: Object.fromEntries(
+        FA_FILE_TYPES.map((t) => [t, faRaw.find((f) => f.fileType === t) || null]),
+      ),
       final: faFinal,
       differences,
       hasFile: faRaw.length > 0,
@@ -543,6 +632,40 @@ export const deleteDaySide = async (
   );
 
   return { side, businessDate: date, prefix, ...result, count: result.deleted.length };
+};
+
+/**
+ * Replace ONE transaction file without disturbing the other.
+ *
+ * The whole-side delete above is too blunt once a day can hold both the regular
+ * and the mutual fund file — it would take both. The DERIVED files are still
+ * cleared, because the final file and the difference reports were produced from
+ * a set of raw files that no longer stands.
+ */
+export const deleteFaRawOfType = async (
+  catalystApp,
+  businessDate,
+  fileType,
+  { bucket = null } = {},
+) => {
+  const date = assertBusinessDate(businessDate);
+  const b = bucket || getBucket(catalystApp);
+  const type = sanitiseToken(fileType);
+
+  const objects = await listAllObjects(b, faDayPrefix(date));
+  const doomed = objects.filter((o) => {
+    if (o.key === buildFaFinalKey(date)) return true;
+    if (lastSegment(o.key).startsWith("difference-")) return true;
+    const parsed = parseFaRawKey(o.key);
+    return parsed ? parsed.fileType === type : false;
+  });
+
+  const result = await deleteKeys(
+    b,
+    doomed.map((o) => o.key),
+  );
+
+  return { businessDate: date, fileType: type, ...result, count: result.deleted.length };
 };
 
 /** Both sides. Used by the cleanup cron and by a full restart of a day. */

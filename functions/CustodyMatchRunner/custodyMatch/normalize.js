@@ -6,7 +6,14 @@
  * spelled them. Dependency-free: this file is vendored into the job function.
  */
 
-import { ISIN_PATTERN, SIDE, TRAN_TYPE } from "./constants.js";
+import {
+  CUSTODY_FILE_TYPE,
+  ISIN_PATTERN,
+  MF_FA_EXCHANGE,
+  MF_ISIN_PREFIX,
+  SIDE,
+  TRAN_TYPE,
+} from "./constants.js";
 
 /** Strip a UTF-8 BOM from decoded text. */
 export const stripBom = (text) =>
@@ -255,6 +262,39 @@ export const normTranType = (raw, side = SIDE.FA) => {
 
   return null;
 };
+
+/**
+ * Direction in a Mutual Funds custodian file. Only the two fund-house actions
+ * are valid there; the equity codes above are not, and vice versa.
+ */
+export const normMutualFundTranType = (raw) => {
+  const t = text(raw).toUpperCase();
+  if (t === "SUBSCRIPTION") return TRAN_TYPE.BUY;
+  if (t === "REDEMPTION") return TRAN_TYPE.SELL;
+  return null;
+};
+
+/**
+ * Is this parsed FA row a mutual fund transaction?
+ *
+ * INF ISIN + exchange DIR + a recognised buy/sell. Mutual fund rows are compared
+ * only against the Mutual Funds custodian files, everything else only against
+ * the Residential and NRE/NRO files.
+ *
+ * Read from the row rather than from the file it was uploaded in, because the
+ * comparison works on the consolidated file S1 writes — a single 26-column
+ * rewrite of every transaction file, in which the upload each row came from is
+ * no longer recorded. Mutual fund rows only ever reach it from the mutual fund
+ * file, so the two readings agree; this one also survives the rewrite.
+ */
+export const isMutualFundFaRow = (row) =>
+  text(row.isin).toUpperCase().startsWith(MF_ISIN_PREFIX) &&
+  text(row.exchange).toUpperCase() === MF_FA_EXCHANGE &&
+  (row.tranType === TRAN_TYPE.BUY || row.tranType === TRAN_TYPE.SELL);
+
+/** Did this custodian row come from a Mutual Funds file? */
+export const isMutualFundCustodyRow = (row) =>
+  row.fileType === CUSTODY_FILE_TYPE.MUTUAL_FUND;
 
 /** The match key: actual code, ISIN, transaction date, direction. Quantity is the compared value, never part of the key. */
 export const buildMatchKey = ({ actualCode, isin, tranDate, tranType }) =>

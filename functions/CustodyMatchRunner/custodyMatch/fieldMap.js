@@ -27,6 +27,7 @@ import {
   firstLineOf,
   isValidIsinShape,
   normIsin,
+  normMutualFundTranType,
   normTranType,
   num,
   parseContractNoDate,
@@ -39,8 +40,10 @@ import {
 /** Which file a profile describes. One profile per type, shared across schemes. */
 export const PROFILE_TYPE = {
   FA: "FA",
+  FA_MUTUAL_FUND: "FA_MUTUAL_FUND",
   CUSTODY_RESIDENTIAL: "CUSTODY_RESIDENTIAL",
   CUSTODY_NDPMS: "CUSTODY_NDPMS",
+  CUSTODY_MUTUAL_FUND: "CUSTODY_MUTUAL_FUND",
   /*
    * The custodian consolidated holdings file used by Holding Comparison. It lives
    * here only so that module can reuse this mapping screen; custody matching
@@ -50,6 +53,17 @@ export const PROFILE_TYPE = {
 };
 
 export const PROFILE_TYPES = Object.values(PROFILE_TYPE);
+
+/**
+ * The transaction-file profiles, as opposed to the custodian ones.
+ *
+ * Both describe the same 26 canonical fields and both are rewritten into the
+ * 26-column template before import; they differ only in which column of the
+ * user's file feeds each field.
+ */
+export const FA_PROFILE_TYPES = [PROFILE_TYPE.FA, PROFILE_TYPE.FA_MUTUAL_FUND];
+
+export const isFaProfileType = (type) => FA_PROFILE_TYPES.includes(type);
 
 /** Stored blobs carry this so a later shape change can migrate rather than misread. */
 export const PROFILE_VERSION = 1;
@@ -156,39 +170,61 @@ const CUSTODY_HOLDINGS_REQUIRED_FIELDS = [...CUSTODY_HOLDINGS_KEY_FIELDS, "asOfD
  * `kind` is what a column's contents are checked against before the mapping is
  * accepted; it does not change how the column is located.
  */
+/**
+ * The transaction file's canonical fields.
+ *
+ * The base shared by both transaction profiles. The mutual fund file carries
+ * these same 26 under one different heading, plus two of its own — so it
+ * extends this list rather than restating it.
+ */
+const FA_FIELDS = [
+  { field: "accountCode", label: "Account Code", kind: "code", required: true, matchKey: true },
+  { field: "isin", label: "ISIN", kind: "isin", required: true, matchKey: true },
+  { field: "tranDate", label: "Transaction Date", kind: "isoDate", required: true, matchKey: true },
+  { field: "tranType", label: "Transaction Type", kind: "type", required: true, matchKey: true },
+  { field: "quantity", label: "Quantity", kind: "number", required: true, matchKey: true },
+
+  { field: "brokerCode", label: "Broker Code", kind: "code", required: true },
+  { field: "exchange", label: "Exchange", kind: "text", required: true },
+  { field: "settlementDate", label: "Settlement Date", kind: "isoDate", required: true },
+  { field: "rate", label: "Rate", kind: "number", required: true },
+  { field: "brokerage", label: "Brokerage", kind: "number", required: true },
+  { field: "serviceTax", label: "Service Tax", kind: "number", required: true },
+  { field: "stt", label: "STT", kind: "number", required: true },
+  { field: "ref", label: "Transaction Ref", kind: "text", required: true },
+  { field: "description", label: "Description", kind: "text", required: true },
+  { field: "netAmount", label: "Net Amount", kind: "number", required: true },
+
+  // Not used by matching, but carried through to the production import. A
+  // remapped file that cannot fill these would silently lose Security_code
+  // and PORTFOLIOID on every row it writes to the Transaction table.
+  { field: "setDateFlag", label: "Settlement Date Flag", kind: "text", required: true },
+  { field: "mktRate", label: "Market Rate", kind: "number", required: true },
+  { field: "cashSymbolCode", label: "Cash Symbol Code", kind: "code", required: true },
+  { field: "accruedInterest", label: "Accrued Interest", kind: "number", required: true },
+  { field: "blockId", label: "Block / Portfolio ID", kind: "code", required: true },
+  { field: "chequeNumber", label: "Cheque Number", kind: "text", required: true },
+  { field: "chequeDetail", label: "Cheque Detail", kind: "text", required: true },
+  { field: "bankRef", label: "Bank Ref", kind: "text", required: true },
+  { field: "netRate", label: "Net Rate", kind: "number", required: true },
+  { field: "cashSetdate", label: "Cash Settlement Date", kind: "isoDate", required: true },
+];
+
+/**
+ * The mutual fund file's two extra trailing columns.
+ *
+ * Deductions the fund house reports per transaction. Neither is compared — they
+ * are carried for the reconciliation to display — so neither can reject a row.
+ */
+const FA_MUTUAL_FUND_FIELDS = [
+  ...FA_FIELDS,
+  { field: "tds", label: "TDS", kind: "number", required: true },
+  { field: "stampDuty", label: "Stamp Duty", kind: "number", required: true },
+];
+
 export const FIELD_CATALOG = {
-  [PROFILE_TYPE.FA]: [
-    { field: "accountCode", label: "Account Code", kind: "code", required: true, matchKey: true },
-    { field: "isin", label: "ISIN", kind: "isin", required: true, matchKey: true },
-    { field: "tranDate", label: "Transaction Date", kind: "isoDate", required: true, matchKey: true },
-    { field: "tranType", label: "Transaction Type", kind: "type", required: true, matchKey: true },
-    { field: "quantity", label: "Quantity", kind: "number", required: true, matchKey: true },
-
-    { field: "brokerCode", label: "Broker Code", kind: "code", required: true },
-    { field: "exchange", label: "Exchange", kind: "text", required: true },
-    { field: "settlementDate", label: "Settlement Date", kind: "isoDate", required: true },
-    { field: "rate", label: "Rate", kind: "number", required: true },
-    { field: "brokerage", label: "Brokerage", kind: "number", required: true },
-    { field: "serviceTax", label: "Service Tax", kind: "number", required: true },
-    { field: "stt", label: "STT", kind: "number", required: true },
-    { field: "ref", label: "Transaction Ref", kind: "text", required: true },
-    { field: "description", label: "Description", kind: "text", required: true },
-    { field: "netAmount", label: "Net Amount", kind: "number", required: true },
-
-    // Not used by matching, but carried through to the production import. A
-    // remapped file that cannot fill these would silently lose Security_code
-    // and PORTFOLIOID on every row it writes to the Transaction table.
-    { field: "setDateFlag", label: "Settlement Date Flag", kind: "text", required: true },
-    { field: "mktRate", label: "Market Rate", kind: "number", required: true },
-    { field: "cashSymbolCode", label: "Cash Symbol Code", kind: "code", required: true },
-    { field: "accruedInterest", label: "Accrued Interest", kind: "number", required: true },
-    { field: "blockId", label: "Block / Portfolio ID", kind: "code", required: true },
-    { field: "chequeNumber", label: "Cheque Number", kind: "text", required: true },
-    { field: "chequeDetail", label: "Cheque Detail", kind: "text", required: true },
-    { field: "bankRef", label: "Bank Ref", kind: "text", required: true },
-    { field: "netRate", label: "Net Rate", kind: "number", required: true },
-    { field: "cashSetdate", label: "Cash Settlement Date", kind: "isoDate", required: true },
-  ],
+  [PROFILE_TYPE.FA]: FA_FIELDS,
+  [PROFILE_TYPE.FA_MUTUAL_FUND]: FA_MUTUAL_FUND_FIELDS,
 
   [PROFILE_TYPE.CUSTODY_RESIDENTIAL]: [
     { field: "actualCode", label: "Actual Code", kind: "code", required: true, matchKey: true },
@@ -247,6 +283,50 @@ export const FIELD_CATALOG = {
     { field: "brokerCode", label: "Broker Code", kind: "code", required: true },
   ],
 
+  /*
+   * Mutual Funds transaction file — every one of the 22 standard columns is
+   * mapped, so nothing in the custodian's file is read past without an answer.
+   *
+   * `required` means the mapping screen needs an ANSWER for every field, which
+   * "not present in this file" satisfies. When a file is read, only the five
+   * match-key columns must actually be present (parseCustody resolves this
+   * layout non-strictly); everything else is display-only and may be blank.
+   *
+   * The twelve beyond the match key and the original display set are read onto
+   * the row and reach the run, but the exception table has no column for them
+   * yet, so they do not appear in the difference report until it does.
+   */
+  [PROFILE_TYPE.CUSTODY_MUTUAL_FUND]: [
+    { field: "actualCode", label: "Actual Code (UCC)", kind: "code", required: true, matchKey: true },
+    { field: "isin", label: "ISIN", kind: "isin", required: true, matchKey: true },
+    // DD-MM-YYYY in the files this custodian actually sends ("03-09-2026"),
+    // so the wider reading is used rather than the strict YYYY-MM-DD one.
+    { field: "tranDate", label: "Trade Date", kind: "date", required: true, matchKey: true },
+    { field: "tranType", label: "Transaction Type", kind: "type", required: true, matchKey: true },
+    { field: "quantity", label: "Units", kind: "number", required: true, matchKey: true },
+
+    { field: "netAmount", label: "Amount", kind: "number", required: true },
+    { field: "settlementDate", label: "Settlement Date", kind: "date", required: true },
+    { field: "ref", label: "Reference No", kind: "text", required: true },
+    { field: "exchange", label: "Market Type", kind: "text", required: true },
+    // ARN codes carry a hyphen ("ARN-12345"), so they are read as text.
+    { field: "brokerCode", label: "Broker ARN Code", kind: "text", required: true },
+
+    /*
+     * The four columns worth naming beyond the shared set. All display-only and
+     * all read as text — none is compared, and text cannot reject a file.
+     *
+     * The other eight columns in the layout (Mode, BankAccount, the two
+     * sub-broker codes, EUINNumber, both Target* switch columns and RiaCode)
+     * are deliberately left unmapped: nothing in the reconciliation reads them,
+     * and the ignored-column warning already reports that the file carries
+     * them. Mapping a column that feeds nothing is work with no decision in it.
+     */
+    { field: "folioNo", label: "Folio No", kind: "text", required: true },
+    { field: "schemeName", label: "Scheme Name", kind: "text", required: true },
+    { field: "amcName", label: "Mutual Fund (AMC)", kind: "text", required: true },
+    { field: "firstHolderName", label: "First Holder Name", kind: "text", required: true },
+  ],
   [PROFILE_TYPE.CUSTODY_HOLDINGS]: CUSTODY_HOLDINGS_COLUMNS.map(([field, header, kind]) => ({
     field,
     label: header,
@@ -260,6 +340,7 @@ export const FIELD_CATALOG = {
 export const FORMAT_TO_PROFILE_TYPE = {
   [CUSTODY_FORMAT.RESIDENT]: PROFILE_TYPE.CUSTODY_RESIDENTIAL,
   [CUSTODY_FORMAT.NDPMS]: PROFILE_TYPE.CUSTODY_NDPMS,
+  [CUSTODY_FORMAT.MUTUAL_FUND]: PROFILE_TYPE.CUSTODY_MUTUAL_FUND,
 };
 
 const byName = (name) => ({ by: SOURCE_BY.NAME, name, transform: TRANSFORM.NONE });
@@ -272,35 +353,53 @@ const byIndex = (index) => ({ by: SOURCE_BY.INDEX, index, transform: TRANSFORM.N
  * is validated for exact order before rows are read, so index is safe there.
  * Custodian files are addressed by NAME because custodians reorder their exports.
  */
+/**
+ * The 26-column template, addressed by position.
+ *
+ * Also the starting point for the mutual fund transaction file, which carries
+ * the same columns in the same order and differs only in one heading
+ * (SYMBOLCODE/ISIN CODE rather than SYMBOLCODE). Because the positions are
+ * unchanged, every field lands on the right column before the user touches
+ * anything, and mapping that file is a confirmation rather than 26 decisions.
+ */
+const FA_DEFAULT_PROFILE = {
+  accountCode: byIndex(1), // BROKERACID
+  isin: byIndex(2), // SYMBOLCODE
+  tranDate: byIndex(5), // DATEPUR_ACQUI
+  tranType: byIndex(4), // TRANSTYPE
+  quantity: byIndex(7), // QUANTITY
+
+  brokerCode: byIndex(0),
+  exchange: byIndex(3),
+  settlementDate: byIndex(6),
+  rate: byIndex(8),
+  brokerage: byIndex(9),
+  serviceTax: byIndex(10),
+  stt: byIndex(14), // TRANEXPENSE
+  ref: byIndex(17), // TRANSREF
+  description: byIndex(18),
+  netAmount: byIndex(23), // the SECOND "filler"
+
+  setDateFlag: byIndex(11),
+  mktRate: byIndex(12),
+  cashSymbolCode: byIndex(13),
+  accruedInterest: byIndex(15),
+  blockId: byIndex(16),
+  chequeNumber: byIndex(19),
+  chequeDetail: byIndex(20),
+  bankRef: byIndex(21),
+  netRate: byIndex(22), // the FIRST "filler"
+  cashSetdate: byIndex(25),
+};
+
 export const DEFAULT_PROFILES = {
-  [PROFILE_TYPE.FA]: {
-    accountCode: byIndex(1), // BROKERACID
-    isin: byIndex(2), // SYMBOLCODE
-    tranDate: byIndex(5), // DATEPUR_ACQUI
-    tranType: byIndex(4), // TRANSTYPE
-    quantity: byIndex(7), // QUANTITY
+  [PROFILE_TYPE.FA]: FA_DEFAULT_PROFILE,
 
-    brokerCode: byIndex(0),
-    exchange: byIndex(3),
-    settlementDate: byIndex(6),
-    rate: byIndex(8),
-    brokerage: byIndex(9),
-    serviceTax: byIndex(10),
-    stt: byIndex(14), // TRANEXPENSE
-    ref: byIndex(17), // TRANSREF
-    description: byIndex(18),
-    netAmount: byIndex(23), // the SECOND "filler"
-
-    setDateFlag: byIndex(11),
-    mktRate: byIndex(12),
-    cashSymbolCode: byIndex(13),
-    accruedInterest: byIndex(15),
-    blockId: byIndex(16),
-    chequeNumber: byIndex(19),
-    chequeDetail: byIndex(20),
-    bankRef: byIndex(21),
-    netRate: byIndex(22), // the FIRST "filler"
-    cashSetdate: byIndex(25),
+  // The 26 template positions, then this file's own two on the end.
+  [PROFILE_TYPE.FA_MUTUAL_FUND]: {
+    ...FA_DEFAULT_PROFILE,
+    tds: byIndex(26),
+    stampDuty: byIndex(27),
   },
 
   [PROFILE_TYPE.CUSTODY_RESIDENTIAL]: {
@@ -342,6 +441,24 @@ export const DEFAULT_PROFILES = {
     brokerCode: byName("BrokerRegNo"),
   },
 
+  [PROFILE_TYPE.CUSTODY_MUTUAL_FUND]: {
+    actualCode: byName("UCC"),
+    isin: byName("SourceMFISIN"),
+    tranDate: byName("TradeDate"),
+    tranType: byName("TransactionType"),
+    quantity: byName("Units"),
+
+    netAmount: byName("Amount"),
+    settlementDate: byName("SettlementDate"),
+    ref: byName("REFNo"),
+    exchange: byName("MarketType"),
+    brokerCode: byName("BrokerARNCode"),
+
+    folioNo: byName("FolioNo"),
+    schemeName: byName("SourceMFScheme"),
+    amcName: byName("MutualFund"),
+    firstHolderName: byName("FirstHolderName"),
+  },
   [PROFILE_TYPE.CUSTODY_HOLDINGS]: Object.fromEntries(
     CUSTODY_HOLDINGS_COLUMNS.map(([field, header]) => [field, byName(header)]),
   ),
@@ -635,8 +752,11 @@ const KIND_TESTS = {
   [COLUMN_KIND.DATE]: (v) => parseDate(v) !== null,
   [COLUMN_KIND.ISO_DATE]: (v) => parseIsoDate(v) !== null,
   [COLUMN_KIND.ISIN]: (v) => isValidIsinShape(normIsin(v)),
-  // Side matters: SQB and OPI are BUY codes on the FA side only.
-  [COLUMN_KIND.TYPE]: (v, side) => normTranType(v, side) !== null,
+  // Side matters: SQB and OPI are BUY codes on the FA side only, and
+  // Subscription / Redemption appear only in custodian (Mutual Funds) files.
+  [COLUMN_KIND.TYPE]: (v, side) =>
+    normTranType(v, side) !== null ||
+    (side === SIDE.CUSTODY && normMutualFundTranType(v) !== null),
   // Any non-blank cell is a usable code or free text.
   [COLUMN_KIND.CODE]: () => true,
   [COLUMN_KIND.TEXT]: () => true,

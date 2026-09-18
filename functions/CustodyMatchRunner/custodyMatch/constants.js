@@ -40,6 +40,13 @@ export const FA_HEADERS = [
   "CashSetdate",
 ];
 
+/**
+ * Columns the mutual fund transaction file carries after the 26, in this order.
+ * Must match OPTIONAL_TRAILING_HEADERS in controller/uploader/TempTransactionUpload.js,
+ * which writes them to TDSAMOUNT and STAMPDUTY.
+ */
+export const FA_DEDUCTION_HEADERS = ["TDS", "Stamp Duty"];
+
 /** The five FA columns the match key and compared value are built from. */
 export const FA_KEY_COLUMNS = {
   accountCode: "BROKERACID",
@@ -90,19 +97,50 @@ export const CUSTODY_F2_HEADERS = [
   "SettlementDate",
 ];
 
+/**
+ * Custodian format 3 — Mutual Funds transaction file. Standard header set; only
+ * the five mapped match columns must be present, the rest are informational.
+ */
+export const CUSTODY_F3_HEADERS = [
+  "MarketType",
+  "REFNo",
+  "TransactionType",
+  "Mode",
+  "UCC",
+  "FirstHolderName",
+  "FolioNo",
+  "BankAccount",
+  "BrokerARNCode",
+  "SubBrokerARNCode",
+  "SubBrokerCode",
+  "EUINNumber",
+  "SourceMFISIN",
+  "MutualFund",
+  "SourceMFScheme",
+  "TargetMFISIN",
+  "TargetMFScheme",
+  "Amount",
+  "Units",
+  "TradeDate",
+  "SettlementDate",
+  "RiaCode",
+];
+
 /** Which custodian layout a file uses. Detected from headers, cross-checked against the filename tag. */
 export const CUSTODY_FORMAT = {
   RESIDENT: "F1_RESIDENT",
   NDPMS: "F2_NDPMS",
+  MUTUAL_FUND: "F3_MUTUAL_FUND",
 };
 
 /**
- * Account type -> custodian layout. One file per scheme, either way; the two
- * types differ only in the columns inside the file.
+ * Account type -> custodian layout. One file per scheme, either way; the types
+ * differ only in the columns inside the file.
  */
 export const CUSTODY_FILE_TYPE = {
   RESIDENTIAL: "RESIDENTIAL",
   NDPMS: "NDPMS",
+  MUTUAL_FUND: "MUTUAL_FUND",
 };
 
 /**
@@ -128,7 +166,36 @@ export const PREDEFINED_SCHEMES = [
 export const CUSTODY_TYPE_TO_FORMAT = {
   [CUSTODY_FILE_TYPE.RESIDENTIAL]: CUSTODY_FORMAT.RESIDENT,
   [CUSTODY_FILE_TYPE.NDPMS]: CUSTODY_FORMAT.NDPMS,
+  [CUSTODY_FILE_TYPE.MUTUAL_FUND]: CUSTODY_FORMAT.MUTUAL_FUND,
 };
+
+/**
+ * Which transaction file was uploaded.
+ *
+ * Mutual fund transactions arrive in their own fund-accounting file, read
+ * through its own field mapping: it carries the same 26 fields as the regular
+ * file under one different heading, so one mapping cannot describe both. A day
+ * holds at most one file of each type.
+ */
+export const FA_FILE_TYPE = {
+  REGULAR: "REGULAR",
+  MUTUAL_FUND: "MUTUAL_FUND",
+};
+
+/** How each transaction file is named in a message to the user. */
+export const FA_FILE_TYPE_LABEL = {
+  [FA_FILE_TYPE.REGULAR]: "transaction",
+  [FA_FILE_TYPE.MUTUAL_FUND]: "mutual fund transaction",
+};
+
+/**
+ * How an FA row is recognised as a mutual fund transaction: an INF ISIN (the
+ * prefix given to mutual fund units) traded "DIR" (direct with the fund house).
+ * The exchange check keeps ETFs — also INF, but traded on NSE/BSE — with the
+ * equity custodian files.
+ */
+export const MF_ISIN_PREFIX = "INF";
+export const MF_FA_EXCHANGE = "DIR";
 
 /** Normalised transaction direction. Direction lives in the match key, never in the sign of quantity. */
 export const TRAN_TYPE = {

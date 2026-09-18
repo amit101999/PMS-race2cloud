@@ -177,47 +177,68 @@ module.exports = async (jobRequest, context) => {
     if (atOrBefore(resumeFrom, "S1")) {
       await CM.setStage(app, runId, CM.STAGE.BUILD_FA, "Reading the transaction file");
 
-      const raw = day.fa.latestRaw;
-      if (!raw) {
+      /*
+       * Every transaction file stored for the date, newest first. A day may hold
+       * the regular file and the mutual fund file; each is read through its OWN
+       * mapping, because the two layouts differ and one mapping cannot describe
+       * both. Their rows are then one set — from here on nothing cares which
+       * file a row arrived in.
+       */
+      const faFiles = day.fa.raw;
+      if (faFiles.length === 0) {
         throw Object.assign(new Error("No transaction file is stored for this date."), {
           code: "FA_FILE_MISSING",
         });
       }
 
-      /*
-       * Stratus keeps listing an object for around twenty seconds after it is
-       * deleted, so a file the user removed just before pressing Match can still
-       * be in `day`. Say so plainly; the raw NoSuchKey reads like a bucket fault.
-       */
-      let faBuffer;
-      try {
-        faBuffer = await CM.getBuffer(bucket, raw.key);
-      } catch (readErr) {
-        throw Object.assign(
-          new Error(
-            `The transaction file ${raw.originalFileName} is no longer stored. It was probably removed after this run was queued — upload it again and match once more.`,
-          ),
-          { code: "FA_FILE_MISSING", cause: readErr },
-        );
-      }
-      const parsed = await CM.parseFaFile(faBuffer, {
-        businessDate,
-        profile: profiles[CM.PROFILE_TYPE.FA],
-      });
-      if (parsed.fileError) {
-        throw Object.assign(new Error(parsed.fileError.message), {
-          code: parsed.fileError.code,
+      const parsed = { rows: [], warnings: [] };
+
+      for (const raw of faFiles) {
+        const profileType =
+          raw.fileType === CM.FA_FILE_TYPE.MUTUAL_FUND
+            ? CM.PROFILE_TYPE.FA_MUTUAL_FUND
+            : CM.PROFILE_TYPE.FA;
+
+        /*
+         * Stratus keeps listing an object for around twenty seconds after it is
+         * deleted, so a file the user removed just before pressing Match can still
+         * be in `day`. Say so plainly; the raw NoSuchKey reads like a bucket fault.
+         */
+        let faBuffer;
+        try {
+          faBuffer = await CM.getBuffer(bucket, raw.key);
+        } catch (readErr) {
+          throw Object.assign(
+            new Error(
+              `The transaction file ${raw.originalFileName} is no longer stored. It was probably removed after this run was queued — upload it again and match once more.`,
+            ),
+            { code: "FA_FILE_MISSING", cause: readErr },
+          );
+        }
+
+        const one = await CM.parseFaFile(faBuffer, {
+          businessDate,
+          profile: profiles[profileType],
+          type: profileType,
         });
-      }
-      if (parsed.rowErrors.length > 0) {
-        // Upload-time validation should have caught this; reaching here means the
-        // stored file is not the one that was validated.
-        throw Object.assign(
-          new Error(
-            `${parsed.rowErrors.length} row(s) in the stored transaction file could not be read.`,
-          ),
-          { code: "FA_VALIDATION_FAILED" },
-        );
+        if (one.fileError) {
+          throw Object.assign(new Error(one.fileError.message), {
+            code: one.fileError.code,
+          });
+        }
+        if (one.rowErrors.length > 0) {
+          // Upload-time validation should have caught this; reaching here means the
+          // stored file is not the one that was validated.
+          throw Object.assign(
+            new Error(
+              `${one.rowErrors.length} row(s) in the stored transaction file ${raw.originalFileName} could not be read.`,
+            ),
+            { code: "FA_VALIDATION_FAILED" },
+          );
+        }
+
+        parsed.rows.push(...one.rows);
+        parsed.warnings.push(...one.warnings);
       }
 
       await CM.setStageDetail(
@@ -456,9 +477,16 @@ module.exports = async (jobRequest, context) => {
       if (virtuals && virtuals.length) row.virtualCodes = virtuals;
     }
 
-    const faMap = CM.aggregateByKey(faRows);
-    const custodyMap = CM.aggregateByKey(custodyRows);
-    const keys = CM.buildKeyUnion(faMap, custodyMap);
+    /*
+     * Two comparisons: mutual fund FA rows against the Mutual Funds custodian
+     * files, everything else against the Residential and NRE/NRO files.
+     */
+    const groups = CM.splitMutualFunds(faRows, custodyRows).map((group) => {
+      const faMap = CM.aggregateByKey(group.faRows);
+      const custodyMap = CM.aggregateByKey(group.custodyRows);
+      return { ...group, faMap, custodyMap, keys: CM.buildKeyUnion(faMap, custodyMap) };
+    });
+    const totalKeys = groups.reduce((sum, g) => sum + g.keys.length, 0);
 
     /*
      * The key walk always starts at zero.
@@ -475,29 +503,41 @@ module.exports = async (jobRequest, context) => {
      */
     let exceptions = [];
     let matchedKeyCount = 0;
-    let compared = 0;
+    let comparedTotal = 0;
 
-    while (compared < keys.length) {
-      if (remainingMs(context) < TIME_BUFFER_MS) {
-        throw Object.assign(
-          new Error(
-            `Ran out of time comparing (${compared} of ${keys.length} keys). This day is larger than the job budget allows.`,
-          ),
-          { code: "COMPARE_TIMEOUT" },
-        );
+    for (const group of groups) {
+      let groupExceptions = [];
+      let compared = 0;
+
+      while (compared < group.keys.length) {
+        if (remainingMs(context) < TIME_BUFFER_MS) {
+          throw Object.assign(
+            new Error(
+              `Ran out of time comparing (${comparedTotal} of ${totalKeys} keys). This day is larger than the job budget allows.`,
+            ),
+            { code: "COMPARE_TIMEOUT" },
+          );
+        }
+
+        const end = Math.min(compared + COMPARE_CHUNK, group.keys.length);
+        const slice = CM.compareKeyRange(group.faMap, group.custodyMap, group.keys, compared, end, {});
+        groupExceptions.push(...slice.exceptions);
+        matchedKeyCount += slice.matchedCount;
+        comparedTotal += end - compared;
+        compared = end;
+
+        await CM.checkpointCompare(app, runId, comparedTotal, totalKeys);
       }
 
-      const end = Math.min(compared + COMPARE_CHUNK, keys.length);
-      const slice = CM.compareKeyRange(faMap, custodyMap, keys, compared, end, {});
-      exceptions.push(...slice.exceptions);
-      matchedKeyCount += slice.matchedCount;
-      compared = end;
+      // Per group, so a mutual fund orphan is never paired with an equity one.
+      if (CM.DEFAULT_OPTIONS.repairOrphans) {
+        groupExceptions = CM.repairOrphans(groupExceptions);
+      }
+      exceptions.push(...groupExceptions);
 
-      await CM.checkpointCompare(app, runId, compared, keys.length);
-    }
-
-    if (CM.DEFAULT_OPTIONS.repairOrphans) {
-      exceptions = CM.repairOrphans(exceptions);
+      log(
+        `S4 ${group.name}: ${group.faRows.length} FA rows, ${group.custodyRows.length} custodian rows, ${group.keys.length} keys`,
+      );
     }
     if (CM.DEFAULT_OPTIONS.unmappedAsException && unmapped.length > 0) {
       exceptions.push(...CM.unmappedToExceptions(unmapped));
@@ -510,7 +550,7 @@ module.exports = async (jobRequest, context) => {
     );
 
     log(
-      `S4: ${keys.length} keys, ${matchedKeyCount} matched, ${exceptions.length} exception(s)`,
+      `S4: ${totalKeys} keys, ${matchedKeyCount} matched, ${exceptions.length} exception(s)`,
     );
 
     /* ─── S5 — report ─────────────────────────────────────────────── */
@@ -535,8 +575,8 @@ module.exports = async (jobRequest, context) => {
     /* ─── S6 — finalise ───────────────────────────────────────────── */
     await CM.finishRun(app, runId, {
       exceptionCount: exceptions.length,
-      totalKeyCount: keys.length,
-      comparedKeyCount: keys.length,
+      totalKeyCount: totalKeys,
+      comparedKeyCount: totalKeys,
       faRowCount: faRows.length,
       custodyRowCount: custodyRows.length,
       resolvedCount,

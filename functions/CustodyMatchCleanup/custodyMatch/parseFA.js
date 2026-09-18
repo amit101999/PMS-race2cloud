@@ -19,6 +19,7 @@ import csvParser from "csv-parser";
 
 import {
   DEFAULT_OPTIONS,
+  FA_DEDUCTION_HEADERS,
   FA_HEADERS,
   FILE_ERROR,
   ROW_ERROR,
@@ -87,7 +88,7 @@ const COL = {
  *
  * @returns {object|null} file error, or null when the header is good.
  */
-export const validateFaHeader = (buffer, { profile = null } = {}) => {
+export const validateFaHeader = (buffer, { profile = null, type = PROFILE_TYPE.FA } = {}) => {
   if (!buffer || buffer.length === 0) {
     return {
       code: FILE_ERROR.EMPTY_FILE,
@@ -105,11 +106,15 @@ export const validateFaHeader = (buffer, { profile = null } = {}) => {
    * exact count/order/spelling check cannot apply to it. The real requirement
    * is narrower and is what resolveFieldMap enforces: every field the match key
    * is built from must be locatable in this file.
+   *
+   * The mutual fund transaction file is never held to the template contract
+   * either: it renames one heading (SYMBOLCODE/ISIN CODE), so an exact spelling
+   * check would reject it before its own mapping could be read.
    */
-  if (!isDefaultProfile(PROFILE_TYPE.FA, profile)) {
+  if (type !== PROFILE_TYPE.FA || !isDefaultProfile(type, profile)) {
     // Strict, exactly as the template path is strict: every heading the mapping
     // names has to be in the file.
-    const resolved = resolveFieldMap(PROFILE_TYPE.FA, profile, cells, { strict: true });
+    const resolved = resolveFieldMap(type, profile, cells, { strict: true });
     if (resolved.ok) return null;
     const missing = resolved.errors.map((e) => e.expected || e.label).filter(Boolean);
     const mappedTotal = Object.keys(resolved.index).length + missing.length;
@@ -178,12 +183,16 @@ export const validateFaHeader = (buffer, { profile = null } = {}) => {
  * @param {string} [opts.businessDate] yyyy-mm-dd. Rows dated differently are warned about, not rejected.
  * @param {object} [opts.options]      overrides for DEFAULT_OPTIONS.
  * @param {object} [opts.profile]      user-defined field mapping; null uses the built-in template.
+ * @param {string} [opts.type]         which transaction profile reads the file: FA or FA_MUTUAL_FUND.
  * @returns {Promise<{ok:boolean, fileError:object|null, rows:object[], rowErrors:object[], warnings:object[], stats:object}>}
  */
-export const parseFaFile = (buffer, { businessDate = null, options = {}, profile = null } = {}) => {
+export const parseFaFile = (
+  buffer,
+  { businessDate = null, options = {}, profile = null, type = PROFILE_TYPE.FA } = {},
+) => {
   const cfg = { ...DEFAULT_OPTIONS, ...options };
 
-  const fileError = validateFaHeader(buffer, { profile });
+  const fileError = validateFaHeader(buffer, { profile, type });
   if (fileError) {
     return Promise.resolve({
       ok: false,
@@ -198,10 +207,10 @@ export const parseFaFile = (buffer, { businessDate = null, options = {}, profile
   const headerLine = firstLineOf(buffer);
   const separator = detectSeparator(headerLine);
   const rawHeaders = splitHeaderCells(headerLine, separator);
-  const usingDefault = isDefaultProfile(PROFILE_TYPE.FA, profile);
+  const usingDefault = type === PROFILE_TYPE.FA && isDefaultProfile(type, profile);
 
   // field -> 0-based position in THIS file. Identical to COL when unedited.
-  const resolved = resolveFieldMap(PROFILE_TYPE.FA, profile, rawHeaders);
+  const resolved = resolveFieldMap(type, profile, rawHeaders);
   const at = resolved.index;
   // Errors must name the column as it appears in the user's own file.
   const colName = columnNamesFor(resolved, rawHeaders);
@@ -418,6 +427,9 @@ export const parseFaFile = (buffer, { businessDate = null, options = {}, profile
           brokerage: displayNum(get("brokerage")),
           stt: displayNum(get("stt")),
           netAmount: displayNum(get("netAmount")),
+          // Only the mutual fund file carries these; they read blank elsewhere.
+          tds: displayNum(get("tds")),
+          stampDuty: displayNum(get("stampDuty")),
           settlementDate: parseIsoDate(get("settlementDate")),
           ref: get("ref"),
           exchange: get("exchange"),
@@ -483,10 +495,15 @@ const csvField = (v) => {
  * this file has to stay row-for-row so it remains a faithful transaction file.
  *
  * @param {object[]} rows rows from parseFaFile, after resolveActualCodes
+ * @param {object} [opts]
+ * @param {boolean} [opts.withDeductions] append the TDS and Stamp Duty columns.
+ *        Only the import file asks for them, and only when the mutual fund file
+ *        is part of it; the file the matcher re-reads stays at 26 columns.
  */
-export const faRowsToConsolidatedCsv = (rows) => {
+export const faRowsToConsolidatedCsv = (rows, { withDeductions = false } = {}) => {
   const accountCol = COL.accountCode;
-  const lines = [FA_HEADERS.map(csvField).join(",")];
+  const headers = withDeductions ? [...FA_HEADERS, ...FA_DEDUCTION_HEADERS] : FA_HEADERS;
+  const lines = [headers.map(csvField).join(",")];
 
   for (const row of rows) {
     /*
@@ -516,6 +533,10 @@ export const faRowsToConsolidatedCsv = (rows) => {
     }
 
     cells[accountCol] = row.actualCode || row.accountCode || "";
+    if (withDeductions) {
+      // Regular-file rows have no such columns and go in blank.
+      cells.push(row.mapped?.tds ?? "", row.mapped?.stampDuty ?? "");
+    }
     lines.push(cells.map(csvField).join(","));
   }
 

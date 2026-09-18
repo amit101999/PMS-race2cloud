@@ -15,24 +15,12 @@ const UploadErrorDetails = ({ message, detail }) => {
     if (!message && !detail) return null;
 
     return (
-        <div
-            role="alert"
-            style={{
-                marginTop: "20px",
-                color: "#b91c1c",
-                fontSize: "14px",
-                padding: "12px",
-                backgroundColor: "#fee2e2",
-                borderRadius: "8px",
-            }}
-        >
-            {message ? (
-                <p style={{ margin: "0 0 8px", whiteSpace: "pre-line" }}>{message}</p>
-            ) : null}
+        <div role="alert" className="cm-error-block">
+            {message ? <p className="cm-error-message">{message}</p> : null}
 
             {/* Gate 1: every reason matching cannot start yet. */}
             {detail?.blockers?.length ? (
-                <ul style={{ margin: "8px 0 0", paddingLeft: "1.25rem", lineHeight: 1.6 }}>
+                <ul className="cm-error-list">
                     {detail.blockers.map((b, i) => (
                         <li key={`${b.code}-${b.scheme || i}`}>{b.message}</li>
                     ))}
@@ -42,55 +30,42 @@ const UploadErrorDetails = ({ message, detail }) => {
             {detail?.code === "WRONG_COLUMN_ORDER" &&
             detail?.expectedCount != null &&
             detail?.actualCount != null ? (
-                <p style={{ margin: "8px 0 0", fontSize: "13px" }}>
+                <p className="cm-error-note">
                     <strong>Template columns:</strong> {detail.expectedCount} &nbsp;|&nbsp;{" "}
                     <strong>Your row 1 columns:</strong> {detail.actualCount}
                 </p>
             ) : null}
 
             {detail?.rowErrors?.length ? (
-                <div style={{ marginTop: "12px" }}>
-                    <strong style={{ display: "block", marginBottom: "8px" }}>
+                <div className="cm-error-rows">
+                    <strong className="cm-error-rows-title">
                         Rows that could not be read
                         {detail.rowErrorCount != null ? ` (${detail.rowErrorCount} total)` : ""}:
                     </strong>
-                    <div style={{ maxHeight: "260px", overflowY: "auto", borderRadius: "6px" }}>
-                        <table
-                            style={{
-                                width: "100%",
-                                borderCollapse: "collapse",
-                                fontSize: "13px",
-                                background: "#fef2f2",
-                            }}
-                        >
+                    <div className="cm-error-rows-scroll">
+                        <table className="cm-error-table">
                             <thead>
-                                <tr style={{ textAlign: "left", background: "#fecaca" }}>
-                                    <th style={{ padding: "6px 8px" }}>Row</th>
-                                    <th style={{ padding: "6px 8px" }}>Column</th>
-                                    <th style={{ padding: "6px 8px" }}>Value</th>
-                                    <th style={{ padding: "6px 8px" }}>Problem</th>
+                                <tr>
+                                    <th>Row</th>
+                                    <th>Column</th>
+                                    <th>Value</th>
+                                    <th>Problem</th>
                                 </tr>
                             </thead>
                             <tbody>
                                 {detail.rowErrors.map((e, i) => (
                                     <tr key={`${e.row}-${e.code}-${i}`}>
-                                        <td style={{ padding: "6px 8px", fontWeight: 600, whiteSpace: "nowrap" }}>
-                                            {e.row}
-                                        </td>
-                                        <td style={{ padding: "6px 8px", whiteSpace: "nowrap" }}>
-                                            {e.column || "—"}
-                                        </td>
-                                        <td style={{ padding: "6px 8px", wordBreak: "break-all" }}>
-                                            {e.value === "" || e.value == null ? "(empty)" : String(e.value)}
-                                        </td>
-                                        <td style={{ padding: "6px 8px" }}>{e.message}</td>
+                                        <td className="mono">{e.row}</td>
+                                        <td className="mono">{e.column || "—"}</td>
+                                        <td>{e.value === "" || e.value == null ? "(empty)" : String(e.value)}</td>
+                                        <td>{e.message}</td>
                                     </tr>
                                 ))}
                             </tbody>
                         </table>
                     </div>
                     {detail.moreRowErrors > 0 ? (
-                        <p style={{ margin: "8px 0 0", fontSize: "13px", opacity: 0.9 }}>
+                        <p className="cm-error-note">
                             …and {detail.moreRowErrors} more. Fix these first — the rest may share
                             the same cause.
                         </p>
@@ -99,17 +74,17 @@ const UploadErrorDetails = ({ message, detail }) => {
             ) : null}
 
             {detail?.fields?.length ? (
-                <div style={{ margin: "10px 0 0", fontSize: "13px" }}>
-                    <p style={{ margin: "0 0 6px" }}>
+                <div className="cm-error-fields">
+                    <p className="cm-error-note">
                         <strong>Date columns to fix:</strong>{" "}
                         {detail.fields.map((f) => (
-                            <code key={f} style={{ background: "#fecaca", padding: "2px 6px", borderRadius: "4px", marginRight: "6px" }}>
+                            <code key={f} className="cm-error-code">
                                 {f}
                             </code>
                         ))}
                     </p>
                     {detail.code === "INVALID_DATE_FORMAT" ? (
-                        <p style={{ margin: 0, opacity: 0.95 }}>
+                        <p className="cm-error-note">
                             {detail.sampleRowsValidated != null ? (
                                 <span>
                                     Checked first <strong>{detail.sampleRowsValidated}</strong> data
@@ -129,23 +104,7 @@ const UploadErrorDetails = ({ message, detail }) => {
                 </div>
             ) : null}
 
-            {detail?.hint ? (
-                <p
-                    style={{
-                        marginTop: "12px",
-                        marginBottom: 0,
-                        padding: "12px",
-                        background: "#fff7ed",
-                        border: "1px solid #fed7aa",
-                        borderRadius: "8px",
-                        fontSize: "13px",
-                        color: "#9a3412",
-                    }}
-                >
-                    {detail.hint}
-                </p>
-            ) : null}
-
+            {detail?.hint ? <p className="cm-error-hint">{detail.hint}</p> : null}
         </div>
     );
 };

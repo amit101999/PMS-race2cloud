@@ -1,5 +1,7 @@
 import React, { useCallback, useEffect, useState } from "react";
 
+import StatusBadge, { STATUS } from "./StatusBadge";
+import DownloadButton from "./DownloadButton";
 import * as api from "./api";
 
 const when = (ms) =>
@@ -61,7 +63,7 @@ const DifferenceReports = ({ refreshToken }) => {
 
     return (
         <div className="temp-transaction-card upload-history-card">
-            <h3>Previous Difference Reports</h3>
+            <h3>Previous difference reports</h3>
 
             {error ? (
                 <p className="upload-history-error" role="alert">
@@ -70,7 +72,7 @@ const DifferenceReports = ({ refreshToken }) => {
             ) : null}
 
             <div className="upload-history-table-wrapper">
-                <table className="upload-history-table">
+                <table className="upload-history-table upload-history-table--compact">
                     <thead>
                         <tr>
                             <th>Matched on</th>
@@ -104,7 +106,9 @@ const DifferenceReports = ({ refreshToken }) => {
                                             one that can be imported. The report still
                                             describes what it compared. */}
                                         {r.superseded ? (
-                                            <span className="cm-report-old">superseded</span>
+                                            <span className="cm-report-old">
+                                                <StatusBadge tone={STATUS.NEUTRAL}>Superseded</StatusBadge>
+                                            </span>
                                         ) : null}
                                     </td>
                                     <td title={(r.dates || []).join(", ") || "All dates"}>
@@ -116,14 +120,10 @@ const DifferenceReports = ({ refreshToken }) => {
                                     <td className="num">{r.comparedKeyCount.toLocaleString()}</td>
                                     <td className="action">
                                         {r.differenceKey ? (
-                                            <button
-                                                type="button"
-                                                className="upload-history-download-btn"
+                                            <DownloadButton
                                                 onClick={() => download(r)}
-                                                disabled={busyKey === r.runId}
-                                            >
-                                                {busyKey === r.runId ? "Preparing…" : "Download"}
-                                            </button>
+                                                busy={busyKey === r.runId}
+                                            />
                                         ) : (
                                             "—"
                                         )}
