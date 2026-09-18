@@ -49,6 +49,8 @@ const FILE_BLURB = {
     CUSTODY_RESIDENTIAL: "The deal allocation file your custodian sends for Resident accounts.",
     CUSTODY_NDPMS: "The deal allocation file your custodian sends for NRE/NRO/NDPMS accounts.",
     CUSTODY_MUTUAL_FUND: "The Mutual Funds transaction file your custodian sends (Subscription / Redemption). Matched only against mutual fund rows in the transaction file.",
+    CUSTODY_NDPMS: "The deal allocation file your custodian sends for NRE / NRO (NDPMS) accounts.",
+    CUSTODY_HOLDINGS: "The consolidated holdings file your custodian sends, used by Holding Comparison.",
 };
 
 const NONE = "NONE";
@@ -198,9 +200,42 @@ const reconcile = (saved, entries, columns) => {
     return { draft, cleared };
 };
 
+/**
+ * Fill every unanswered field whose standard column name is a heading in the
+ * file, so a file in the standard layout needs only a check and a Save.
+ *
+ * Only used where the caller opts in (Holding Comparison): there each field's
+ * label IS the standard heading. A filled answer is still an ordinary draft
+ * answer, shown in its dropdown and checked like any other, and nothing is
+ * stored until the user saves.
+ *
+ * @returns {{draft:object, filled:string[]}} filled = the fields that were filled
+ */
+const autofillByName = (draft, entries, columns) => {
+    const next = { ...draft };
+    const filled = [];
+    const taken = new Set(
+        entries.map((e) => valueForSource(next[e.field], columns)).filter((v) => v !== ""),
+    );
+
+    for (const entry of entries) {
+        if (next[entry.field]) continue;
+        const column = columns.find(
+            (c) => normHeader(c.name) === normHeader(entry.label) && !taken.has(String(c.index)),
+        );
+        if (!column) continue;
+        next[entry.field] = sourceForColumn(column, NONE);
+        taken.add(String(column.index));
+        filled.push(entry.field);
+    }
+
+    return { draft: next, filled };
+};
+
 /* ------------------------------------------------------------------ one row */
 
 function MappingRow({ entry, source, columns, takenBy, onChange, registerRef, fieldError }) {
+function MappingRow({ entry, source, columns, takenBy, onChange, showHints }) {
     const transforms = entry.allowTransforms || [NONE];
     const transform = transformOf(source);
     const value = valueForSource(source, columns);
@@ -255,6 +290,21 @@ function MappingRow({ entry, source, columns, takenBy, onChange, registerRef, fi
         <tr className="fm-row">
             <td className="fm-cell-field">
                 <div className="fm-fieldname">{entry.label}</div>
+                <div className="fm-fieldname">
+                    {entry.label}
+                    {showHints ? (
+                        entry.required ? (
+                            <span className="fm-req" title="This field must name a column in your file">
+                                required
+                            </span>
+                        ) : (
+                            <span className="fm-builtin"> optional</span>
+                        )
+                    ) : null}
+                </div>
+                {showHints ? (
+                    <div className="fm-builtin">Expects {KIND_BLURB[entry.kind] || entry.kind}</div>
+                ) : null}
             </td>
 
             <td className="fm-cell-source">
@@ -344,6 +394,9 @@ function MappingRow({ entry, source, columns, takenBy, onChange, registerRef, fi
  * @param {Function} [props.onUpload]      ({ profileType, replace }) => Promise, throws ApiError
  * @param {Function} props.onClose
  * @param {Function} [props.onSaved]
+ * @param {string[]} [props.types]         file types offered; Holding Comparison passes only its own
+ * @param {boolean}  [props.autofill]      pre-fill unanswered fields from matching column names
+ * @param {boolean}  [props.showHints]     show the required/optional and "Expects …" text under each field
  */
 export default function FieldMappingPanel({
     open,
@@ -352,6 +405,9 @@ export default function FieldMappingPanel({
     onUpload = null,
     onClose,
     onSaved,
+    types = FILE_CHOICES,
+    autofill = false,
+    showHints = true,
 }) {
     const [maps, setMaps] = useState([]);
     const [chosen, setChosen] = useState(null);
@@ -399,39 +455,50 @@ export default function FieldMappingPanel({
      * Blank only when nothing is stored for this type. `isDefault` means the
      * server had nothing saved and handed back the built-in layout — a guess
      * about the file, not an answer about it, and never a starting point, so
-     * the first mapping is always made by hand.
+     * the first mapping is always made by hand. The exception is a caller that
+     * passes `autofill`: unanswered fields are then pre-filled from matching
+     * column names, still for the user to check and save.
      *
      * Once saved it is reused on every later upload, including after a refresh:
      * the layout of these files does not change between uploads, and re-typing
      * the same 14 answers each time would be work with no decision in it. What
      * still gets re-checked is the mapping against THIS file — see reconcile.
      */
-    const seedDraft = useCallback((map, cols) => {
-        if (!map) {
-            setDraft({});
-            setCleared([]);
-            return;
-        }
+    const seedDraft = useCallback(
+        (map, cols) => {
+            let next = {};
+            let dropped = [];
 
-        // View-only (no file, so no columns): show what is stored, for reference.
-        // Nothing can be saved or uploaded from here, so re-confirming would be
-        // asking about a decision this screen is not offering to change.
-        if (cols.length === 0) {
-            setDraft(map.isDefault ? {} : { ...map.profile });
-            setCleared([]);
-            return;
-        }
+            if (map && cols.length === 0) {
+                // View-only (no file, so no columns): show what is stored, for reference.
+                // Nothing can be saved or uploaded from here, so re-confirming would be
+                // asking about a decision this screen is not offering to change.
+                next = map.isDefault ? {} : { ...map.profile };
+            } else if (map && !map.isDefault) {
+                ({ draft: next, cleared: dropped } = reconcile(map.profile, map.fields, cols));
+            }
 
-        if (map.isDefault) {
-            setDraft({});
-            setCleared([]);
-            return;
-        }
+            if (autofill && map && cols.length > 0) {
+                const result = autofillByName(next, map.fields, cols);
+                next = result.draft;
+                if (result.filled.length > 0) {
+                    // A cleared saved answer that its standard name has filled again is no longer a problem to report.
+                    const filledLabels = new Set(
+                        map.fields.filter((e) => result.filled.includes(e.field)).map((e) => e.label),
+                    );
+                    dropped = dropped.filter((c) => !filledLabels.has(c.label));
+                    setNotice(
+                        `${result.filled.length} field(s) were filled in from matching column names. ` +
+                            "Check them, change any that are wrong, then save the mapping.",
+                    );
+                }
+            }
 
-        const { draft: next, cleared: dropped } = reconcile(map.profile, map.fields, cols);
-        setDraft(next);
-        setCleared(dropped);
-    }, []);
+            setDraft(next);
+            setCleared(dropped);
+        },
+        [autofill],
+    );
 
     const load = useCallback(async () => {
         setLoading(true);
@@ -520,8 +587,10 @@ export default function FieldMappingPanel({
         [entries, draft, columns],
     );
 
+    // Only required fields block saving. Every Transaction Upload field is
+    // required, so this changes nothing there; holdings files have optional ones.
     const unansweredCount = entries.filter(
-        (entry) => valueForSource(draft[entry.field], columns) === "",
+        (entry) => entry.required && valueForSource(draft[entry.field], columns) === "",
     ).length;
 
     const complete = entries.length > 0 && unansweredCount === 0 && badFields.length === 0;
@@ -555,7 +624,10 @@ export default function FieldMappingPanel({
      * place once there is nothing left to save, which for a second upload of an
      * unchanged file is immediately.
      */
-    const showUpload = uploadMode && complete && !dirty;
+    // Nothing stored yet (isDefault) means there is always something to save,
+    // even when an autofilled draft happens to equal the built-in layout.
+    const needsSave = dirty || Boolean(active?.isDefault);
+    const showUpload = uploadMode && complete && !needsSave;
 
     const setField = (field, source) => {
         setNotice("");
@@ -821,7 +893,7 @@ export default function FieldMappingPanel({
                         <>
                             <h4 className="fm-steptitle">Which file are you mapping?</h4>
                             <div className="fm-choices">
-                                {FILE_CHOICES.map((type) => {
+                                {types.map((type) => {
                                     const map = maps.find((m) => m.type === type);
                                     return (
                                         <button
@@ -875,7 +947,8 @@ export default function FieldMappingPanel({
 
                     {chosen && active ? (
                         <>
-                            {preview ? (
+                            {/* Layout detection and switching only mean something when there is more than one file type to choose from. */}
+                            {preview && types.length > 1 ? (
                                 <div
                                     className={
                                         typeMismatch ? "fm-detect fm-detect--warn" : "fm-detect"
@@ -894,7 +967,7 @@ export default function FieldMappingPanel({
                                         value={chosen}
                                         onChange={(e) => choose(e.target.value)}
                                     >
-                                        {FILE_CHOICES.map((t) => (
+                                        {types.map((t) => (
                                             <option key={t} value={t}>
                                                 {PROFILE_LABEL[t]}
                                             </option>
@@ -927,7 +1000,7 @@ export default function FieldMappingPanel({
                                 </p>
                             ) : null}
 
-                            <table className="fm-table">
+                            <table className={showHints ? "fm-table" : "fm-table fm-table--plain"}>
                                 <thead>
                                     <tr>
                                         <th>What we store</th>
@@ -945,15 +1018,16 @@ export default function FieldMappingPanel({
                                             onChange={setField}
                                             registerRef={registerFieldRef}
                                             fieldError={fieldErrors[entry.field]}
+                                            showHints={showHints}
                                         />
                                     ))}
                                 </tbody>
                             </table>
 
                             <p className="fm-footnote">
-                                Saving changes how every future file of this type is read, so any
-                                date already matched has to be matched again before it can be
-                                imported.
+                                {chosen === "CUSTODY_HOLDINGS"
+                                    ? "Saving changes how every future custodian holdings file is read, so earlier holding comparisons have to be run again."
+                                    : "Saving changes how every future file of this type is read, so any date already matched has to be matched again before it can be imported."}
                             </p>
                         </>
                     ) : null}
@@ -983,6 +1057,21 @@ export default function FieldMappingPanel({
                         ) : null}
 
                         <div className="fm-actions-right">
+                            {!complete && columns.length > 0 ? (
+                                <span className="fm-blocker">
+                                    {badFields.length > 0
+                                        ? `${badFields.length} field(s) point at the wrong column.`
+                                        : `${unansweredCount} field(s) still to map.`}
+                                </span>
+                            ) : null}
+
+                            {/* Tells the user what the one enabled button will do next. */}
+                            {complete && needsSave && columns.length > 0 ? (
+                                <span className="fm-blocker">
+                                    All fields mapped &mdash; save to continue.
+                                </span>
+                            ) : null}
+
                             {showUpload ? (
                                 <span className="fm-ready">Mapping saved &mdash; ready to upload.</span>
                             ) : null}
@@ -1006,6 +1095,12 @@ export default function FieldMappingPanel({
                                     className="fm-primary"
                                     onClick={onSave}
                                     disabled={!dirty || saving || loading}
+                                    disabled={!complete || !needsSave || saving || loading}
+                                    title={
+                                        complete
+                                            ? "Save this mapping"
+                                            : "Map every field before saving"
+                                    }
                                 >
                                     {saving ? "Saving…" : "Save mapping"}
                                 </button>

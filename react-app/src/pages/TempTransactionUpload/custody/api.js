@@ -165,6 +165,7 @@ export const PROFILE_TYPE = {
   CUSTODY_RESIDENTIAL: "CUSTODY_RESIDENTIAL",
   CUSTODY_NDPMS: "CUSTODY_NDPMS",
   CUSTODY_MUTUAL_FUND: "CUSTODY_MUTUAL_FUND",
+  CUSTODY_HOLDINGS: "CUSTODY_HOLDINGS",
 };
 
 export const PROFILE_LABEL = {
@@ -173,6 +174,8 @@ export const PROFILE_LABEL = {
   CUSTODY_RESIDENTIAL: "Custodian — Residential",
   CUSTODY_NDPMS: "Custodian — NRE/NRO/NDPMS",
   CUSTODY_MUTUAL_FUND: "Custodian — Mutual Funds",
+  CUSTODY_NDPMS: "Custodian — NRE/NRO (NDPMS)",
+  CUSTODY_HOLDINGS: "Custodian — Consolidated Holdings",
 };
 
 export const PROFILE_HELP = {
@@ -194,6 +197,9 @@ export const FA_FILE_TYPE = {
 export const FA_FILE_TYPE_LABEL = {
   REGULAR: "Equity",
   MUTUAL_FUND: "Mutual Funds",
+  CUSTODY_NDPMS: "The deal allocation file for NRE / NRO (NDPMS) accounts.",
+  CUSTODY_HOLDINGS:
+    "The custodian's consolidated holdings file. Its column names differ from the standard 29-column template, so tell us which column holds each field.",
 };
 
 export const SOURCE_BY = { NAME: "name", INDEX: "index", ABSENT: "absent" };

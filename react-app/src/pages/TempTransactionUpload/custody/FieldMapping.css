@@ -537,6 +537,31 @@
     color: #111827;
 }
 
+/* Without the hints the names sat alone in empty space: show each as a tinted
+   label the same height as its dropdown, so the two line up. */
+.fm-table--plain .fm-fieldname {
+    display: flex;
+    align-items: center;
+    box-sizing: border-box;
+    min-height: 34px;
+    padding: 0 12px;
+    border: 1px solid #dbeafe;
+    border-left: 3px solid #3b82f6;
+    border-radius: 6px;
+    background: #eff6ff;
+    color: #1e3a8a;
+    font-weight: 500;
+}
+
+.fm-table--plain .fm-select {
+    box-sizing: border-box;
+    min-height: 34px;
+}
+
+.fm-row--bad td {
+    background: #fef2f2;
+}
+
 .fm-rowerror {
     margin: 6px 0 0;
     font-size: 12px;

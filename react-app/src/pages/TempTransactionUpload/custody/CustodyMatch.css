@@ -51,6 +51,123 @@
 }
 
 .cm-card-head-title {
+.cm-date {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: 12px;
+    font-weight: 600;
+    color: #6b7280;
+    white-space: nowrap;
+}
+
+.cm-date input {
+    padding: 7px 10px;
+    border: 1px solid #d1d5db;
+    border-radius: 8px;
+    font-size: 14px;
+    color: #111827;
+}
+
+/* ── custodian files ──────────────────────────────────────────────────── */
+
+/* One row per uploaded file. The list scrolls in place rather than growing the
+   card without limit, so "Add custodian file" and the gate below it stay
+   reachable however many files a day needs. */
+/* The shared table, wrapped so a long list scrolls in place instead of pushing
+   "Add custodian file" and the gate below it off the card. */
+.cm-filetable {
+    display: block;
+    max-height: 340px;
+    overflow-y: auto;
+}
+
+.cm-filetable th {
+    /* Sticky so the headings stay put while the list scrolls. Everything else
+       comes from .upload-history-table. */
+    position: sticky;
+    top: 0;
+    z-index: 1;
+}
+
+/* A single row in the narrower FA box: fit the box instead of scrolling
+   sideways. The file name takes what is left and ends in "…"; the time wraps. */
+.cm-filetable--fit {
+    display: table;
+    table-layout: fixed;
+}
+
+.cm-filetable--fit .cm-col-date {
+    width: 28%;
+}
+
+.cm-filetable--fit .cm-col-when {
+    width: 32%;
+}
+
+.cm-filetable--fit .cm-cell-file {
+    max-width: none;
+}
+
+.cm-filetable--fit .cm-cell-dates {
+    white-space: normal;
+}
+
+.cm-cell-scheme {
+    font-weight: 600;
+    color: #111827;
+    white-space: nowrap;
+}
+
+.cm-cell-dates {
+    white-space: nowrap;
+    color: #374151;
+}
+
+/* The file name is the only column that can be long, so it is the one that
+   gives way — everything else keeps its natural width. */
+.cm-cell-file {
+    max-width: 220px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: #166534;
+}
+
+.cm-remove {
+    width: 28px;
+    height: 28px;
+    border: 1px solid #e5e7eb;
+    background: #fff;
+    border-radius: 8px;
+    font-size: 18px;
+    line-height: 1;
+    color: #6b7280;
+    cursor: pointer;
+}
+
+.cm-remove:hover:not(:disabled) {
+    background: #fee2e2;
+    color: #991b1b;
+    border-color: #fecaca;
+}
+
+/* Separated by a rule rather than a second outline inside the card. */
+.cm-addfile {
+    margin-top: 18px;
+    padding-top: 18px;
+    border-top: 1px solid #f1f3f4;
+}
+
+.cm-addfile-title {
+    display: block;
+    font-size: 12px;
+    font-weight: 600;
+    color: #374151;
+    margin-bottom: 8px;
+}
+
+.cm-addfile-controls {
     display: flex;
     align-items: center;
     gap: 10px;
@@ -380,6 +497,29 @@
     flex-direction: column;
     flex: 1;
     min-height: 300px;
+}
+
+/* Holding Comparison: both headings hold only a title, so the two boxes start
+   level, and the shorter box stretches so their bottoms line up too. */
+.cm-split--even {
+    align-items: stretch;
+}
+
+.cm-split--even .cm-col {
+    display: flex;
+    flex-direction: column;
+}
+
+.cm-split--even .cm-col > .temp-transaction-card {
+    flex: 1;
+}
+
+/* The page's business date, top right above both boxes. It sits in its own row
+   so the two headings stay the same height and the boxes start level. */
+.cm-date-bar {
+    display: flex;
+    justify-content: flex-end;
+    margin-bottom: 8px;
 }
 
 @media (max-width: 1024px) {

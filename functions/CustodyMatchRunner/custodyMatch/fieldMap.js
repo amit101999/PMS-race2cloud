@@ -44,6 +44,12 @@ export const PROFILE_TYPE = {
   CUSTODY_RESIDENTIAL: "CUSTODY_RESIDENTIAL",
   CUSTODY_NDPMS: "CUSTODY_NDPMS",
   CUSTODY_MUTUAL_FUND: "CUSTODY_MUTUAL_FUND",
+  /*
+   * The custodian consolidated holdings file used by Holding Comparison. It lives
+   * here only so that module can reuse this mapping screen; custody matching
+   * never reads it. See util/holdingComparison/parse.js.
+   */
+  CUSTODY_HOLDINGS: "CUSTODY_HOLDINGS",
 };
 
 export const PROFILE_TYPES = Object.values(PROFILE_TYPE);
@@ -97,6 +103,52 @@ export const MAP_ERROR = {
   COLUMN_NOT_IN_FILE: "COLUMN_NOT_IN_FILE",
   INDEX_OUT_OF_RANGE: "INDEX_OUT_OF_RANGE",
 };
+
+/**
+ * The Custodian Consolidated holdings template: [field, standard header, kind].
+ *
+ * All 29 columns are shown in the popup, but only UCC, ISIN, NetBalance and
+ * LTPDate must be mapped — those are what the comparison uses. UCC, ISIN and
+ * NetBalance carry a strict kind; the rest accept any value. Keep in step with CUSTODY_COLUMNS in
+ * util/holdingComparison/constants.js (this folder is vendored into
+ * CustodyMatchRunner, so it cannot import that file).
+ */
+const CUSTODY_HOLDINGS_COLUMNS = [
+  ["srNo", "SrNo", "text"],
+  ["accountCode", "UCC", "code"],
+  ["clientName", "ClientName", "text"],
+  ["clientId", "ClientId", "text"],
+  ["parentName", "Parent Name", "text"],
+  ["fundStrategyCode", "FundStrategyCode", "text"],
+  ["securityName", "SecurityName", "text"],
+  ["isin", "ISIN", "isin"],
+  ["isinSubType", "ISINSubType", "text"],
+  ["investorType", "InvestorType", "text"],
+  ["purchaseOutstanding", "PurchaseOutstanding", "text"],
+  ["saleOutstanding", "SaleOutstanding", "text"],
+  ["purAct", "PurAct", "text"],
+  ["saleAct", "SaleAct", "text"],
+  ["purchaseUnderProcess", "PurchaseUnderProcess", "text"],
+  ["saleUnderProcess", "SaleUnderProcess", "text"],
+  ["pendingDemat", "PendingDemat", "text"],
+  ["pendingReg", "PendingReg", "text"],
+  ["physicalFree", "PhysicalFree", "text"],
+  ["physicalLocked", "PhysicalLocked", "text"],
+  ["dematFree", "DematFree", "text"],
+  ["dematLockedQty", "DematLockedQty", "text"],
+  ["dematPledge", "DematPledge", "text"],
+  ["dematFreezQty", "DematFreezQty", "text"],
+  ["saleStockQty", "SaleStockQty", "text"],
+  ["quantity", "NetBalance", "number"],
+  ["ltpExchange", "LTPExchange", "text"],
+  ["asOfDate", "LTPDate", "text"],
+  ["ltpPrice", "LTPPrice", "text"],
+];
+
+const CUSTODY_HOLDINGS_KEY_FIELDS = ["accountCode", "isin", "quantity"];
+
+/** The columns the comparison needs; the other template columns may be left unmapped. */
+const CUSTODY_HOLDINGS_REQUIRED_FIELDS = [...CUSTODY_HOLDINGS_KEY_FIELDS, "asOfDate"];
 
 /**
  * The canonical fields, per profile type.
@@ -275,6 +327,13 @@ export const FIELD_CATALOG = {
     { field: "amcName", label: "Mutual Fund (AMC)", kind: "text", required: true },
     { field: "firstHolderName", label: "First Holder Name", kind: "text", required: true },
   ],
+  [PROFILE_TYPE.CUSTODY_HOLDINGS]: CUSTODY_HOLDINGS_COLUMNS.map(([field, header, kind]) => ({
+    field,
+    label: header,
+    kind,
+    required: CUSTODY_HOLDINGS_REQUIRED_FIELDS.includes(field),
+    matchKey: CUSTODY_HOLDINGS_KEY_FIELDS.includes(field),
+  })),
 };
 
 /** Custodian layout -> profile type, so callers holding a CUSTODY_FORMAT can find the profile. */
@@ -400,6 +459,9 @@ export const DEFAULT_PROFILES = {
     amcName: byName("MutualFund"),
     firstHolderName: byName("FirstHolderName"),
   },
+  [PROFILE_TYPE.CUSTODY_HOLDINGS]: Object.fromEntries(
+    CUSTODY_HOLDINGS_COLUMNS.map(([field, header]) => [field, byName(header)]),
+  ),
 };
 
 /** Case / space / punctuation-insensitive header form — same rule parseCustody.js uses. */
