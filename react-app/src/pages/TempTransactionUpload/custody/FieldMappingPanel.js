@@ -1,9 +1,7 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
-    KIND_BLURB,
     KIND_SHORT,
-    PROFILE_HELP,
     PROFILE_LABEL,
     SOURCE_BY,
     TRANSFORM_LABEL,
@@ -14,6 +12,7 @@ import {
     previewHeaders,
     saveFieldMap,
 } from "./api";
+import UploadErrorDetails from "./UploadErrorDetails";
 import "./FieldMapping.css";
 
 /**
@@ -35,15 +34,36 @@ import "./FieldMapping.css";
  * listed at the top rather than carried forward on trust.
  */
 
-const FILE_CHOICES = ["FA", "CUSTODY_RESIDENTIAL", "CUSTODY_NDPMS"];
+const FILE_CHOICES = [
+    "FA",
+    "FA_MUTUAL_FUND",
+    "CUSTODY_RESIDENTIAL",
+    "CUSTODY_NDPMS",
+    "CUSTODY_MUTUAL_FUND",
+];
 
 const FILE_BLURB = {
     FA: "The daily transaction file you import. Whatever layout you map here is rewritten into the standard 26-column format before import, so nothing downstream changes.",
+    FA_MUTUAL_FUND:
+        "The mutual fund fund-accounting file. It carries the same 26 fields as the regular transaction file under one different heading, so it is mapped on its own. Its rows are matched only against the Mutual Funds custodian files.",
     CUSTODY_RESIDENTIAL: "The deal allocation file your custodian sends for Resident accounts.",
-    CUSTODY_NDPMS: "The deal allocation file your custodian sends for NRE / NRO (NDPMS) accounts.",
+    CUSTODY_NDPMS: "The deal allocation file your custodian sends for NRE/NRO/NDPMS accounts.",
+    CUSTODY_MUTUAL_FUND: "The Mutual Funds transaction file your custodian sends (Subscription / Redemption). Matched only against mutual fund rows in the transaction file.",
 };
 
 const NONE = "NONE";
+
+/**
+ * The dropdown value for "not present in this file".
+ *
+ * Distinct from the blank option, which still means UNANSWERED. A layout can
+ * carry columns a given custodian simply does not send, and with every field
+ * required the only alternative would be a dead end: the screen demanding an
+ * answer no column in the file can give. Never offered for a match-key field —
+ * the comparison is built from those, and the server refuses to store one as
+ * absent.
+ */
+const ABSENT = "__ABSENT__";
 
 const transformOf = (source) => source?.transform || NONE;
 
@@ -82,7 +102,8 @@ const mismatchReason = (column, entry, transform) => {
  * exactly the failure this screen exists to prevent.
  */
 const valueForSource = (source, columns) => {
-    if (!source || source.by === SOURCE_BY.ABSENT) return "";
+    if (!source) return "";
+    if (source.by === SOURCE_BY.ABSENT) return ABSENT;
 
     if (source.by === SOURCE_BY.INDEX) {
         return columns.some((c) => c.index === source.index) ? String(source.index) : "";
@@ -142,11 +163,14 @@ const reconcile = (saved, entries, columns) => {
         const source = saved?.[entry.field];
         if (!source) continue;
 
+        /*
+         * "Not present in this file" is carried forward, not cleared. It is a
+         * deliberate answer from the person who mapped this layout, and asking
+         * for it again on every upload would be asking about a decision that
+         * has not changed.
+         */
         if (source.by === SOURCE_BY.ABSENT) {
-            cleared.push({
-                label: entry.label,
-                reason: "was saved as not present in the file",
-            });
+            draft[entry.field] = source;
             continue;
         }
 
@@ -176,12 +200,14 @@ const reconcile = (saved, entries, columns) => {
 
 /* ------------------------------------------------------------------ one row */
 
-function MappingRow({ entry, source, columns, takenBy, onChange }) {
+function MappingRow({ entry, source, columns, takenBy, onChange, registerRef, fieldError }) {
     const transforms = entry.allowTransforms || [NONE];
     const transform = transformOf(source);
     const value = valueForSource(source, columns);
 
-    const selectedColumn = value ? columns.find((c) => c.index === Number(value)) || null : null;
+    const absent = value === ABSENT;
+    const selectedColumn =
+        value && !absent ? columns.find((c) => c.index === Number(value)) || null : null;
 
     /*
      * A column another field has taken is not offered again — except to a field
@@ -205,6 +231,9 @@ function MappingRow({ entry, source, columns, takenBy, onChange }) {
 
     const handle = (next) => {
         if (next === "") return onChange(entry.field, null);
+        if (next === ABSENT) {
+            return onChange(entry.field, { by: SOURCE_BY.ABSENT, transform: NONE });
+        }
         const column = columns.find((c) => c.index === Number(next));
         if (!column) return;
 
@@ -223,35 +252,36 @@ function MappingRow({ entry, source, columns, takenBy, onChange }) {
     };
 
     return (
-        <tr className={badPick ? "fm-row fm-row--bad" : "fm-row"}>
+        <tr className="fm-row">
             <td className="fm-cell-field">
-                <div className="fm-fieldname">
-                    {entry.label}
-                    <span className="fm-req" title="Every field must name a column in your file">
-                        required
-                    </span>
-                </div>
-                <div className="fm-builtin">Expects {KIND_BLURB[entry.kind] || entry.kind}</div>
+                <div className="fm-fieldname">{entry.label}</div>
             </td>
 
             <td className="fm-cell-source">
                 <div className="fm-inputs">
                     <select
-                        className={badPick ? "fm-select fm-select--bad" : "fm-select"}
+                        ref={(el) => registerRef && registerRef(entry.field, el)}
+                        className={badPick || fieldError ? "fm-select fm-select--bad" : "fm-select"}
                         value={value}
                         onChange={(e) => handle(e.target.value)}
                         disabled={columns.length === 0}
                     >
-                        {/* Blank and deliberately unlabelled: the list holds the
-                            file's columns and nothing else. It exists so a field
-                            nobody has answered stays visibly unanswered, instead
-                            of silently taking whichever column comes first. */}
-                        <option value="" />
+                        {/* Deliberately unanswered by default: the list holds the
+                            file's columns and nothing else, so a field nobody has
+                            answered stays visibly unanswered rather than silently
+                            taking whichever column comes first. */}
+                        <option value="">Select column</option>
                         {available.map((c) => (
                             <option key={c.index} value={c.index}>
                                 {c.label}
                             </option>
                         ))}
+                        {/* Never for a match-key field: the comparison is built
+                            from those five, and the server refuses to store one
+                            as absent. */}
+                        {entry.matchKey ? null : (
+                            <option value={ABSENT}>— not present in this file —</option>
+                        )}
                     </select>
 
                     {transforms.length > 1 ? (
@@ -275,6 +305,16 @@ function MappingRow({ entry, source, columns, takenBy, onChange }) {
                 {badPick ? (
                     <p className="fm-rowerror" role="alert">
                         {mismatchReason(selectedColumn, entry, transform)}
+                    </p>
+                ) : fieldError ? (
+                    <p className="fm-rowerror" role="alert">
+                        {fieldError}
+                    </p>
+                ) : null}
+
+                {absent ? (
+                    <p className="fm-samples">
+                        This file does not carry this column — it will be left blank.
                     </p>
                 ) : null}
 
@@ -326,8 +366,20 @@ export default function FieldMappingPanel({
     const [error, setError] = useState("");
     const [notice, setNotice] = useState("");
     const [conflict, setConflict] = useState(null);
+    /** A rejected upload, kept whole so the row-by-row reasons can be shown, not just the summary line. */
+    const [uploadError, setUploadError] = useState(null);
+    /** field -> message, shown under that row only after a Save attempt finds it empty. */
+    const [fieldErrors, setFieldErrors] = useState({});
 
     const uploadMode = Boolean(file && onUpload);
+
+    /* One DOM node per field, so a failed Save attempt can scroll to and focus
+       the first thing still missing instead of leaving the user to hunt for it. */
+    const fieldNodes = useRef({});
+    const registerFieldRef = useCallback((field, node) => {
+        if (node) fieldNodes.current[field] = node;
+        else delete fieldNodes.current[field];
+    }, []);
 
     const reset = () => {
         setChosen(null);
@@ -335,8 +387,10 @@ export default function FieldMappingPanel({
         setCleared([]);
         setPreview(null);
         setError("");
+        setUploadError(null);
         setNotice("");
         setConflict(null);
+        setFieldErrors({});
     };
 
     /**
@@ -433,6 +487,7 @@ export default function FieldMappingPanel({
             columns,
         );
         setError("");
+        setUploadError(null);
         setNotice("");
     };
 
@@ -441,7 +496,8 @@ export default function FieldMappingPanel({
         const map = new Map();
         for (const entry of entries) {
             const value = valueForSource(draft[entry.field], columns);
-            if (value === "") continue;
+            // A field answered as absent holds no column, so it claims none.
+            if (value === "" || value === ABSENT) continue;
             // A shared field never claims the column, so the field it borrows
             // from keeps it and no third field can take it.
             if (entry.allowShared) continue;
@@ -454,7 +510,8 @@ export default function FieldMappingPanel({
         () =>
             entries.filter((entry) => {
                 const value = valueForSource(draft[entry.field], columns);
-                if (value === "") return false;
+                // Absent points at no column, so there is nothing to be wrong.
+                if (value === "" || value === ABSENT) return false;
                 const column = columns.find((c) => c.index === Number(value));
                 return (
                     column && !isColumnCompatible(column, entry, transformOf(draft[entry.field]))
@@ -471,6 +528,20 @@ export default function FieldMappingPanel({
 
     const dirty = useMemo(() => {
         if (!active) return false;
+
+        /*
+         * Nothing is stored for this file type yet.
+         *
+         * `active.profile` is then the BUILT-IN layout, which is a guess about
+         * the file rather than an answer about it. A user whose columns happen
+         * to match it — a Mutual Funds file sending UCC, SourceMFISIN,
+         * TradeDate … — would otherwise finish mapping, find the draft equal to
+         * that guess, and be handed Upload with nothing ever written to the
+         * bucket. The first mapping is always a change, so it always has to be
+         * saved.
+         */
+        if (active.isDefault) return true;
+
         const keys = new Set([...Object.keys(active.profile || {}), ...Object.keys(draft)]);
         for (const k of keys) if (!sameSource(active.profile?.[k], draft[k])) return true;
         return false;
@@ -488,12 +559,56 @@ export default function FieldMappingPanel({
 
     const setField = (field, source) => {
         setNotice("");
+        setFieldErrors((prev) => {
+            if (!prev[field]) return prev;
+            const next = { ...prev };
+            delete next[field];
+            return next;
+        });
         setDraft((prev) => {
             const next = { ...prev };
             if (source) next[field] = source;
             else delete next[field];
             return next;
         });
+    };
+
+    /**
+     * Runs when Save is clicked rather than continuously: a field is only ever
+     * called out once the user has tried to move on, not while they are still
+     * working through the list. Finds the first field still empty or pointing
+     * at an incompatible column, scrolls to it, focuses it, and stops there —
+     * fixing that one and clicking Save again reaches the next, if any.
+     */
+    const validateBeforeSave = () => {
+        for (const entry of entries) {
+            const value = valueForSource(draft[entry.field], columns);
+            if (value === "" ) {
+                const node = fieldNodes.current[entry.field];
+                if (node) {
+                    node.scrollIntoView({ behavior: "smooth", block: "center" });
+                    node.focus();
+                }
+                setFieldErrors({ [entry.field]: "This field is required." });
+                return false;
+            }
+            if (value !== ABSENT) {
+                const column = columns.find((c) => c.index === Number(value));
+                if (column && !isColumnCompatible(column, entry, transformOf(draft[entry.field]))) {
+                    const node = fieldNodes.current[entry.field];
+                    if (node) {
+                        node.scrollIntoView({ behavior: "smooth", block: "center" });
+                        node.focus();
+                    }
+                    setFieldErrors({
+                        [entry.field]: mismatchReason(column, entry, transformOf(draft[entry.field])),
+                    });
+                    return false;
+                }
+            }
+        }
+        setFieldErrors({});
+        return true;
     };
 
     const requestClose = () => {
@@ -516,8 +631,10 @@ export default function FieldMappingPanel({
      * to be told the same columns it was told a moment ago.
      */
     const onSave = async () => {
+        if (!validateBeforeSave()) return;
         setSaving(true);
         setError("");
+        setUploadError(null);
         setNotice("");
         try {
             const res = await saveFieldMap(chosen, draft, "");
@@ -585,6 +702,7 @@ export default function FieldMappingPanel({
     const runUpload = async (replace) => {
         setUploading(true);
         setError("");
+        setUploadError(null);
         setConflict(null);
         try {
             await onUpload({ profileType: chosen, replace });
@@ -595,7 +713,7 @@ export default function FieldMappingPanel({
             // rather than back on the page, so the user is not bounced out of
             // the modal half way through an upload they started in it.
             if (err.detail?.code === "FILE_ALREADY_EXISTS") setConflict(err.detail);
-            else setError(err.message);
+            else setUploadError({ message: err.message, detail: err.detail });
         } finally {
             setUploading(false);
         }
@@ -605,6 +723,9 @@ export default function FieldMappingPanel({
 
     const typeMismatch =
         preview?.detectedType && requestedType && preview.detectedType !== requestedType;
+
+    const fileKindLabel =
+        chosen === "FA" || chosen === "FA_MUTUAL_FUND" ? "Fund accounting file" : "Custodian file";
 
     return (
         <>
@@ -617,13 +738,39 @@ export default function FieldMappingPanel({
                                 &larr; All files
                             </button>
                         ) : null}
+                        {chosen ? <p className="fm-kicker">Field Mapping</p> : null}
                         <h3>{chosen ? PROFILE_LABEL[chosen] : "Field Mapping"}</h3>
-                        <p className="fm-sub">
-                            {chosen
-                                ? PROFILE_HELP[chosen]
-                                : "Tell us which column each field comes from. Every scheme that sends this kind of file uses the same mapping."}
-                        </p>
-                        {file ? <p className="fm-filename">{file.name}</p> : null}
+                        {file ? (
+                            <div className="fm-fileinfo">
+                                <svg
+                                    width="13"
+                                    height="13"
+                                    viewBox="0 0 16 16"
+                                    fill="none"
+                                    aria-hidden="true"
+                                    className="fm-fileinfo-icon"
+                                >
+                                    <path
+                                        d="M4 1.5h4.5L12 5v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V2.5a1 1 0 0 1 1-1Z"
+                                        stroke="currentColor"
+                                        strokeWidth="1.1"
+                                        strokeLinejoin="round"
+                                    />
+                                    <path
+                                        d="M8.5 1.5V5H12"
+                                        stroke="currentColor"
+                                        strokeWidth="1.1"
+                                        strokeLinejoin="round"
+                                    />
+                                </svg>
+                                <span className="fm-fileinfo-text">
+                                    <span className="fm-fileinfo-kind">{fileKindLabel}</span>
+                                    <span className="fm-fileinfo-name" title={file.name}>
+                                        {file.name}
+                                    </span>
+                                </span>
+                            </div>
+                        ) : null}
                     </div>
                     <button
                         type="button"
@@ -637,6 +784,12 @@ export default function FieldMappingPanel({
 
                 <div className="fm-panel-body">
                     {error ? <div className="fm-error">{error}</div> : null}
+                    {uploadError ? (
+                        <UploadErrorDetails
+                            message={uploadError.message}
+                            detail={uploadError.detail}
+                        />
+                    ) : null}
                     {notice ? <div className="fm-notice">{notice}</div> : null}
                     {loading ? <p className="fm-muted">Reading the file&hellip;</p> : null}
 
@@ -700,6 +853,24 @@ export default function FieldMappingPanel({
                                 })}
                             </div>
                         </>
+                    ) : null}
+
+                    {/*
+                      * A file type the server does not know about.
+                      *
+                      * The panel is otherwise silent about it: with no map there are no
+                      * field rows and Save is disabled, which reads as a missing button
+                      * rather than as the server being out of date.
+                      */}
+                    {chosen && !active && !loading ? (
+                        <div className="fm-error" role="alert">
+                            <strong>
+                                {PROFILE_LABEL[chosen] || chosen} is not available on the server
+                                yet.
+                            </strong>{" "}
+                            Its mapping cannot be mapped or saved until the server is updated to a
+                            build that knows this file type.
+                        </div>
                     ) : null}
 
                     {chosen && active ? (
@@ -772,6 +943,8 @@ export default function FieldMappingPanel({
                                             columns={columns}
                                             takenBy={takenBy}
                                             onChange={setField}
+                                            registerRef={registerFieldRef}
+                                            fieldError={fieldErrors[entry.field]}
                                         />
                                     ))}
                                 </tbody>
@@ -796,26 +969,20 @@ export default function FieldMappingPanel({
                                 disabled={clearing || saving || uploading || loading}
                                 title="Delete the saved mapping for this file type and map every field again"
                             >
+                                <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                                    <path
+                                        d="M3 4.5h10M6.5 4.5V3a1 1 0 0 1 1-1h1a1 1 0 0 1 1 1v1.5M4.5 4.5l.6 8.4a1 1 0 0 0 1 .9h3.8a1 1 0 0 0 1-.9l.6-8.4"
+                                        stroke="currentColor"
+                                        strokeWidth="1.2"
+                                        strokeLinecap="round"
+                                        strokeLinejoin="round"
+                                    />
+                                </svg>
                                 {clearing ? "Clearing…" : "Clear all"}
                             </button>
                         ) : null}
 
                         <div className="fm-actions-right">
-                            {!complete && columns.length > 0 ? (
-                                <span className="fm-blocker">
-                                    {badFields.length > 0
-                                        ? `${badFields.length} field(s) point at the wrong column.`
-                                        : `${unansweredCount} field(s) still to map.`}
-                                </span>
-                            ) : null}
-
-                            {/* Tells the user what the one enabled button will do next. */}
-                            {complete && dirty && columns.length > 0 ? (
-                                <span className="fm-blocker">
-                                    All fields mapped &mdash; save to continue.
-                                </span>
-                            ) : null}
-
                             {showUpload ? (
                                 <span className="fm-ready">Mapping saved &mdash; ready to upload.</span>
                             ) : null}
@@ -838,12 +1005,7 @@ export default function FieldMappingPanel({
                                     type="button"
                                     className="fm-primary"
                                     onClick={onSave}
-                                    disabled={!complete || !dirty || saving || loading}
-                                    title={
-                                        complete
-                                            ? "Save this mapping"
-                                            : "Map every field before saving"
-                                    }
+                                    disabled={!dirty || saving || loading}
                                 >
                                     {saving ? "Saving…" : "Save mapping"}
                                 </button>

@@ -36,6 +36,7 @@ import {
 } from "../../util/custodyMatch/fieldMap.js";
 import {
   deleteFieldMapBlob,
+  loadFieldMapProfiles,
   readAllFieldMapBlobs,
   readFieldMapBlob,
   writeFieldMapBlob,
@@ -381,13 +382,22 @@ export const previewHeaders = async (req, res) => {
      * exception it goes on to produce, so the screen opens the detected layout
      * and lets the user override rather than discovering it at upload time.
      *
-     * FA is never auto-detected: detectCustodyFormat only knows the two
+     * FA is never auto-detected: detectCustodyFormat only knows the three
      * custodian layouts, and the FA file arrives through its own control.
      */
     let detectedType = null;
     if (asked !== PROFILE_TYPE.FA) {
       try {
-        const detected = detectCustodyFormat(file.data);
+        /*
+         * Detected against the saved mappings, exactly as the upload does.
+         * A layout is identified by the column it reads the account code from,
+         * and a custodian who calls that column CPCode rather than the built-in
+         * CPCode_UCC is only recognised through their mapping. Without the
+         * mappings a file in the wrong slot reads as "layout unknown", which
+         * is indistinguishable from a file we have no opinion about.
+         */
+        const profiles = req.catalystApp ? await loadFieldMapProfiles(req.catalystApp) : null;
+        const detected = detectCustodyFormat(file.data, { profiles });
         detectedType = detected.format ? FORMAT_TO_PROFILE_TYPE[detected.format] || null : null;
       } catch {
         // Detection is a convenience. A file it cannot place still maps fine

@@ -80,8 +80,12 @@ export const getSchemes = () => request("/schemes");
 /** The dates a run could compare, with what each has on either side. */
 export const getRunDates = (date) => request(`/day/${date}/dates`);
 
-export const uploadFaFile = ({ file, businessDate, replace = false }) =>
-  form("/fa-file", { file, businessDate, replace: replace ? "true" : "" });
+export const uploadFaFile = ({
+  file,
+  businessDate,
+  fileType = FA_FILE_TYPE.REGULAR,
+  replace = false,
+}) => form("/fa-file", { file, businessDate, fileType, replace: replace ? "true" : "" });
 
 export const uploadCustodyFile = ({ file, scheme, fileType, businessDate, replace = false }) =>
   form("/custody-file", {
@@ -157,20 +161,39 @@ export const previewHeaders = (file, type) => form("/field-map/preview", { file,
 
 export const PROFILE_TYPE = {
   FA: "FA",
+  FA_MUTUAL_FUND: "FA_MUTUAL_FUND",
   CUSTODY_RESIDENTIAL: "CUSTODY_RESIDENTIAL",
   CUSTODY_NDPMS: "CUSTODY_NDPMS",
+  CUSTODY_MUTUAL_FUND: "CUSTODY_MUTUAL_FUND",
 };
 
 export const PROFILE_LABEL = {
   FA: "Transaction file (FA)",
+  FA_MUTUAL_FUND: "Transaction file (FA) — Mutual Funds",
   CUSTODY_RESIDENTIAL: "Custodian — Residential",
-  CUSTODY_NDPMS: "Custodian — NRE/NRO (NDPMS)",
+  CUSTODY_NDPMS: "Custodian — NRE/NRO/NDPMS",
+  CUSTODY_MUTUAL_FUND: "Custodian — Mutual Funds",
 };
 
 export const PROFILE_HELP = {
   FA: "The daily transaction file. Whatever layout you map here is rewritten into the standard 26-column format before it is imported, so the import is unaffected.",
+  FA_MUTUAL_FUND:
+    "The mutual fund fund-accounting file. Same 26 fields as the regular transaction file — it renames one heading (SYMBOLCODE/ISIN CODE), which is why it is mapped separately. Its rows are matched only against the Mutual Funds custodian files. Dates must be YYYY-MM-DD.",
   CUSTODY_RESIDENTIAL: "The deal allocation file for Resident accounts.",
-  CUSTODY_NDPMS: "The deal allocation file for NRE / NRO (NDPMS) accounts.",
+  CUSTODY_NDPMS: "The deal allocation file for NRE/NRO/NDPMS accounts.",
+  CUSTODY_MUTUAL_FUND:
+    "The Mutual Funds transaction file (UCC, SourceMFISIN, TradeDate, TransactionType Subscription / Redemption, Units). Matched against the rows from the mutual fund fund-accounting file.",
+};
+
+/** Which transaction file is being uploaded. A day may hold one of each. */
+export const FA_FILE_TYPE = {
+  REGULAR: "REGULAR",
+  MUTUAL_FUND: "MUTUAL_FUND",
+};
+
+export const FA_FILE_TYPE_LABEL = {
+  REGULAR: "Equity",
+  MUTUAL_FUND: "Mutual Funds",
 };
 
 export const SOURCE_BY = { NAME: "name", INDEX: "index", ABSENT: "absent" };
@@ -230,12 +253,14 @@ export const TRANSFORM_LABEL = {
 export const CUSTODY_FILE_TYPE = {
   RESIDENTIAL: "RESIDENTIAL",
   NDPMS: "NDPMS",
+  MUTUAL_FUND: "MUTUAL_FUND",
 };
 
-/** Both account types send one deal-allocation file; only the layout inside differs. */
+/** Every account type sends one deal-allocation file; only the layout inside differs. */
 export const FILE_TYPE_LABEL = {
   RESIDENTIAL: "Residential",
-  NDPMS: "NRE / NRO (NDPMS)",
+  NDPMS: "NRE/NRO/NDPMS",
+  MUTUAL_FUND: "Mutual Funds",
 };
 
 /** Exception types, in the order they should appear in the filter. */

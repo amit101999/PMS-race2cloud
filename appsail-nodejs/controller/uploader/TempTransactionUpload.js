@@ -345,7 +345,16 @@ const HEADER_MAP = {
   CHQDETAIL: "CHEQUEDTL",
   BankRef: "BANKACID",
   CashSetdate: "PAYMENTDATE",
+  TDS: "TDSAMOUNT",
+  "Stamp Duty": "STAMPDUTY",
 };
+
+/**
+ * Optional trailing columns, allowed only as a complete pair after the 26.
+ * The mutual fund transaction file carries them; the regular file never does,
+ * so a 26-column upload is validated and imported exactly as before.
+ */
+const OPTIONAL_TRAILING_HEADERS = ["TDS", "Stamp Duty"];
 
 /**
  * @param {string} raw Header cell from row 1 (trimmed).
@@ -411,7 +420,9 @@ function validateExpectedHeaderOrder(fileBuffer) {
   const firstLine = getFirstLineText(fileBuffer);
   const separator = detectSeparator(firstLine);
   const cells = splitHeaderCells(firstLine, separator);
-  const expected = EXPECTED_HEADERS_IN_ORDER;
+  const withTrailing = [...EXPECTED_HEADERS_IN_ORDER, ...OPTIONAL_TRAILING_HEADERS];
+  const expected =
+    cells.length === withTrailing.length ? withTrailing : EXPECTED_HEADERS_IN_ORDER;
 
   if (cells.length !== expected.length) {
     return {

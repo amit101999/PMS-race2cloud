@@ -1,123 +1,186 @@
+/*
+ * Transaction Operations — page shell.
+ * Design tokens live in tokens.css (.txn-ops); this file is layout only.
+ */
+
 .temp-transaction-container {
-  padding: 20px;
-  background-color: #ffffff;
+  padding: 20px 28px 48px;
+  background-color: var(--txo-bg);
   min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
 }
 
-.temp-transaction-title {
-  font-size: 24px;
-  font-weight: 600;
-  color: #1a1a1a;
-  margin-bottom: 30px;
-}
+/* ── workflow process tracker ─────────────────────────────────────────── */
+/* Compact — sized to its own content, not stretched across the page — with
+   the business date sharing the same row so the two don't cost two lines. */
 
-.temp-transaction-card {
-  background: white;
-  border-radius: 20px;
-  padding: 40px;
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.05);
-  border: 1px solid #f0f0f0;
-}
-
-.temp-transaction-card h3 {
-  font-size: 20px;
-  font-weight: 700;
-  color: #000;
-  margin-bottom: 25px;
-  margin-top: 0;
-}
-
-.upload-controls {
+.txo-tracker-bar {
   display: flex;
   align-items: center;
-  gap: 20px;
+  justify-content: space-between;
+  gap: 24px;
+  margin: 2px 0 20px;
   flex-wrap: wrap;
 }
 
-.file-input-wrapper {
+.txo-tracker {
+  display: flex;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.txo-tracker li {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+.txo-tracker-row {
   display: flex;
   align-items: center;
-  gap: 10px;
 }
 
-.file-input-wrapper input[type="file"] {
-  font-size: 14px;
-  color: #666;
+.txo-tracker-node {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--txo-surface);
+  border: 2px solid var(--txo-border-strong);
+  box-sizing: border-box;
 }
 
-.upload-button {
-  background-color: #a01b4c;
-  color: white;
-  border: none;
-  padding: 12px 30px;
-  border-radius: 12px;
-  font-size: 16px;
+.txo-tracker-line {
+  width: 36px;
+  height: 2px;
+  background: var(--txo-border-strong);
+}
+
+.txo-tracker-line.is-filled {
+  background: var(--txo-primary);
+}
+
+.txo-tracker-label {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--txo-text-faint);
+  white-space: nowrap;
+}
+
+.txo-tracker li.is-done .txo-tracker-node,
+.txo-tracker li.is-current .txo-tracker-node {
+  background: var(--txo-primary);
+  border-color: var(--txo-primary);
+}
+
+.txo-tracker li.is-done .txo-tracker-label {
+  color: var(--txo-text-muted);
+}
+
+.txo-tracker li.is-current .txo-tracker-label {
+  color: var(--txo-primary);
   font-weight: 600;
-  cursor: pointer;
-  transition: background-color 0.2s ease;
 }
 
-.upload-button:hover {
-  background-color: #8a1741;
-}
-
-.upload-button:disabled {
-  background-color: #ccc;
-  cursor: not-allowed;
-}
-
-@media (max-width: 600px) {
-  .upload-controls {
-    flex-direction: column;
-    align-items: flex-start;
-  }
-  
-  .upload-button {
-    width: 100%;
+@media (max-width: 900px) {
+  .txo-tracker-line {
+    width: 20px;
   }
 }
 
-/* ─────────────── Upload history (last 5) ─────────────── */
+@media (max-width: 700px) {
+  .txo-tracker-label {
+    display: none;
+  }
+}
+
+/* ── card shell (shared by every section on this page) ───────────────── */
+
+.temp-transaction-card {
+  background: var(--txo-surface);
+  border-radius: var(--txo-radius-md);
+  padding: 22px 24px;
+  box-shadow: none;
+  border: 1px solid var(--txo-border);
+}
+
+.temp-transaction-card h3 {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--txo-text);
+  margin: 0 0 4px;
+}
+
+/* ─────────────── Upload history / audit tables ─────────────── */
 
 .upload-history-card {
-  margin-top: 24px;
+  margin-top: 0;
+}
+
+.upload-history-card-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.upload-history-card-head h3 {
+  margin: 0;
+}
+
+.count-pill {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 12px;
+  color: var(--txo-text-faint);
+  white-space: nowrap;
 }
 
 .upload-history-error {
   margin: 0 0 16px;
-  padding: 10px 12px;
-  background-color: #fee2e2;
-  color: #b91c1c;
-  border-radius: 8px;
-  font-size: 14px;
+  padding: 10px 14px;
+  background-color: var(--txo-error-bg);
+  color: var(--txo-error);
+  border-left: 3px solid var(--txo-error);
+  border-radius: 0;
+  font-size: 13px;
 }
 
 .upload-history-table-wrapper {
-  border: 1px solid #e8ecef;
-  border-radius: 12px;
-  overflow: hidden;
-  background: #fff;
+  border-top: 1px solid var(--txo-border-strong);
+  overflow-x: auto;
+  background: var(--txo-surface);
 }
 
 .upload-history-table {
   width: 100%;
-  border-collapse: separate;
-  border-spacing: 0;
-  font-size: 14px;
+  border-collapse: collapse;
+  font-size: 13.5px;
 }
 
+/* A subtle brand tint on the header, not a heavy block — enough to read as
+   "this is the table's header" without weighing the table down. */
 .upload-history-table thead th {
-  background: #f7f9fa;
-  color: #374151;
+  background: var(--txo-primary-tint);
+  color: var(--txo-primary-hover);
   font-weight: 600;
-  padding: 12px 16px;
+  font-size: 12px;
+  padding: 10px 10px;
   text-align: left;
-  border-bottom: 1px solid #e5e7eb;
-  letter-spacing: 0.02em;
+  border-bottom: 1px solid var(--txo-border-strong);
+  white-space: nowrap;
 }
 
 .upload-history-table thead th.num {
   text-align: right;
+  padding-left: 28px;
 }
 
 .upload-history-table thead th.action {
@@ -125,24 +188,36 @@
   width: 140px;
 }
 
-.upload-history-table tbody tr:nth-child(odd) {
-  background: #f9fbf7;
+/* The file/report name is the one column with genuinely variable-length
+   content — capped so it can't swallow all the table's spare width and
+   leave every other column stranded far to the right. */
+.upload-history-table th:nth-child(2),
+.upload-history-table td:nth-child(2) {
+  width: 42%;
 }
 
-.upload-history-table tbody tr:nth-child(even) {
-  background: #ffffff;
+.upload-history-table tbody tr {
+  background: transparent;
+  transition: background-color 0.1s ease;
+}
+
+.upload-history-table tbody tr:hover {
+  background: var(--txo-surface-sunken);
 }
 
 .upload-history-table td {
-  padding: 12px 16px;
-  color: #1f2933;
-  border-bottom: 1px solid #f1f3f4;
+  padding: 10px 10px;
+  color: var(--txo-text);
+  border-bottom: 1px solid var(--txo-border);
   vertical-align: middle;
 }
 
 .upload-history-table td.num {
   text-align: right;
+  padding-left: 28px;
+  font-family: "IBM Plex Mono", monospace;
   font-variant-numeric: tabular-nums;
+  color: var(--txo-text-muted);
 }
 
 .upload-history-table td.action {
@@ -150,36 +225,102 @@
 }
 
 .upload-history-table td.filename-cell {
-  max-width: 320px;
+  max-width: 340px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 13px;
 }
 
 .upload-history-table .empty-cell {
   text-align: center;
-  padding: 24px;
-  color: #6b7280;
-}
-
-.upload-history-download-btn {
-  background: #fff;
-  color: #a01b4c;
-  border: 1px solid #a01b4c;
-  padding: 6px 14px;
-  border-radius: 8px;
+  padding: 28px 4px;
+  color: var(--txo-text-faint);
   font-size: 13px;
-  font-weight: 600;
+}
+
+/* History tables with a download column: a shorter header, tighter rows,
+   download centred. */
+.upload-history-table--compact thead th {
+  padding: 7px 12px;
+  font-size: 11.5px;
+  letter-spacing: 0.01em;
+}
+
+.upload-history-table--compact td {
+  padding: 7px 12px;
+}
+
+.upload-history-table--compact thead th.action,
+.upload-history-table--compact td.action {
+  width: 110px;
+  text-align: center;
+}
+
+/* ── download button — used by every history table on this page ───────── */
+
+/* Compact, in the sidebar's maroon: pale-maroon fill, thin maroon border,
+   maroon arrow and text. Hover only deepens the fill, so nothing resizes. */
+.dl-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  height: 24px;
+  padding: 0 9px;
+  border: 1px solid var(--txo-primary);
+  border-radius: var(--txo-radius-sm);
+  background: var(--txo-primary-tint);
+  color: var(--txo-primary);
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1;
   cursor: pointer;
-  transition: background-color 0.15s ease, color 0.15s ease;
+  transition: background-color 0.18s ease, border-color 0.18s ease;
 }
 
-.upload-history-download-btn:hover:not(:disabled) {
-  background: #a01b4c;
-  color: #fff;
+.dl-btn:hover:not(:disabled),
+.dl-btn:active:not(:disabled) {
+  background: #f0d3dc;
+  border-color: var(--txo-primary-hover);
 }
 
-.upload-history-download-btn:disabled {
-  opacity: 0.6;
+.dl-btn:disabled {
+  opacity: 0.55;
   cursor: not-allowed;
+}
+
+.dl-spinner {
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  border: 1.5px solid rgba(139, 21, 56, 0.25);
+  border-top-color: var(--txo-primary);
+  animation: dl-spin 0.7s linear infinite;
+}
+
+@keyframes dl-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.dl-btn:focus-visible,
+.cm-primary:focus-visible,
+.cm-secondary:focus-visible,
+.cm-remove:focus-visible {
+  outline: 2px solid var(--txo-primary-hover);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .upload-history-table tbody tr,
+  .dl-btn {
+    transition: none;
+  }
+  .dl-spinner {
+    animation: none;
+  }
 }

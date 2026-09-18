@@ -1,15 +1,17 @@
 /**
  * Custody Matching — custodian deal / allocation parser.
  *
- * Two layouts arrive and one canonical shape comes out. After this module,
- * nothing downstream knows or cares which format a row came from.
+ * Three layouts arrive and one canonical shape comes out. After this module,
+ * nothing downstream knows or cares which format a row came from, apart from
+ * the fileType used to keep mutual funds in their own comparison.
  *
- * Each scheme sends ONE deal-allocation file. Which of the two layouts it uses
- * depends on the account type:
+ * Each scheme sends ONE file. Which layout it uses depends on the account type:
  *
  *   Format 1 (Resident, RESIDENTIAL) — keyed on CLIENT_CODE, trade date in TRADE_DATE.
  *   Format 2 (NRE/NRO, NDPMS)        — keyed on CPCode_UCC, trade date derived
  *                                      from the first 8 digits of ContractNo.
+ *   Format 3 (Mutual Funds)          — keyed on UCC, trade date in TradeDate,
+ *                                      direction as Subscription / Redemption.
  *
  * Both already carry actual codes, so no virtual->actual mapping is needed here.
  * Column order is not enforced (unlike the FA template) — custodians reorder
@@ -22,7 +24,7 @@ import csvParser from "csv-parser";
 import {
   CUSTODY_F1_HEADERS,
   CUSTODY_F2_HEADERS,
-  CUSTODY_FILE_TYPE,
+  CUSTODY_F3_HEADERS,
   CUSTODY_FORMAT,
   CUSTODY_TYPE_TO_FORMAT,
   DEFAULT_OPTIONS,
@@ -41,6 +43,7 @@ import {
   isoDateErrorMessage,
   normCode,
   normIsin,
+  normMutualFundTranType,
   normTranType,
   num,
   parseContractNoDate,
@@ -80,12 +83,32 @@ const normHeader = (h) =>
 const FORMAT_SIGNATURE = {
   [CUSTODY_FORMAT.RESIDENT]: "CLIENT_CODE",
   [CUSTODY_FORMAT.NDPMS]: "CPCode_UCC",
+  [CUSTODY_FORMAT.MUTUAL_FUND]: "UCC",
+};
+
+/** Human name of each layout, for error messages. */
+const LAYOUT_LABEL = {
+  [CUSTODY_FORMAT.RESIDENT]: "Resident",
+  [CUSTODY_FORMAT.NDPMS]: "NRE/NRO/NDPMS",
+  [CUSTODY_FORMAT.MUTUAL_FUND]: "Mutual Funds",
+};
+
+/** The file type each layout belongs to, for the wrong-slot message. */
+const FORMAT_TO_FILE_TYPE = Object.fromEntries(
+  Object.entries(CUSTODY_TYPE_TO_FORMAT).map(([fileType, format]) => [format, fileType]),
+);
+
+/** Standard headers of each layout; ones we never read do not trigger warnings. */
+const LAYOUT_HEADERS = {
+  [CUSTODY_FORMAT.RESIDENT]: CUSTODY_F1_HEADERS,
+  [CUSTODY_FORMAT.NDPMS]: CUSTODY_F2_HEADERS,
+  [CUSTODY_FORMAT.MUTUAL_FUND]: CUSTODY_F3_HEADERS,
 };
 
 /**
  * The column that identifies a layout is whichever one the profile reads the
- * account code from — CLIENT_CODE and CPCode_UCC by default, but a custodian
- * who renames it must still have their file recognised.
+ * account code from — CLIENT_CODE, CPCode_UCC and UCC by default, but a
+ * custodian who renames it must still have their file recognised.
  */
 const signatureFor = (format, profiles) => {
   const source = profiles?.[FORMAT_TO_PROFILE_TYPE[format]]?.actualCode;
@@ -158,41 +181,49 @@ export const detectCustodyFormat = (buffer, { profiles = null } = {}) => {
     };
   }
 
-  const residentSig = signatureFor(CUSTODY_FORMAT.RESIDENT, profiles);
-  const ndpmsSig = signatureFor(CUSTODY_FORMAT.NDPMS, profiles);
-  const isResident = normHeader(residentSig) in headerIndex;
-  const isNdpms = normHeader(ndpmsSig) in headerIndex;
+  // Exactly one layout's identifying column must be present.
+  const signatures = Object.values(CUSTODY_FORMAT).map((f) => ({
+    format: f,
+    signature: signatureFor(f, profiles),
+  }));
+  const found = signatures.filter((s) => normHeader(s.signature) in headerIndex);
 
-  if (isResident === isNdpms) {
+  if (found.length !== 1) {
+    const expected = signatures.map((s) => s.signature);
     return {
       ...empty,
       separator,
       rawHeaders,
       fileError: {
         code: FILE_ERROR.UNKNOWN_CUSTODY_FORMAT,
-        message: isResident
-          ? `Unknown column names — this file has both ${residentSig} and ${ndpmsSig}. Check the mapping.`
-          : `Unknown column names — expected ${residentSig} or ${ndpmsSig}. Check the mapping.`,
+        message:
+          found.length > 1
+            ? `Unknown column names — this file has ${found.map((s) => s.signature).join(" and ")}. Check the mapping.`
+            : `Unknown column names — expected one of ${expected.join(", ")}. Check the mapping.`,
         rawHeaders,
-        expected: [residentSig, ndpmsSig],
+        expected,
       },
     };
   }
 
-  const format = isResident ? CUSTODY_FORMAT.RESIDENT : CUSTODY_FORMAT.NDPMS;
+  const format = found[0].format;
   const profileType = FORMAT_TO_PROFILE_TYPE[format];
   const profile = profiles?.[profileType] || null;
 
   /*
-   * Strict: every field the mapping names must be present. The mapping is the
-   * contract between us and the custodian's export — if it says the quantity
-   * lives in QTY and the file calls it Quantity, that is a disagreement to fix
-   * before the numbers are trusted, not something to read past.
+   * Strict for Residential and NRE/NRO: every field the mapping names must be
+   * present. The mapping is the contract between us and the custodian's export —
+   * if it says the quantity lives in QTY and the file calls it Quantity, that is
+   * a disagreement to fix before the numbers are trusted.
+   *
+   * Mutual Funds only require the five match-key columns; a missing display
+   * column (Amount, REFNo …) reads as blank in the report.
    */
-  const resolved = resolveFieldMap(profileType, profile, rawHeaders, { strict: true });
+  const strict = format !== CUSTODY_FORMAT.MUTUAL_FUND;
+  const resolved = resolveFieldMap(profileType, profile, rawHeaders, { strict });
   if (!resolved.ok) {
     const missing = resolved.errors.map((e) => e.expected || e.label).filter(Boolean);
-    const layout = format === CUSTODY_FORMAT.RESIDENT ? "Resident" : "NRE/NRO (NDPMS)";
+    const layout = LAYOUT_LABEL[format];
     const mappedTotal = Object.keys(resolved.index).length + missing.length;
 
     /*
@@ -243,7 +274,7 @@ export const detectCustodyFormat = (buffer, { profiles = null } = {}) => {
  * @param {Buffer} buffer
  * @param {object} opts
  * @param {string} [opts.scheme]       scheme tag from the filename; stamped on every row and every exception.
- * @param {string} [opts.fileType]     RESIDENTIAL | NDPMS, from the filename suffix. Cross-checked against the detected layout.
+ * @param {string} [opts.fileType]     RESIDENTIAL | NDPMS | MUTUAL_FUND, from the filename suffix. Cross-checked against the detected layout.
  * @param {string} [opts.fileName]     for error messages.
  * @param {string} [opts.businessDate] yyyy-mm-dd
  * @param {object} [opts.options]      overrides for DEFAULT_OPTIONS.
@@ -284,11 +315,7 @@ export const parseCustodyFile = (
     return Promise.resolve(
       emptyResult({
         code: FILE_ERROR.FORMAT_TYPE_MISMATCH,
-        message: `Wrong account type — ${fileType} selected, ${
-          detected.format === CUSTODY_FORMAT.RESIDENT
-            ? CUSTODY_FILE_TYPE.RESIDENTIAL
-            : CUSTODY_FILE_TYPE.NDPMS
-        } file`,
+        message: `Wrong account type — ${fileType} selected, ${FORMAT_TO_FILE_TYPE[detected.format]} file`,
         declaredType: fileType,
         detectedFormat: detected.format,
       }),
@@ -320,9 +347,7 @@ export const parseCustodyFile = (
    * every correct file and drown the one case worth seeing: a column this
    * custodian sends that the format does not describe at all.
    */
-  const expectedButUnused = new Set(
-    (format === CUSTODY_FORMAT.RESIDENT ? CUSTODY_F1_HEADERS : CUSTODY_F2_HEADERS).map(normHeader),
-  );
+  const expectedButUnused = new Set(LAYOUT_HEADERS[format].map(normHeader));
   const usedIndexes = new Set(Object.values(resolved.index));
   rawHeaders.forEach((header, i) => {
     if (usedIndexes.has(i) || !String(header || "").trim()) return;
@@ -330,9 +355,7 @@ export const parseCustodyFile = (
     headerWarnings.push({
       row: null,
       code: WARNING.UNUSED_FILE_COLUMN,
-      message: `Column "${header}" is not part of the ${
-        format === CUSTODY_FORMAT.RESIDENT ? "Resident" : "NRE/NRO (NDPMS)"
-      } layout, so its values are ignored.`,
+      message: `Column "${header}" is not part of the ${LAYOUT_LABEL[format]} layout, so its values are ignored.`,
       column: header,
       fileName,
     });
@@ -341,6 +364,15 @@ export const parseCustodyFile = (
   /* How each field's raw value is interpreted. NDPMS has no date column at all;
    * its trade date is the first 8 characters of ContractNo. */
   const transformOf = resolved.transforms;
+
+  // Mutual Funds rows use Subscription/Redemption and may leave display cells blank.
+  const isMutualFundLayout = format === CUSTODY_FORMAT.MUTUAL_FUND;
+
+  /*
+   * The Mutual Funds columns beyond the match key and the shared display set.
+   * Carried as plain text — none is compared, so none may reject a row.
+   */
+  const MF_EXTRA_FIELDS = ["folioNo", "schemeName", "amcName", "firstHolderName"];
 
   return new Promise((resolve, reject) => {
     const rows = [];
@@ -428,14 +460,17 @@ export const parseCustodyFile = (
         const dateCol = columnOf.tranDate;
         if (transformOf.tranDate !== TRANSFORM.DATE_FROM_FIRST_8) {
           const rawDate = cell("tranDate");
-          // Residential trade dates must be in the standard YYYY-MM-DD format.
-          // An NDPMS file mapped to a real date column keeps the wider reading.
-          const residential = format === CUSTODY_FORMAT.RESIDENT;
-          tranDate = residential ? parseIsoDate(rawDate) : parseDate(rawDate);
+          /*
+           * Only Residential is held to YYYY-MM-DD. The Mutual Funds custodian
+           * sends DD-MM-YYYY ("03-09-2026"), and an NDPMS file mapped to a real
+           * date column keeps the wider reading too.
+           */
+          const isoOnly = format === CUSTODY_FORMAT.RESIDENT;
+          tranDate = isoOnly ? parseIsoDate(rawDate) : parseDate(rawDate);
           if (!rawDate) {
             fail(rowNumber, ROW_ERROR.MISSING_DATE, `${dateCol} is blank.`, dateCol, "");
             rejected = true;
-          } else if (!tranDate && residential) {
+          } else if (!tranDate && isoOnly) {
             fail(
               rowNumber,
               ROW_ERROR.BAD_DATE_FORMAT,
@@ -489,7 +524,9 @@ export const parseCustodyFile = (
 
         // ---- direction ------------------------------------------------------
         const rawType = cell("tranType");
-        const tranType = normTranType(rawType, SIDE.CUSTODY);
+        const tranType = isMutualFundLayout
+          ? normMutualFundTranType(rawType)
+          : normTranType(rawType, SIDE.CUSTODY);
         if (!rawType) {
           fail(
             rowNumber,
@@ -503,7 +540,9 @@ export const parseCustodyFile = (
           fail(
             rowNumber,
             ROW_ERROR.UNKNOWN_TRAN_TYPE,
-            `"${rawType}" is not a recognised transaction type. Expected BUY, B, BY+ or BY-* for a buy; SELL, SL+, SL or S for a sell.`,
+            isMutualFundLayout
+              ? `"${rawType}" is not a recognised transaction type. Expected Subscription for a buy or Redemption for a sell.`
+              : `"${rawType}" is not a recognised transaction type. Expected BUY, B, BY+ or BY-* for a buy; SELL, SL+, SL or S for a sell.`,
             columnOf.tranType,
             rawType,
           );
@@ -539,6 +578,9 @@ export const parseCustodyFile = (
          * blank or unreadable value would otherwise show up as a silent 0 or an
          * empty cell. A field with no column (an older mapping that marked it as
          * not present) has nothing to check.
+         *
+         * Mutual Funds files may leave these cells blank; a filled one is still
+         * checked, so a typo does not reach the report as a silent 0.
          */
         for (const field of AMOUNT_FIELDS) {
           const column = columnOf[field];
@@ -546,6 +588,7 @@ export const parseCustodyFile = (
           const raw = cell(field);
           const value = num(raw);
           if (!raw) {
+            if (isMutualFundLayout) continue;
             fail(rowNumber, ROW_ERROR.MISSING_VALUE, `${column} is blank.`, column, "");
             rejected = true;
           } else if (value === null) {
@@ -567,8 +610,10 @@ export const parseCustodyFile = (
           const column = columnOf.settlementDate;
           const raw = cell("settlementDate");
           if (!raw) {
-            fail(rowNumber, ROW_ERROR.MISSING_VALUE, `${column} is blank.`, column, "");
-            rejected = true;
+            if (!isMutualFundLayout) {
+              fail(rowNumber, ROW_ERROR.MISSING_VALUE, `${column} is blank.`, column, "");
+              rejected = true;
+            }
           } else if (!parseDate(raw)) {
             fail(rowNumber, ROW_ERROR.BAD_DATE, `${column} "${raw}" is not a readable date.`, column, raw);
             rejected = true;
@@ -577,7 +622,7 @@ export const parseCustodyFile = (
 
         for (const field of REQUIRED_TEXT_FIELDS) {
           const column = columnOf[field];
-          if (!column) continue;
+          if (!column || isMutualFundLayout) continue;
           if (!cell(field)) {
             fail(rowNumber, ROW_ERROR.MISSING_VALUE, `${column} is blank.`, column, "");
             rejected = true;
@@ -607,6 +652,9 @@ export const parseCustodyFile = (
           ref: cell("ref"),
           exchange: cell("exchange"),
           brokerCode: cell("brokerCode"),
+          ...(isMutualFundLayout
+            ? Object.fromEntries(MF_EXTRA_FIELDS.map((f) => [f, cell(f)]))
+            : null),
         });
       })
       .on("end", () => {

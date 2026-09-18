@@ -22,7 +22,13 @@ import {
   EXCEPTION_STATUS,
   EXCEPTION_TYPE,
 } from "./constants.js";
-import { buildMatchKey, buildOrphanKey, parseMatchKey } from "./normalize.js";
+import {
+  buildMatchKey,
+  buildOrphanKey,
+  isMutualFundCustodyRow,
+  isMutualFundFaRow,
+  parseMatchKey,
+} from "./normalize.js";
 
 const round = (n) => Math.round((n + Number.EPSILON) * 1e6) / 1e6;
 
@@ -92,6 +98,43 @@ export const aggregateByKey = (rows) => {
   }
 
   return map;
+};
+
+/**
+ * Split both sides into the two comparisons a run makes.
+ *
+ * Mutual fund FA rows (INF ISIN, exchange DIR) are compared only with the
+ * Mutual Funds custodian files, and every other FA row only with the Residential
+ * and NRE/NRO files. Without the split, an equity trade would read as missing
+ * against a mutual fund file and the other way round.
+ *
+ * The two sides are recognised differently, and deliberately: a custodian row
+ * knows which file it came from, while FA rows reach here from the consolidated
+ * rewrite, which does not record that. Mutual fund rows only ever enter it from
+ * the mutual fund transaction file, so both readings pick out the same rows.
+ *
+ * @returns {{name:string, faRows:object[], custodyRows:object[]}[]}
+ */
+export const splitMutualFunds = (faRows, custodyRows) => {
+  const mutualFunds = { name: "MUTUAL_FUND", faRows: [], custodyRows: [] };
+  const others = { name: "OTHER", faRows: [], custodyRows: [] };
+
+  for (const row of faRows) {
+    if (isMutualFundFaRow(row)) {
+      mutualFunds.faRows.push(row);
+    } else {
+      others.faRows.push(row);
+    }
+  }
+  for (const row of custodyRows) {
+    if (isMutualFundCustodyRow(row)) {
+      mutualFunds.custodyRows.push(row);
+    } else {
+      others.custodyRows.push(row);
+    }
+  }
+
+  return [mutualFunds, others];
 };
 
 /**

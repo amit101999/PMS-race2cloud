@@ -6,7 +6,9 @@ import DifferenceReports from "./custody/DifferenceReports";
 import PreviousCustodianUploads from "./custody/PreviousCustodianUploads";
 import ExceptionGrid from "./custody/ExceptionGrid";
 import GateTwo from "./custody/GateTwo";
+import DownloadButton from "./custody/DownloadButton";
 import { todayIso } from "./custody/api";
+import "./tokens.css";
 import "./TempTransaction.css";
 
 /** Show only the most recent N uploads — no pagination. */
@@ -30,8 +32,34 @@ function formatUploadedAt(iso) {
     return d.toLocaleString();
 }
 
+const WORKFLOW_STEPS = [
+    { key: "upload", label: "Upload" },
+    { key: "validate", label: "Validate" },
+    { key: "match", label: "Match" },
+    { key: "review", label: "Review Exceptions" },
+    { key: "commit", label: "Commit" },
+];
+
 /**
- * Transaction Upload.
+ * Where this business date actually is in the workflow — derived from the
+ * real file/run state the panels already hold, never hardcoded. Mirrors the
+ * gates already enforced server-side (Gate 1: both files staged; Gate 2:
+ * match run reached a terminal state) rather than inventing new rules.
+ */
+function deriveStage({ faReady, custodyReady, run }) {
+    if (!faReady || !custodyReady) return 0;
+    if (!run) return 1;
+    if (run.isRunning) return 2;
+    if (run.status === "FAILED") return 2;
+    if (run.status === "COMPLETED_WITH_EXCEPTIONS") return 3;
+    return 4; // COMPLETED_CLEAN, or a terminal state already handed to the importer
+}
+
+/**
+ * Transaction Upload — now framed as one reconciliation workflow rather than
+ * a stack of independent admin cards. The status bar and stepper below are
+ * read-only reflections of state the child panels already own (`day`, `run`);
+ * nothing here duplicates a fetch or invents a count.
  *
  * The direct "pick a file and import" control that used to live here is gone on
  * purpose: nothing reaches production until custody matching comes back clean,
@@ -44,6 +72,7 @@ function formatUploadedAt(iso) {
 const TempTransaction = () => {
     const [businessDate, setBusinessDate] = useState(todayIso());
     const [run, setRun] = useState(null);
+    const [day, setDay] = useState(null);
     /* The custodian history list an upload hands back, so the new file shows at once. */
     const [custodyHistory, setCustodyHistory] = useState(null);
 
@@ -128,13 +157,78 @@ const TempTransaction = () => {
         }
     }, []);
 
+    /* Where the workflow stepper points — derived from real state only. */
+    const faReady = (day?.fa?.raw || []).length > 0;
+    const custodyReady = (day?.custody?.files || []).length > 0;
+    const currentStage = deriveStage({ faReady, custodyReady, run });
+
     return (
         <MainLayout title="Transaction Upload">
-            <div className="temp-transaction-container">
+            <div className="temp-transaction-container txn-ops">
+                <div className="txo-tracker-bar">
+                <ol className="txo-tracker" aria-label="Reconciliation workflow">
+                    {WORKFLOW_STEPS.map((step, i) => {
+                        const reached = i <= currentStage;
+                        return (
+                            <li
+                                key={step.key}
+                                className={
+                                    i === currentStage
+                                        ? "is-current"
+                                        : i < currentStage
+                                            ? "is-done"
+                                            : "is-pending"
+                                }
+                            >
+                                <div className="txo-tracker-row">
+                                    {i !== 0 ? (
+                                        <span
+                                            className={reached ? "txo-tracker-line is-filled" : "txo-tracker-line"}
+                                        />
+                                    ) : null}
+                                    <span className="txo-tracker-node" aria-hidden="true">
+                                        {reached ? (
+                                            <svg width="9" height="7" viewBox="0 0 9 7" fill="none">
+                                                <path
+                                                    d="M1 3.5L3.2 5.7L8 1"
+                                                    stroke="white"
+                                                    strokeWidth="1.4"
+                                                    strokeLinecap="round"
+                                                    strokeLinejoin="round"
+                                                />
+                                            </svg>
+                                        ) : null}
+                                    </span>
+                                    {i !== WORKFLOW_STEPS.length - 1 ? (
+                                        <span
+                                            className={
+                                                i < currentStage ? "txo-tracker-line is-filled" : "txo-tracker-line"
+                                            }
+                                        />
+                                    ) : null}
+                                </div>
+                                <span className="txo-tracker-label">{step.label}</span>
+                            </li>
+                        );
+                    })}
+                </ol>
+
+                <label className="cm-date">
+                    <span>Business date</span>
+                    <input
+                        type="date"
+                        value={businessDate}
+                        onChange={(e) => setBusinessDate(e.target.value)}
+                        disabled={run?.isRunning}
+                    />
+                </label>
+                </div>
+
                 <CustodyMatchPanel
                     businessDate={businessDate}
                     onBusinessDateChange={setBusinessDate}
                     onRunChange={setRun}
+                    onDayChange={setDay}
                     onCustodyUploaded={setCustodyHistory}
                 />
 
@@ -142,8 +236,19 @@ const TempTransaction = () => {
 
                 <GateTwo run={run} onImported={refreshHistory} />
 
+                <div className="txo-section-head txo-section-head--tight">
+                    <h2>History</h2>
+                </div>
+
                 <div className="temp-transaction-card upload-history-card">
-                    <h3>Recent Uploads</h3>
+                    <div className="upload-history-card-head">
+                        <h3>Recent uploads</h3>
+                        {historyItems.length > 0 && (
+                            <span className="count-pill">
+                                {historyItems.length} of {HISTORY_LIMIT}
+                            </span>
+                        )}
+                    </div>
 
                     {historyError && (
                         <p className="upload-history-error" role="alert">
@@ -152,7 +257,7 @@ const TempTransaction = () => {
                     )}
 
                     <div className="upload-history-table-wrapper">
-                        <table className="upload-history-table">
+                        <table className="upload-history-table upload-history-table--compact">
                             <thead>
                                 <tr>
                                     <th>Uploaded date</th>
@@ -171,7 +276,7 @@ const TempTransaction = () => {
                                 ) : historyItems.length === 0 ? (
                                     <tr>
                                         <td colSpan={4} className="empty-cell">
-                                            {historyError ? "—" : "No uploads yet."}
+                                            {historyError ? "—" : "Nothing uploaded yet — files you send will appear here."}
                                         </td>
                                     </tr>
                                 ) : (
@@ -183,14 +288,10 @@ const TempTransaction = () => {
                                             </td>
                                             <td className="num">{formatBytes(item.sizeBytes)}</td>
                                             <td className="action">
-                                                <button
-                                                    type="button"
-                                                    className="upload-history-download-btn"
+                                                <DownloadButton
                                                     onClick={() => handleHistoryDownload(item)}
-                                                    disabled={downloadingKey === item.key}
-                                                >
-                                                    {downloadingKey === item.key ? "Preparing…" : "Download"}
-                                                </button>
+                                                    busy={downloadingKey === item.key}
+                                                />
                                             </td>
                                         </tr>
                                     ))

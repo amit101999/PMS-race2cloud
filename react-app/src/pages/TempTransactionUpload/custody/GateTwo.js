@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 
 import UploadErrorDetails from "./UploadErrorDetails";
+import StatusBadge, { STATUS } from "./StatusBadge";
 import * as api from "./api";
 
 /**
@@ -57,56 +58,77 @@ const GateTwo = ({ run, onImported }) => {
         }
     };
 
+    const locked = busy || alreadyImported || Boolean(result);
+
     return (
-        <div className="temp-transaction-card cm-gate">
-            <h3>Upload Transaction File</h3>
-            <p className="cm-sub">
-                {openExceptions.toLocaleString()} record(s) not matching.
-            </p>
-
-            <div className="cm-gate-row">
-                <button
-                    type="button"
-                    className={reconciled ? "cm-primary" : "cm-primary cm-primary--warn"}
-                    onClick={handleImport}
-                    disabled={busy || alreadyImported || Boolean(result)}
-                >
-                    {busy ? "Importing…" : "Commit the Transaction Files"}
-                </button>
-
-                {/* A run that never finished comparing is a different thing from one
-                    that finished and found differences, and the count alone cannot
-                    say which it was. */}
-                {!reconciled && openExceptions === 0 && !alreadyImported && !result ? (
-                    <p className="cm-unreconciled">
-                        This run is {run.status}, so the two sides were never fully compared.
-                    </p>
-                ) : null}
-
-                {alreadyImported && !result ? (
-                    <p className="cm-unreconciled">
-                        <strong>Already imported.</strong> This run's file has been handed to
-                        the import pipeline.
-                    </p>
-                ) : null}
+        <>
+            <div className="txo-section-head txo-section-head--tight">
+                <h2>Commit</h2>
             </div>
 
-            {result ? (
-                <div className="cm-verdict ok">
-                    <p style={{ margin: 0 }}>
-                        {result.message || "Import started."}
+            <div className="temp-transaction-card cm-gate cm-commit">
+                <div className="cm-commit-head">
+                    <StatusBadge tone={alreadyImported || result ? STATUS.OK : reconciled ? STATUS.OK : STATUS.WARN}>
+                        {alreadyImported || result
+                            ? "Committed"
+                            : reconciled
+                                ? "Ready to commit"
+                                : "Needs attention"}
+                    </StatusBadge>
+                    <p className="cm-commit-summary">
+                        {run.counts.faRows.toLocaleString()} transaction row(s) for {run.businessDate}
+                        {openExceptions > 0
+                            ? ` · ${openExceptions.toLocaleString()} exception(s) still open`
+                            : " · matching completed with no open exceptions"}
+                        .
                     </p>
-                    {result.bulkJobId ? (
-                        <p style={{ margin: "6px 0 0", fontSize: "12.5px" }}>
-                            Bulk write job <code>{result.bulkJobId}</code> is running. The
-                            downstream jobs are queued when it finishes.
+                </div>
+
+                <div className="cm-gate-row">
+                    <button
+                        type="button"
+                        className={reconciled ? "cm-primary" : "cm-primary cm-primary--warn"}
+                        onClick={handleImport}
+                        disabled={locked}
+                    >
+                        {busy ? "Committing…" : "Commit Transaction Files"}
+                    </button>
+
+                    {/* A run that never finished comparing is a different thing from one
+                        that finished and found differences, and the count alone cannot
+                        say which it was. */}
+                    {!reconciled && openExceptions === 0 && !alreadyImported && !result ? (
+                        <p className="cm-unreconciled">
+                            This run is {run.status}, so the two sides were never fully compared.
+                        </p>
+                    ) : null}
+
+                    {alreadyImported && !result ? (
+                        <p className="cm-unreconciled">
+                            <strong>Already imported.</strong> This run's file has been handed to
+                            the import pipeline — committing again is blocked to avoid a duplicate
+                            load.
                         </p>
                     ) : null}
                 </div>
-            ) : null}
 
-            {error ? <UploadErrorDetails message={error.message} detail={error.detail} /> : null}
-        </div>
+                {result ? (
+                    <div className="cm-verdict ok">
+                        <p className="cm-verdict-lead">
+                            {result.message || "Import started."}
+                        </p>
+                        {result.bulkJobId ? (
+                            <p className="cm-verdict-sub">
+                                Bulk write job <code>{result.bulkJobId}</code> is running. The
+                                downstream jobs are queued when it finishes.
+                            </p>
+                        ) : null}
+                    </div>
+                ) : null}
+
+                {error ? <UploadErrorDetails message={error.message} detail={error.detail} /> : null}
+            </div>
+        </>
     );
 };
 

@@ -15,7 +15,11 @@
  * existing error renderer works without changes.
  */
 
-import { CUSTODY_FILE_TYPE, PREDEFINED_SCHEMES } from "../../util/custodyMatch/constants.js";
+import {
+  FA_FILE_TYPE,
+  FA_FILE_TYPE_LABEL,
+  PREDEFINED_SCHEMES,
+} from "../../util/custodyMatch/constants.js";
 import { PROFILE_TYPE } from "../../util/custodyMatch/fieldMap.js";
 import { parseFaFile, validateFaHeader } from "../../util/custodyMatch/parseFA.js";
 import { parseCustodyFile } from "../../util/custodyMatch/parseCustody.js";
@@ -23,6 +27,7 @@ import {
   BUCKET_NAME,
   CUSTODY_FILE_TYPES,
   CUSTODY_HISTORY_LIMIT,
+  FA_FILE_TYPES,
   SIDE_KEY,
   buildCustodyKey,
   buildFaRawKey,
@@ -30,6 +35,7 @@ import {
   parseCustodyKey,
   parseFaRawKey,
   deleteDaySide,
+  deleteFaRawOfType,
   deleteKeys,
   getBucket,
   getBuffer,
@@ -323,18 +329,33 @@ export const uploadFaFile = async (req, res) => {
       });
     }
 
+    /*
+     * Which transaction file this is. Mutual fund transactions arrive in their
+     * own fund-accounting file, read through its own mapping — the two layouts
+     * differ, so one mapping cannot describe both.
+     */
+    const faFileType = String(req.body?.fileType || FA_FILE_TYPE.REGULAR).toUpperCase();
+    if (!FA_FILE_TYPES.includes(faFileType)) {
+      return fail(res, 400, {
+        code: "BAD_FILE_TYPE",
+        message: `fileType must be one of ${FA_FILE_TYPES.join(", ")}; received "${req.body?.fileType || ""}".`,
+      });
+    }
+    const profileType =
+      faFileType === FA_FILE_TYPE.MUTUAL_FUND ? PROFILE_TYPE.FA_MUTUAL_FUND : PROFILE_TYPE.FA;
+
     // The saved mapping decides which column is which. Unsaved -> the built-in
     // 26-column template, i.e. exactly the behaviour before mapping existed.
     const profiles = await loadFieldMapProfiles(catalystApp);
-    const faProfile = profiles[PROFILE_TYPE.FA];
+    const faProfile = profiles[profileType];
 
     // Header contract first: a wrong header makes every row error meaningless.
-    const headerError = validateFaHeader(file.data, { profile: faProfile });
+    const headerError = validateFaHeader(file.data, { profile: faProfile, type: profileType });
     if (headerError) {
       return fail(res, 400, { ...headerError, fileName: file.name });
     }
 
-    const firstPass = await parseFaFile(file.data, { profile: faProfile });
+    const firstPass = await parseFaFile(file.data, { profile: faProfile, type: profileType });
     if (firstPass.fileError) {
       return fail(res, 400, { ...firstPass.fileError, fileName: file.name });
     }
@@ -346,7 +367,11 @@ export const uploadFaFile = async (req, res) => {
     const { businessDate, inferred } = resolved;
 
     // Re-parse against the resolved date so off-date rows are warned about.
-    const parsed = await parseFaFile(file.data, { businessDate, profile: faProfile });
+    const parsed = await parseFaFile(file.data, {
+      businessDate,
+      profile: faProfile,
+      type: profileType,
+    });
     if (!parsed.ok) {
       return fail(res, 400, {
         code: "VALIDATION_FAILED",
@@ -361,32 +386,49 @@ export const uploadFaFile = async (req, res) => {
     const day = await listDay(catalystApp, businessDate);
     const wantsReplace = String(req.body?.replace || "").toLowerCase() === "true";
 
-    if (day.fa.hasFile && !wantsReplace) {
+    /*
+     * Only a file of the SAME type conflicts. The regular and mutual fund
+     * transaction files are both expected for a date, so the presence of one
+     * must not read as the other already being there.
+     */
+    const existingOfType = day.fa.latestByType?.[faFileType] || null;
+
+    if (existingOfType && !wantsReplace) {
       return fail(res, 409, {
         code: "FILE_ALREADY_EXISTS",
-        message: `A transaction file is already stored for ${businessDate}.`,
+        message: `A ${FA_FILE_TYPE_LABEL[faFileType]} file is already stored for ${businessDate}.`,
         businessDate,
-        existing: day.fa.raw.map((f) => ({
-          key: f.key,
-          fileName: f.originalFileName,
-          uploadedAtMs: f.uploadedAtMs,
-          sizeBytes: f.sizeBytes,
-        })),
+        fileType: faFileType,
+        existing: [
+          {
+            key: existingOfType.key,
+            fileName: existingOfType.originalFileName,
+            uploadedAtMs: existingOfType.uploadedAtMs,
+            sizeBytes: existingOfType.sizeBytes,
+          },
+        ],
         hint: "Re-send with replace=true to delete the stored file and use this one instead.",
       });
     }
 
     const bucket = getBucket(catalystApp);
 
-    if (day.fa.hasFile) {
-      // Clears raw, final and difference files for the date — a stale final must
-      // never be paired with a new raw file.
-      await deleteDaySide(catalystApp, businessDate, SIDE_KEY.FA, { bucket });
+    if (existingOfType) {
+      // Clears this type's raw file plus the final and difference files — a
+      // stale final must never be paired with a new raw file.
+      await deleteFaRawOfType(catalystApp, businessDate, faFileType, { bucket });
     }
+
+    // The span of transaction dates the rows cover, stored on the key so the
+    // screen can name the file by what is in it without reopening it.
+    const { coveredFrom, coveredTo } = coveredRange(parsed.rows, businessDate);
 
     const uploadedAtMs = Date.now();
     const key = buildFaRawKey({
       businessDate,
+      fileType: faFileType,
+      coveredFrom,
+      coveredTo,
       originalFileName: file.name,
       uploadedAtMs,
     });
@@ -397,10 +439,11 @@ export const uploadFaFile = async (req, res) => {
 
     return res.status(200).json({
       success: true,
-      message: `Transaction file staged for ${businessDate}. It has not been imported.`,
+      message: `The ${FA_FILE_TYPE_LABEL[faFileType]} file is staged for ${businessDate}. It has not been imported.`,
       businessDate,
       businessDateInferred: inferred,
       key,
+      fileType: faFileType,
       fileName: file.name,
       uploadedAtMs,
       sizeBytes: file.data.length,
@@ -420,10 +463,10 @@ export const uploadFaFile = async (req, res) => {
 
 /**
  * POST /api/custody-match/custody-file
- * form-data: file, scheme, fileType (RESIDENTIAL|NDPMS), [businessDate], [replace=true]
+ * form-data: file, scheme, fileType (RESIDENTIAL|NDPMS|MUTUAL_FUND), [businessDate], [replace=true]
  *
- * One deal-allocation file per scheme. fileType selects which of the two
- * custodian layouts to expect inside it.
+ * One deal-allocation file per scheme. fileType selects which custodian layout
+ * to expect inside it, and which field mapping reads it.
  */
 export const uploadCustodyFile = async (req, res) => {
   try {
@@ -454,7 +497,7 @@ export const uploadCustodyFile = async (req, res) => {
     if (!CUSTODY_FILE_TYPES.includes(fileType)) {
       return fail(res, 400, {
         code: "BAD_FILE_TYPE",
-        message: `fileType must be ${CUSTODY_FILE_TYPE.RESIDENTIAL} or ${CUSTODY_FILE_TYPE.NDPMS}; received "${req.body?.fileType || ""}".`,
+        message: `fileType must be one of ${CUSTODY_FILE_TYPES.join(", ")}; received "${req.body?.fileType || ""}".`,
       });
     }
 

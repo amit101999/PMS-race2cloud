@@ -1,25 +1,44 @@
 /* Custody Matching — gated upload workflow.
    Sits alongside TempTransaction.css and reuses its card look so the new stages
-   read as part of the same screen rather than a bolted-on panel. */
+   read as part of the same screen rather than a bolted-on panel. Colors and
+   spacing come from tokens.css (.txn-ops), imported once by TempTransaction.css. */
 
-/* Every card on this screen is .temp-transaction-card from TempTransaction.css,
-   so the custody stages, Recent Uploads and the reports read as one page rather
-   than as two designs stacked. Only the side-by-side columns differ: full card
-   padding at half width leaves too little room for the controls. */
 .cm-split .temp-transaction-card {
-    padding: 28px;
+    padding: 22px 24px;
 }
 
 .temp-transaction-card + .temp-transaction-card,
 .cm-split + .temp-transaction-card {
-    margin-top: 24px;
+    margin-top: 16px;
+}
+
+/* ── section headers (Files & Validation / Reconciliation / Commit) ─────── */
+
+.txo-section-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 16px;
+    margin: 26px 0 12px;
+}
+
+.txo-section-head--tight {
+    margin-top: 18px;
+    margin-bottom: 10px;
+}
+
+.txo-section-head h2 {
+    margin: 0;
+    font-size: 15.5px;
+    font-weight: 600;
+    color: var(--txo-text);
 }
 
 .cm-sub {
     margin: 0 0 16px;
     font-size: 13px;
     line-height: 1.55;
-    color: #6b7280;
+    color: var(--txo-text-muted);
     max-width: 70ch;
 }
 
@@ -31,171 +50,64 @@
     flex-wrap: wrap;
 }
 
-.cm-date {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    font-size: 12px;
-    font-weight: 600;
-    color: #6b7280;
-    white-space: nowrap;
-}
-
-.cm-date input {
-    padding: 7px 10px;
-    border: 1px solid #d1d5db;
-    border-radius: 8px;
-    font-size: 14px;
-    color: #111827;
-}
-
-/* ── custodian files ──────────────────────────────────────────────────── */
-
-/* One row per uploaded file. The list scrolls in place rather than growing the
-   card without limit, so "Add custodian file" and the gate below it stay
-   reachable however many files a day needs. */
-/* The shared table, wrapped so a long list scrolls in place instead of pushing
-   "Add custodian file" and the gate below it off the card. */
-.cm-filetable {
-    display: block;
-    max-height: 340px;
-    overflow-y: auto;
-}
-
-.cm-filetable th {
-    /* Sticky so the headings stay put while the list scrolls. Everything else
-       comes from .upload-history-table. */
-    position: sticky;
-    top: 0;
-    z-index: 1;
-}
-
-.cm-cell-scheme {
-    font-weight: 600;
-    color: #111827;
-    white-space: nowrap;
-}
-
-.cm-cell-dates {
-    white-space: nowrap;
-    color: #374151;
-}
-
-/* The file name is the only column that can be long, so it is the one that
-   gives way — everything else keeps its natural width. */
-.cm-cell-file {
-    max-width: 220px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    color: #166534;
-}
-
-.cm-remove {
-    width: 28px;
-    height: 28px;
-    border: 1px solid #e5e7eb;
-    background: #fff;
-    border-radius: 8px;
-    font-size: 18px;
-    line-height: 1;
-    color: #6b7280;
-    cursor: pointer;
-}
-
-.cm-remove:hover:not(:disabled) {
-    background: #fee2e2;
-    color: #991b1b;
-    border-color: #fecaca;
-}
-
-/* Separated by a rule rather than a second outline inside the card. */
-.cm-addfile {
-    margin-top: 18px;
-    padding-top: 18px;
-    border-top: 1px solid #f1f3f4;
-}
-
-.cm-addfile-title {
-    display: block;
-    font-size: 12px;
-    font-weight: 600;
-    color: #374151;
-    margin-bottom: 8px;
-}
-
-.cm-addfile-controls {
+.cm-card-head-title {
     display: flex;
     align-items: center;
     gap: 10px;
     flex-wrap: wrap;
 }
 
-/* The chooser is the action, so it sits at the far right of the row. */
-.cm-addfile-controls > input[type="file"] {
-    flex: 0 0 auto;
-    margin-left: auto;
-    font-size: 12px;
-    max-width: 100%;
+.cm-card-head-title h3 {
+    margin: 0;
 }
 
-.cm-addfile-busy {
-    display: block;
-    margin-top: 8px;
-    font-size: 12px;
-    color: #6b7280;
-}
-
-.cm-scheme {
-    flex: 1 1 200px;
-    min-width: 160px;
-    padding: 8px 10px;
-    border: 1px solid #d1d5db;
-    border-radius: 8px;
-    font-size: 14px;
-}
-
-.cm-scheme:disabled,
-.cm-type:disabled {
-    background: #f3f4f6;
-    color: #4b5563;
-}
-
-.cm-type {
-    padding: 8px 10px;
-    border: 1px solid #d1d5db;
-    border-radius: 8px;
-    font-size: 14px;
-    background: #fff;
-}
-
-/* ── transaction file ─────────────────────────────────────────────────── */
-
-.cm-fa {
+.cm-date {
     display: flex;
     align-items: center;
-    gap: 16px;
-    flex-wrap: wrap;
+    gap: 8px;
+    font-size: 12.5px;
+    font-weight: 600;
+    color: var(--txo-text-muted);
+    white-space: nowrap;
 }
 
-/* Same remove control as a custodian row, pushed to the far edge of the card so
-   the two sides read alike. */
-.cm-fa .cm-remove {
-    margin-left: auto;
-}
-
-.cm-staged {
+.cm-date input {
+    padding: 5px 9px;
+    border: 1px solid var(--txo-border-strong);
+    border-radius: var(--txo-radius-sm);
     font-size: 13px;
-    color: #166534;
-    font-weight: 500;
+    font-family: "IBM Plex Mono", monospace;
+    color: var(--txo-text);
 }
 
-.cm-staged.muted {
-    color: #9ca3af;
-    font-weight: 400;
+/* ── gate (Reconciliation) ───────────────────────────────────────────── */
+
+.cm-gate-summary {
+    display: flex;
+    gap: 28px;
+    flex-wrap: wrap;
+    padding-bottom: 16px;
+    margin-bottom: 16px;
+    border-bottom: 1px solid var(--txo-border);
 }
 
-/* ── gate ─────────────────────────────────────────────────────────────── */
+.cm-gate-fact {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.cm-gate-fact-label {
+    font-size: 11.5px;
+    font-weight: 600;
+    color: var(--txo-text-faint);
+}
+
+.cm-gate-fact-value {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--txo-text);
+}
 
 .cm-gate-row {
     display: flex;
@@ -205,31 +117,55 @@
 }
 
 .cm-primary {
-    padding: 11px 22px;
+    padding: 10px 20px;
     border: none;
-    border-radius: 8px;
-    background: #2563eb;
+    border-radius: var(--txo-radius-md);
+    background: var(--txo-primary);
     color: #fff;
     font-size: 14px;
     font-weight: 600;
     cursor: pointer;
     white-space: nowrap;
+    transition: background-color 0.15s ease;
+}
+
+.cm-primary:hover:not(:disabled) {
+    background: var(--txo-primary-hover);
 }
 
 .cm-primary:disabled {
-    background: #cbd5e1;
+    background: #ccd1d9;
     cursor: not-allowed;
+}
+
+.cm-primary--warn {
+    background: var(--txo-warning);
+}
+
+.cm-primary--warn:hover:not(:disabled) {
+    background: #7a5000;
 }
 
 .cm-secondary {
     margin-top: 10px;
     padding: 7px 14px;
-    border: 1px solid #d1d5db;
-    background: #fff;
-    border-radius: 8px;
+    border: 1px solid var(--txo-border-strong);
+    background: var(--txo-surface);
+    border-radius: var(--txo-radius-md);
     font-size: 13px;
     font-weight: 600;
+    color: var(--txo-text);
     cursor: pointer;
+}
+
+.cm-secondary:hover {
+    border-color: var(--txo-primary);
+    color: var(--txo-primary);
+}
+
+.cm-link-btn {
+    display: inline-block;
+    text-decoration: none;
 }
 
 .cm-blockers {
@@ -237,7 +173,7 @@
     padding-left: 1.15rem;
     font-size: 13px;
     line-height: 1.7;
-    color: #92400e;
+    color: var(--txo-warning);
 }
 
 /* ── progress ─────────────────────────────────────────────────────────── */
@@ -245,29 +181,26 @@
 .cm-progress {
     margin-top: 18px;
     padding: 14px 16px;
-    border-radius: 10px;
-    background: #f8fafc;
-    border: 1px solid #e2e8f0;
+    border-radius: var(--txo-radius-md);
+    background: var(--txo-surface-sunken);
+    border: 1px solid var(--txo-border);
 }
 
 .cm-progress-head {
     display: flex;
     justify-content: space-between;
-    align-items: baseline;
+    align-items: center;
     gap: 12px;
-    font-size: 14px;
-    color: #111827;
 }
 
 .cm-run-id {
-    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
     font-size: 11px;
-    color: #9ca3af;
+    color: var(--txo-text-faint);
 }
 
 .cm-bar {
-    height: 6px;
-    background: #e2e8f0;
+    height: 5px;
+    background: var(--txo-border);
     border-radius: 999px;
     overflow: hidden;
     margin: 10px 0;
@@ -275,7 +208,7 @@
 
 .cm-bar-fill {
     height: 100%;
-    background: #2563eb;
+    background: var(--txo-info);
     transition: width 0.3s ease;
 }
 
@@ -283,35 +216,88 @@
     display: flex;
     gap: 18px;
     flex-wrap: wrap;
-    margin-top: 8px;
+    margin-top: 10px;
     font-size: 12.5px;
-    color: #475569;
-    font-variant-numeric: tabular-nums;
+    color: var(--txo-text-muted);
 }
 
 .cm-stats .warn {
-    color: #92400e;
-    font-weight: 600;
+    color: var(--txo-warning);
 }
 
 .cm-verdict {
     margin: 12px 0 0;
     padding: 12px 14px;
-    border-radius: 8px;
+    border-radius: var(--txo-radius-md);
     font-size: 13.5px;
     line-height: 1.55;
 }
 
 .cm-verdict.ok {
-    background: #f0fdf4;
-    color: #166534;
-    border: 1px solid #bbf7d0;
+    background: var(--txo-success-bg);
+    color: var(--txo-success);
+    border: 1px solid #bfe5cc;
+}
+
+.cm-verdict.warn {
+    background: var(--txo-warning-bg);
+    color: var(--txo-warning);
+    border: 1px solid #f3dfab;
 }
 
 .cm-verdict.bad {
-    background: #fef2f2;
-    color: #991b1b;
-    border: 1px solid #fecaca;
+    background: var(--txo-error-bg);
+    color: var(--txo-error);
+    border: 1px solid #f2c6c3;
+}
+
+.cm-verdict-lead {
+    margin: 0;
+}
+
+.cm-verdict-sub {
+    margin: 6px 0 0;
+    font-size: 12.5px;
+}
+
+.cm-verdict-title {
+    margin: 0 0 10px;
+    font-size: 14.5px;
+    font-weight: 700;
+    color: var(--txo-text);
+}
+
+.cm-verdict-facts {
+    margin: 0 0 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.cm-verdict-facts dt {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.03em;
+    color: var(--txo-text-faint);
+}
+
+.cm-verdict-facts dd {
+    margin: 1px 0 0;
+    font-size: 13.5px;
+    color: var(--txo-text);
+    line-height: 1.5;
+}
+
+.cm-verdict-actions {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+
+.cm-technical-ref {
+    margin: 12px 0 0;
+    font-size: 11.5px;
+    color: var(--txo-text-faint);
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -322,35 +308,15 @@
 
 /* ── exception grid ───────────────────────────────────────────────────── */
 
-.cm-count {
-    color: #b91c1c;
-    font-weight: 700;
-}
-
-/* The exception grid, the reports list and Recent Uploads all render through
-   .upload-history-table so the three read as one screen. Only what that table
-   does not already say lives here. */
-.upload-history-table .mono {
-    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-    font-size: 12.5px;
-    white-space: nowrap;
-}
-
 .upload-history-table .num.diff {
-    color: #b91c1c;
+    color: var(--txo-error);
     font-weight: 700;
-}
-
-.cm-empty {
-    text-align: center;
-    padding: 28px 12px;
-    color: #9ca3af;
 }
 
 .cm-preview-note {
     margin: 12px 0 0;
     font-size: 12.5px;
-    color: #6b7280;
+    color: var(--txo-text-muted);
 }
 
 .cm-tag {
@@ -358,27 +324,27 @@
     font-size: 11px;
     font-weight: 600;
     padding: 3px 8px;
-    border-radius: 6px;
+    border-radius: var(--txo-radius-sm);
     white-space: nowrap;
-    background: #f3f4f6;
-    color: #374151;
+    background: var(--txo-neutral-bg);
+    color: var(--txo-neutral);
 }
 
 .cm-tag.quantity_mismatch {
-    background: #fef3c7;
-    color: #92400e;
+    background: var(--txo-warning-bg);
+    color: var(--txo-warning);
 }
 
 .cm-tag.missing_in_custody,
 .cm-tag.missing_in_fa {
-    background: #fee2e2;
-    color: #991b1b;
+    background: var(--txo-error-bg);
+    color: var(--txo-error);
 }
 
 .cm-tag.date_mismatch,
 .cm-tag.type_mismatch {
-    background: #e0e7ff;
-    color: #3730a3;
+    background: var(--txo-info-bg);
+    color: var(--txo-info);
 }
 
 .cm-tag.unmapped_code {
@@ -386,38 +352,259 @@
     color: #6b21a8;
 }
 
-/* ── two-column stage: custody left, transaction file right ───────────── */
+/* ── two-column stage: Fund Accounting and Custodian, balanced ─────────── */
 
 .cm-split {
     display: grid;
-    grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr);
-    gap: 20px;
-    align-items: start;
+    grid-template-columns: 1fr 1fr;
+    gap: 18px;
+    align-items: stretch;
 }
 
-/* Heading and date sit above the panel, so they read as the section's label
-   rather than as content inside it. */
-.cm-col-head {
+.cm-col {
     display: flex;
-    align-items: flex-end;
-    justify-content: space-between;
-    gap: 16px;
-    flex-wrap: wrap;
-    margin-bottom: 10px;
-    min-height: 42px;
+    flex-direction: column;
 }
 
-.cm-col-head h3 {
-    margin: 0;
-    font-size: 17px;
+.cm-col-title {
+    margin: 0 0 8px;
+    font-size: 14px;
     font-weight: 600;
-    color: #111827;
+    color: var(--txo-text);
+}
+
+/* Both panels hold this height regardless of how many files are in the list —
+   the file list scrolls internally instead of growing the card. */
+.cm-filecard {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 300px;
 }
 
 @media (max-width: 1024px) {
     .cm-split {
         grid-template-columns: 1fr;
     }
+}
+
+/* ── one upload component, used identically by both panels ────────────── */
+
+.up-card {
+    gap: 14px;
+}
+
+.up-controls {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+.up-select {
+    padding: 7px 10px;
+    border: 1px solid var(--txo-border-strong);
+    border-radius: var(--txo-radius-sm);
+    font-size: 13.5px;
+    color: var(--txo-text);
+    background: var(--txo-surface);
+    min-width: 150px;
+}
+
+.up-select--text {
+    flex: 1 1 200px;
+}
+
+.up-select:disabled {
+    background: var(--txo-surface-sunken);
+    color: var(--txo-text-muted);
+    cursor: not-allowed;
+}
+
+.up-select:focus-visible {
+    outline: none;
+    border-color: var(--txo-primary);
+    box-shadow: 0 0 0 3px var(--txo-primary-tint);
+}
+
+/* The drop zone — one real, fully accessible file input stretched over the
+   whole zone (opacity 0), so a click or a Tab+Enter anywhere in it opens the
+   browser's file dialog exactly as a plain <input type="file"> would. The
+   visual content underneath is decorative only. */
+.up-zone {
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 108px;
+    border: 1.5px dashed var(--txo-border-strong);
+    border-radius: var(--txo-radius-md);
+    background: var(--txo-surface-sunken);
+    transition: border-color 0.15s ease, background-color 0.15s ease;
+}
+
+.up-zone:hover {
+    border-color: var(--txo-text-faint);
+}
+
+.up-zone.is-drag {
+    border-color: var(--txo-primary);
+    background: var(--txo-primary-tint);
+}
+
+.up-zone-input {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    opacity: 0;
+    cursor: pointer;
+}
+
+.up-zone-input:disabled {
+    cursor: not-allowed;
+}
+
+/* A visible focus ring on the zone itself when the (invisible) input inside
+   it has keyboard focus — Tab reaches a real input, so this is a real
+   focus-visible state, not a simulated one. */
+.up-zone-input:focus-visible {
+    outline: none;
+}
+
+.up-zone-input:focus-visible ~ .up-zone-visual {
+    outline: 2px solid var(--txo-primary);
+    outline-offset: 3px;
+    border-radius: var(--txo-radius-sm);
+}
+
+.up-zone-visual {
+    pointer-events: none;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    padding: 16px;
+    color: var(--txo-text-faint);
+}
+
+.up-zone-visual svg {
+    color: var(--txo-primary);
+    margin-bottom: 2px;
+}
+
+.up-zone-title {
+    font-size: 13.5px;
+    font-weight: 600;
+    color: var(--txo-text);
+}
+
+.up-zone-sub {
+    font-size: 12px;
+    color: var(--txo-text-faint);
+}
+
+.up-zone-browse {
+    color: var(--txo-primary);
+    font-weight: 600;
+    text-decoration: underline;
+    text-decoration-color: transparent;
+}
+
+.up-zone:hover .up-zone-browse {
+    text-decoration-color: currentColor;
+}
+
+/* The staged/uploaded file list — capped and internally scrollable so a
+   busy day's custodian files never push the page down. */
+.up-filelist-wrap {
+    margin-top: 2px;
+}
+
+.up-filelist-head {
+    font-size: 11.5px;
+    font-weight: 600;
+    color: var(--txo-text-faint);
+    margin-bottom: 6px;
+}
+
+.up-filelist {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    max-height: 168px;
+    overflow-y: auto;
+    border: 1px solid var(--txo-border);
+    border-radius: var(--txo-radius-sm);
+}
+
+.up-file-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 9px 10px;
+    background: var(--txo-surface);
+    border-bottom: 1px solid var(--txo-border);
+}
+
+.up-file-row:last-child {
+    border-bottom: none;
+}
+
+.up-file-row svg {
+    flex-shrink: 0;
+    color: var(--txo-text-faint);
+}
+
+.up-file-main {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    min-width: 0;
+    flex: 1;
+}
+
+.up-file-name {
+    font-size: 12.5px;
+    font-weight: 500;
+    color: var(--txo-text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.up-file-meta {
+    font-size: 11px;
+    color: var(--txo-text-faint);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.up-file-remove {
+    flex-shrink: 0;
+    width: 22px;
+    height: 22px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: none;
+    background: transparent;
+    border-radius: var(--txo-radius-sm);
+    color: var(--txo-text-faint);
+    font-size: 15px;
+    line-height: 1;
+    cursor: pointer;
+}
+
+.up-file-remove:hover:not(:disabled) {
+    background: var(--txo-error-bg);
+    color: var(--txo-error);
+}
+
+.up-file-remove:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
 }
 
 /* Escape hatch from "+ New scheme…" back to the picker. */
@@ -427,7 +614,7 @@
     padding: 0 2px;
     font-size: 12px;
     font-weight: 600;
-    color: #2563eb;
+    color: var(--txo-info);
     cursor: pointer;
     white-space: nowrap;
 }
@@ -437,26 +624,15 @@
 }
 
 .cm-scheme-back:disabled {
-    color: #9ca3af;
+    color: var(--txo-text-faint);
     cursor: not-allowed;
-}
-
-/* Importing a day that has not reconciled is allowed, but it should not look
-   like the ordinary path. */
-.cm-primary--warn {
-    background: #b45309;
-    border-color: #b45309;
-}
-
-.cm-primary--warn:hover:not(:disabled) {
-    background: #92400e;
 }
 
 .cm-unreconciled {
     margin: 0;
     font-size: 13px;
     line-height: 1.55;
-    color: #92400e;
+    color: var(--txo-warning);
     max-width: 68ch;
 }
 
@@ -465,10 +641,10 @@
 .cm-warnings {
     margin-top: 10px;
     padding: 10px 12px;
-    border-radius: 8px;
-    background: #fef3c7;
-    border: 1px solid #fde68a;
-    color: #92400e;
+    border-radius: var(--txo-radius-md);
+    background: var(--txo-warning-bg);
+    border: 1px solid #f3dfab;
+    color: var(--txo-warning);
     font-size: 12.5px;
     line-height: 1.55;
 }
@@ -478,15 +654,24 @@
 }
 
 .cm-warn-cols {
-    font-family: "SFMono-Regular", Consolas, monospace;
+    font-family: "IBM Plex Mono", monospace;
     font-size: 12px;
 }
 
-/* The size trails the file name in its cell rather than taking a column of
-   its own — it is a detail, not something anyone scans down. */
-.cm-file-size {
-    margin-left: 8px;
-    color: #6b7280;
+/* ── commit ───────────────────────────────────────────────────────────── */
+
+.cm-commit-head {
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-bottom: 16px;
+}
+
+.cm-commit-summary {
+    margin: 0;
+    font-size: 13.5px;
+    color: var(--txo-text-muted);
 }
 
 /* ── choose which dates a run compares ────────────────────────────────── */
@@ -499,19 +684,26 @@
     width: min(520px, calc(100vw - 32px));
     max-height: calc(100vh - 64px);
     overflow-y: auto;
-    background: #fff;
-    border: 1px solid #e5e7eb;
-    border-radius: 12px;
+    background: var(--txo-surface);
+    border: 1px solid var(--txo-border);
+    border-radius: var(--txo-radius-md);
     box-shadow: 0 12px 32px rgba(16, 24, 40, 0.18);
-    padding: 24px;
+    padding: 22px;
     z-index: 60;
+}
+
+.cm-scrim {
+    position: fixed;
+    inset: 0;
+    background: rgba(16, 20, 28, 0.4);
+    z-index: 59;
 }
 
 .cm-dialog h3 {
     margin: 0 0 4px;
-    font-size: 17px;
+    font-size: 16px;
     font-weight: 600;
-    color: #111827;
+    color: var(--txo-text);
 }
 
 .cm-dialog-actions {
@@ -526,7 +718,7 @@
     padding: 0;
     font-size: 12.5px;
     font-weight: 600;
-    color: #2563eb;
+    color: var(--txo-info);
     cursor: pointer;
 }
 
@@ -538,15 +730,15 @@
     list-style: none;
     margin: 0 0 14px;
     padding: 0;
-    border: 1px solid #e5e7eb;
-    border-radius: 8px;
+    border: 1px solid var(--txo-border);
+    border-radius: var(--txo-radius-sm);
     max-height: 260px;
     overflow-y: auto;
 }
 
 .cm-datelist li {
     padding: 9px 12px;
-    border-bottom: 1px solid #f3f4f6;
+    border-bottom: 1px solid var(--txo-border);
 }
 
 .cm-datelist li:last-child {
@@ -561,36 +753,36 @@
 }
 
 .cm-date-label {
-    font-family: "SFMono-Regular", Consolas, monospace;
+    font-family: "IBM Plex Mono", monospace;
     font-size: 13px;
     font-weight: 600;
-    color: #111827;
+    color: var(--txo-text);
 }
 
 .cm-date-counts {
     font-size: 12px;
-    color: #6b7280;
+    color: var(--txo-text-muted);
 }
 
 .cm-date-note {
     display: block;
     margin: 3px 0 0 26px;
     font-size: 11.5px;
-    color: #92400e;
+    color: var(--txo-warning);
 }
 
 .cm-dialog-summary {
     margin: 0 0 16px;
     font-size: 12.5px;
-    color: #374151;
+    color: var(--txo-text-muted);
 }
 
 .cm-dialog-error {
     padding: 10px 12px;
     margin-bottom: 12px;
-    border-radius: 8px;
-    background: #fee2e2;
-    color: #991b1b;
+    border-radius: var(--txo-radius-sm);
+    background: var(--txo-error-bg);
+    color: var(--txo-error);
     font-size: 12.5px;
 }
 
@@ -602,40 +794,116 @@
 
 .cm-muted {
     font-size: 13px;
-    color: #6b7280;
+    color: var(--txo-text-muted);
+}
+
+/* ── structured upload/run errors (UploadErrorDetails) ────────────────── */
+
+.cm-error-block {
+    margin-top: 16px;
+    padding: 12px 14px;
+    background: var(--txo-error-bg);
+    color: var(--txo-error);
+    border-radius: var(--txo-radius-md);
+    border: 1px solid #f2c6c3;
+    font-size: 13.5px;
+    line-height: 1.55;
+}
+
+.cm-error-message {
+    margin: 0 0 8px;
+    white-space: pre-line;
+    font-weight: 600;
+}
+
+.cm-error-list {
+    margin: 8px 0 0;
+    padding-left: 1.25rem;
+    line-height: 1.7;
+}
+
+.cm-error-note {
+    margin: 8px 0 0;
+    font-size: 13px;
+}
+
+.cm-error-rows {
+    margin-top: 12px;
+}
+
+.cm-error-rows-title {
+    display: block;
+    margin-bottom: 8px;
+}
+
+.cm-error-rows-scroll {
+    max-height: 240px;
+    overflow-y: auto;
+    border-radius: var(--txo-radius-sm);
+    border: 1px solid #f2c6c3;
+}
+
+.cm-error-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12.5px;
+    background: var(--txo-surface);
+}
+
+.cm-error-table thead tr {
+    text-align: left;
+    background: #f6dcda;
+}
+
+.cm-error-table th,
+.cm-error-table td {
+    padding: 6px 8px;
+}
+
+.cm-error-fields {
+    margin-top: 4px;
+}
+
+.cm-error-code {
+    background: #f6dcda;
+    padding: 2px 6px;
+    border-radius: var(--txo-radius-sm);
+    margin-right: 6px;
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 12px;
+}
+
+.cm-error-hint {
+    margin: 12px 0 0;
+    padding: 10px 12px;
+    background: var(--txo-warning-bg);
+    border: 1px solid #f3dfab;
+    border-radius: var(--txo-radius-md);
+    font-size: 13px;
+    color: var(--txo-warning);
 }
 
 /* ── previous difference reports ──────────────────────────────────────── */
 
 .cm-notmatching {
     font-weight: 600;
-    color: #92400e;
+    color: var(--txo-warning);
 }
 
-/* A report kept for reference after a later run took over the date. */
 .cm-report-old {
     display: inline-block;
     margin-left: 8px;
-    padding: 1px 6px;
-    border-radius: 999px;
-    background: #f3f4f6;
-    color: #6b7280;
-    font-size: 10.5px;
-    font-weight: 600;
-    letter-spacing: 0.02em;
-    text-transform: uppercase;
 }
-
 
 /* Match handed back a report that already existed rather than making a second
    copy of the same answer. Information, not a problem. */
 .cm-reused {
     margin-top: 12px;
     padding: 10px 12px;
-    border: 1px solid #bfdbfe;
-    border-radius: 8px;
-    background: #eff6ff;
-    color: #1e40af;
+    border: 1px solid #bfd4ee;
+    border-radius: var(--txo-radius-md);
+    background: var(--txo-info-bg);
+    color: var(--txo-info);
     font-size: 13px;
     line-height: 1.55;
 }

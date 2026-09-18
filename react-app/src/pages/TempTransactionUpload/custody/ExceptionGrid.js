@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useState } from "react";
 
 import UploadErrorDetails from "./UploadErrorDetails";
+import StatusBadge, { STATUS } from "./StatusBadge";
 import * as api from "./api";
 
 /* Matches Recent Uploads: a short preview, no pagination. The full report is
@@ -96,13 +97,13 @@ const ExceptionGrid = ({ run, onCountChange }) => {
     if (run.counts.exceptions === 0) return null;
 
     return (
-        <div className="temp-transaction-card upload-history-card">
+        <div className="temp-transaction-card upload-history-card" id="exception-details">
             <div className="cm-card-head">
-                <div>
-                    <h3>
-                        Exception details{" "}
-                        <span className="cm-count">({run.counts.exceptions.toLocaleString()})</span>
-                    </h3>
+                <div className="cm-card-head-title">
+                    <h3>Exception details</h3>
+                    <StatusBadge tone={STATUS.WARN}>
+                        {run.counts.exceptions.toLocaleString()} open
+                    </StatusBadge>
                 </div>
                 <button
                     type="button"
@@ -110,7 +111,7 @@ const ExceptionGrid = ({ run, onCountChange }) => {
                     onClick={handleExport}
                     disabled={exporting}
                 >
-                    {exporting ? "Preparing…" : "Export"}
+                    {exporting ? "Preparing…" : "Export difference report"}
                 </button>
             </div>
 
@@ -160,9 +161,9 @@ const ExceptionGrid = ({ run, onCountChange }) => {
                                             </span>
                                         </td>
                                         <td>
-                                            <span className={`cm-pill ${r.status === "RESOLVED" ? "ok" : "wait"}`}>
-                                            {r.status}
-                                            </span>
+                                            <StatusBadge tone={r.status === "RESOLVED" ? STATUS.OK : STATUS.WARN}>
+                                                {r.status === "RESOLVED" ? "Resolved" : "Open"}
+                                            </StatusBadge>
                                         </td>
                                     </tr>
                                 );

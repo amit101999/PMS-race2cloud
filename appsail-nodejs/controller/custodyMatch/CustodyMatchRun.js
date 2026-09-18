@@ -10,7 +10,7 @@
  *   Gate 2  POST /run/:id/proceed — status COMPLETED_CLEAN AND exceptionCount === 0
  */
 
-import { RUN_STATUS, STAGE } from "../../util/custodyMatch/constants.js";
+import { FA_FILE_TYPE, RUN_STATUS, STAGE } from "../../util/custodyMatch/constants.js";
 import {
   buildRunDatesKey,
   getBucket,
@@ -231,6 +231,8 @@ export const startRun = async (req, res) => {
       runId,
       businessDate,
       startedBy: String(req.body?.startedBy || req.headers?.["x-user"] || ""),
+      // A record of what the run started from. The job re-lists the day itself,
+      // so this names the newest transaction file rather than driving the read.
       faRawKey: day.fa.latestRaw?.key || "",
       custodyFiles: day.custody.files.map((f) => ({
         scheme: f.scheme,
@@ -287,7 +289,7 @@ export const startRun = async (req, res) => {
       status: RUN_STATUS.QUEUED,
       message: "Matching started.",
       files: {
-        transaction: day.fa.latestRaw?.originalFileName || "",
+        transaction: day.fa.raw.map((f) => f.originalFileName).join(", "),
         custody: day.custody.files.length,
         schemes: [...new Set(day.custody.files.map((f) => f.scheme))].sort(),
       },
@@ -646,8 +648,8 @@ export const proceedToImport = async (req, res) => {
     }
 
     const day = await listDay(catalystApp, run.businessDate);
-    const raw = day.fa.latestRaw;
-    if (!raw) {
+    const faFiles = day.fa.raw;
+    if (faFiles.length === 0) {
       return fail(res, 409, {
         code: "FA_FILE_MISSING",
         message:
@@ -671,23 +673,55 @@ export const proceedToImport = async (req, res) => {
      * wrote: that one has virtual codes rewritten to actual ones and holds only
      * the dates the run compared. The import wants the codes the user exported
      * and the whole file.
+     *
+     * A day may hold the regular file and the mutual fund file. Both are
+     * imported — they are two halves of the day's transactions — and since the
+     * import takes one file, they are rewritten into a single template-shaped
+     * one. That rewrite is also what reconciles their two layouts.
      */
     const bucket = getBucket(catalystApp);
-    let data = await getBuffer(bucket, raw.key);
-    const importFileName = raw.originalFileName || "transaction.csv";
+    const profiles = await loadFieldMapProfiles(catalystApp);
 
-    const faProfile = (await loadFieldMapProfiles(catalystApp))[PROFILE_TYPE.FA];
-    if (!isDefaultProfile(PROFILE_TYPE.FA, faProfile)) {
-      const relaid = await parseFaFile(data, { profile: faProfile });
-      if (!relaid.ok) {
-        return fail(res, 409, {
-          code: "FA_RELAYOUT_FAILED",
-          message:
-            "The transaction file no longer reads against the saved field mapping, so it cannot be rewritten into the format the import expects. Check the mapping, upload the file again and re-run the match.",
-          fileName: raw.originalFileName,
+    const profileTypeOf = (f) =>
+      f.fileType === FA_FILE_TYPE.MUTUAL_FUND ? PROFILE_TYPE.FA_MUTUAL_FUND : PROFILE_TYPE.FA;
+
+    const only = faFiles.length === 1 ? faFiles[0] : null;
+    const passThrough =
+      only &&
+      only.fileType !== FA_FILE_TYPE.MUTUAL_FUND &&
+      isDefaultProfile(PROFILE_TYPE.FA, profiles[PROFILE_TYPE.FA]);
+
+    let data;
+    let importFileName;
+
+    if (passThrough) {
+      // One regular file on the built-in template: hand over the original bytes,
+      // exactly as before the mutual fund file existed.
+      data = await getBuffer(bucket, only.key);
+      importFileName = only.originalFileName || "transaction.csv";
+    } else {
+      const merged = [];
+      for (const f of faFiles) {
+        const type = profileTypeOf(f);
+        const relaid = await parseFaFile(await getBuffer(bucket, f.key), {
+          profile: profiles[type],
+          type,
         });
+        if (!relaid.ok) {
+          return fail(res, 409, {
+            code: "FA_RELAYOUT_FAILED",
+            message:
+              "The transaction file no longer reads against the saved field mapping, so it cannot be rewritten into the format the import expects. Check the mapping, upload the file again and re-run the match.",
+            fileName: f.originalFileName,
+          });
+        }
+        merged.push(...relaid.rows);
       }
-      data = Buffer.from(faRowsToConsolidatedCsv(relaid.rows), "utf8");
+      // TDS and Stamp Duty come only from the mutual fund file; without it the
+      // import file stays the plain 26-column template.
+      const withDeductions = faFiles.some((f) => f.fileType === FA_FILE_TYPE.MUTUAL_FUND);
+      data = Buffer.from(faRowsToConsolidatedCsv(merged, { withDeductions }), "utf8");
+      importFileName = only?.originalFileName || `transactions-${run.businessDate}.csv`;
     }
 
     // Put back exactly what was there if the import refuses the file, rather

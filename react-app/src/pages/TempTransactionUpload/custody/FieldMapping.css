@@ -14,10 +14,11 @@
     top: 0;
     right: 0;
     bottom: 0;
-    width: min(680px, 100vw);
+    width: min(640px, 100vw);
+    max-height: 100vh;
     background: #fff;
     border-left: 1px solid #e5e7eb;
-    box-shadow: -8px 0 24px rgba(16, 24, 40, 0.14);
+    box-shadow: -8px 0 24px rgba(16, 24, 40, 0.1);
     display: flex;
     flex-direction: column;
     z-index: 41;
@@ -28,21 +29,67 @@
     align-items: flex-start;
     justify-content: space-between;
     gap: 16px;
-    padding: 20px 24px 14px;
+    padding: 22px 28px 18px;
     border-bottom: 1px solid #e5e7eb;
+    flex-shrink: 0;
+}
+
+.fm-kicker {
+    margin: 0 0 2px;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--txo-text-faint, #98a2b3);
 }
 
 .fm-panel-head h3 {
-    margin: 0 0 4px;
-    font-size: 17px;
+    margin: 0 0 10px;
+    font-size: 18px;
     font-weight: 600;
     color: #111827;
+}
+
+/* The source file, shown as metadata — a small icon and its name, not a
+   standalone link or a sentence describing what the file type is for. */
+.fm-fileinfo {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.fm-fileinfo-icon {
+    flex-shrink: 0;
+    color: var(--txo-text-faint, #98a2b3);
+}
+
+.fm-fileinfo-text {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    min-width: 0;
+}
+
+.fm-fileinfo-kind {
+    font-size: 10.5px;
+    font-weight: 600;
+    color: var(--txo-text-faint, #98a2b3);
+}
+
+.fm-fileinfo-name {
+    font-size: 12.5px;
+    font-weight: 500;
+    color: var(--txo-text-muted, #667085);
+    max-width: 340px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .fm-panel-body {
     flex: 1;
     overflow-y: auto;
-    padding: 18px 24px 24px;
+    padding: 20px 28px 24px;
 }
 
 .fm-panel-foot {
@@ -50,10 +97,11 @@
     align-items: center;
     justify-content: space-between;
     gap: 12px;
-    padding: 14px 24px;
+    padding: 16px 28px;
     border-top: 1px solid #e5e7eb;
-    background: #f9fafb;
+    background: #fff;
     flex-wrap: wrap;
+    flex-shrink: 0;
 }
 
 .fm-close {
@@ -81,14 +129,6 @@
 .fm-toolnote {
     margin: 0 0 14px;
     line-height: 1.5;
-    max-width: 74ch;
-}
-
-.fm-sub {
-    margin: 0 0 16px;
-    font-size: 13px;
-    line-height: 1.55;
-    color: #6b7280;
     max-width: 74ch;
 }
 
@@ -121,8 +161,8 @@
 }
 
 .fm-choice:hover:not(:disabled) {
-    border-color: #2563eb;
-    box-shadow: 0 2px 8px rgba(37, 99, 235, 0.12);
+    border-color: var(--txo-primary, #8b1538);
+    box-shadow: 0 2px 8px rgba(139, 21, 56, 0.1);
 }
 
 .fm-choice:disabled {
@@ -173,7 +213,7 @@
     padding: 0 0 8px;
     font-size: 12.5px;
     font-weight: 600;
-    color: #2563eb;
+    color: var(--txo-primary, #8b1538);
     cursor: pointer;
 }
 
@@ -210,62 +250,52 @@
     border-collapse: collapse;
 }
 
+/* A light brand tint with a crisp maroon underline — reads as a header
+   band, tied to the app's own accent, without being heavy. */
 .fm-table th {
     text-align: left;
     font-size: 11px;
+    font-weight: 700;
     text-transform: uppercase;
-    letter-spacing: 0.04em;
-    color: #9ca3af;
-    padding: 0 0 10px;
-    border-bottom: 1px solid #e5e7eb;
+    letter-spacing: 0.05em;
+    color: var(--txo-primary-hover, #6c0f2b);
+    padding: 10px 12px;
+    background: var(--txo-primary-tint, #f8e8ec);
+    border-bottom: 2px solid var(--txo-primary, #8b1538);
+}
+
+.fm-table th:first-child {
+    padding-left: 12px;
+    border-radius: 6px 0 0 0;
+}
+
+.fm-table th:last-child {
+    border-radius: 0 6px 0 0;
 }
 
 .fm-row td {
-    padding: 11px 0;
-    border-bottom: 1px solid #f3f4f6;
+    padding: 14px 0;
+    border-bottom: 1px solid #f1f2f4;
     vertical-align: top;
 }
 
+.fm-row:last-child td {
+    border-bottom: none;
+}
+
+/* Plain, calm rows — the field name is set apart by typography, not a
+   colored block behind it. */
 .fm-cell-field {
-    width: 34%;
+    width: 38%;
+    padding-left: 12px !important;
     padding-right: 20px !important;
+    vertical-align: middle;
 }
 
 .fm-fieldname {
     font-size: 13.5px;
-    color: #374151;
-}
-
-.fm-row--required .fm-fieldname {
     font-weight: 600;
-    color: #111827;
-}
-
-.fm-req {
-    display: inline-block;
-    margin-left: 8px;
-    padding: 1px 6px;
-    border-radius: 4px;
-    background: #fee2e2;
-    color: #991b1b;
-    font-size: 10px;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-}
-
-.fm-builtin {
-    margin-top: 3px;
-    font-size: 11.5px;
-    color: #9ca3af;
-}
-
-.fm-builtin code {
-    background: #f3f4f6;
-    padding: 1px 5px;
-    border-radius: 4px;
-    color: #6b7280;
-    font-size: 11px;
+    color: var(--txo-text, #1a1d24);
 }
 
 .fm-inputs {
@@ -278,17 +308,22 @@
 .fm-text {
     flex: 1;
     min-width: 180px;
-    padding: 6px 9px;
-    border: 1px solid #d1d5db;
+    padding: 7px 10px;
+    border: 1px solid #d7dbe1;
     border-radius: 6px;
     font-size: 13px;
     color: #111827;
+    transition: border-color 0.15s ease;
+}
+
+.fm-text:hover {
+    border-color: #b9c0c9;
 }
 
 .fm-text:focus {
     outline: none;
-    border-color: #2563eb;
-    box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
+    border-color: var(--txo-primary, #8b1538);
+    box-shadow: 0 0 0 3px var(--txo-primary-tint, #f8e8ec);
 }
 
 .fm-text--warn {
@@ -395,26 +430,45 @@
 .fm-primary {
     background: #2563eb;
     color: #fff;
+    transition: background-color 0.15s ease, transform 0.1s ease;
 }
 
 .fm-primary:hover:not(:disabled) {
     background: #1d4ed8;
+    transform: translateY(-1px);
 }
 
+.fm-primary:active:not(:disabled) {
+    transform: translateY(0);
+}
+
+/* Tertiary and destructive — quiet by default, only reads as "danger" on
+   hover, so it never competes with Save mapping for attention. */
 .fm-danger {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
     padding: 9px 16px;
     border-radius: 8px;
     font-size: 13px;
     font-weight: 600;
     cursor: pointer;
     background: #fff;
-    border: 1px solid #fca5a5;
-    color: #b91c1c;
+    border: 1px solid #d7dbe1;
+    color: #6b7280;
+    transition: border-color 0.15s ease, color 0.15s ease, background-color 0.15s ease,
+        box-shadow 0.15s ease;
+}
+
+.fm-danger svg {
+    flex-shrink: 0;
 }
 
 .fm-danger:hover:not(:disabled) {
-    background: #fef2f2;
-    border-color: #dc2626;
+    background: #fdf3f2;
+    border-color: #e8a5a0;
+    color: #b3271e;
+    box-shadow: 0 1px 4px rgba(179, 39, 30, 0.12);
 }
 
 .fm-ghost:disabled,
@@ -441,18 +495,25 @@
     flex: 1;
     min-width: 220px;
     max-width: 100%;
-    padding: 6px 9px;
-    border: 1px solid #d1d5db;
+    height: 34px;
+    padding: 0 9px;
+    border: 1px solid #d7dbe1;
     border-radius: 6px;
     font-size: 13px;
     color: #111827;
-    background: #fff;
+    background: #f8f9fb;
+    transition: border-color 0.15s ease;
+}
+
+.fm-select:hover:not(:disabled) {
+    border-color: #b9c0c9;
 }
 
 .fm-select:focus {
     outline: none;
-    border-color: #2563eb;
-    box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
+    border-color: var(--txo-primary, #8b1538);
+    background: #fff;
+    box-shadow: 0 0 0 3px var(--txo-primary-tint, #f8e8ec);
 }
 
 .fm-select:disabled {
@@ -460,9 +521,10 @@
     color: #9ca3af;
 }
 
+/* Subtle — a red border and a faint tint, not a loud alert. */
 .fm-select--bad {
-    border-color: #dc2626;
-    background: #fef2f2;
+    border-color: #d33a2f;
+    background: #fdf3f2;
 }
 
 .fm-select optgroup[disabled] {
@@ -475,16 +537,11 @@
     color: #111827;
 }
 
-.fm-row--bad td {
-    background: #fef2f2;
-}
-
 .fm-rowerror {
     margin: 6px 0 0;
     font-size: 12px;
-    line-height: 1.45;
-    color: #b91c1c;
-    font-weight: 500;
+    line-height: 1.4;
+    color: #b3271e;
 }
 
 .fm-samples {
@@ -520,16 +577,6 @@
     margin-top: 0;
     width: auto;
     min-width: 200px;
-}
-
-/* ── the file this mapping is for ──────────────────────────────────── */
-
-.fm-filename {
-    margin: 6px 0 0;
-    font-size: 12px;
-    font-weight: 600;
-    color: #2563eb;
-    word-break: break-all;
 }
 
 /* ── "already stored for this date" ────────────────────────────────── */

@@ -26,6 +26,7 @@ export { buildCodeMaps } from "./lookupCodes.js";
 export {
   aggregateByKey,
   buildKeyUnion,
+  splitMutualFunds,
   compareKeyRange,
   compareSides,
   repairOrphans,
