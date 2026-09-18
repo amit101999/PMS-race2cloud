@@ -4,3 +4,7 @@ clientids.csv
 catalyst-debug.log
 text.txt
 node_modules/
+.claude
+.agents
+.vscode
+skills-lock.json

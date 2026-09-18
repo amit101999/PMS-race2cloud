@@ -70,6 +70,29 @@
     z-index: 1;
 }
 
+/* A single row in the narrower FA box: fit the box instead of scrolling
+   sideways. The file name takes what is left and ends in "…"; the time wraps. */
+.cm-filetable--fit {
+    display: table;
+    table-layout: fixed;
+}
+
+.cm-filetable--fit .cm-col-date {
+    width: 28%;
+}
+
+.cm-filetable--fit .cm-col-when {
+    width: 32%;
+}
+
+.cm-filetable--fit .cm-cell-file {
+    max-width: none;
+}
+
+.cm-filetable--fit .cm-cell-dates {
+    white-space: normal;
+}
+
 .cm-cell-scheme {
     font-weight: 600;
     color: #111827;
@@ -412,6 +435,29 @@
     font-size: 17px;
     font-weight: 600;
     color: #111827;
+}
+
+/* Holding Comparison: both headings hold only a title, so the two boxes start
+   level, and the shorter box stretches so their bottoms line up too. */
+.cm-split--even {
+    align-items: stretch;
+}
+
+.cm-split--even .cm-col {
+    display: flex;
+    flex-direction: column;
+}
+
+.cm-split--even .cm-col > .temp-transaction-card {
+    flex: 1;
+}
+
+/* The page's business date, top right above both boxes. It sits in its own row
+   so the two headings stay the same height and the boxes start level. */
+.cm-date-bar {
+    display: flex;
+    justify-content: flex-end;
+    margin-bottom: 8px;
 }
 
 @media (max-width: 1024px) {

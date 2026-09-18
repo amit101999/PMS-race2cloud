@@ -45,7 +45,9 @@
       "GenerateComparsionReport",
       "ExportCorpActionReport",
       "CustodyMatchRunner",
-      "CustodyMatchCleanup"
+      "CustodyMatchCleanup",
+      "HoldingComparisonRunner",
+      "FAHoldingsGenerator"
     ],
     "ignore": [],
     "source": "functions"
