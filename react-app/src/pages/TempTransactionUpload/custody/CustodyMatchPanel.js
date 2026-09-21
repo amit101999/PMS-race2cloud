@@ -4,6 +4,7 @@ import FieldMappingPanel from "./FieldMappingPanel";
 import UploadErrorDetails from "./UploadErrorDetails";
 import StatusBadge, { STATUS } from "./StatusBadge";
 import * as api from "./api";
+import { useJobNotifications } from "../../../notifications/JobNotificationContext";
 import "./CustodyMatch.css";
 
 /**
@@ -283,6 +284,9 @@ const CustodyMatchPanel = ({
      * is never hidden by a stale entry here.
      */
     const [removedKeys, setRemovedKeys] = useState(() => new Set());
+    /* The file whose delete request is in flight, so its row can say so. */
+    const [removingKey, setRemovingKey] = useState(null);
+    const { trackJob, reportJob } = useJobNotifications();
     const [day, setDay] = useState(null);
     const [dayLoading, setDayLoading] = useState(false);
 
@@ -464,6 +468,12 @@ const CustodyMatchPanel = ({
                 ...(res.warnings || []),
                 ...(res.overlapWarning ? [{ message: res.overlapWarning }] : []),
             ]);
+            reportJob({
+                id: `txn-custody-upload-${Date.now()}`,
+                label: `Custodian file uploaded — ${file.name}`,
+                status: "completed",
+                message: `${scheme} · ${api.FILE_TYPE_LABEL[fileType] || fileType} is ready for matching.`,
+            });
             // The scheme and type stay selected: adding several days for one
             // scheme is the case this screen exists for, and clearing after
             // every file would mean re-picking both each time.
@@ -493,14 +503,40 @@ const CustodyMatchPanel = ({
      * the only difference: the message belongs beside the file that failed.
      */
     const removeFile = async (file, what, onError) => {
-        if (!window.confirm(`Remove ${what} from this run?`)) return;
+        if (
+            !window.confirm(
+                `Remove ${what} from this run?
+
+` +
+                    "The file is deleted from storage. It may take 2–3 minutes before it is fully cleared.",
+            )
+        ) {
+            return;
+        }
         onError(null);
+        setRemovingKey(file.key);
         try {
             await api.deleteUploadedFile(file.key);
             setRemovedKeys((prev) => new Set(prev).add(file.key));
+            reportJob({
+                id: `txn-remove-${file.key}`,
+                label: `File removed — ${file.originalFileName}`,
+                status: "completed",
+                message:
+                    "Removed from this run. Storage may take 2–3 minutes to fully clear it; " +
+                    "until then it can briefly reappear after a refresh.",
+            });
             await loadDay();
         } catch (err) {
             onError({ message: err.message, detail: err.detail });
+            reportJob({
+                id: `txn-remove-${file.key}`,
+                label: `File removal — ${file.originalFileName}`,
+                status: "failed",
+                message: err.message || "Could not remove the file.",
+            });
+        } finally {
+            setRemovingKey(null);
         }
     };
 
@@ -521,6 +557,12 @@ const CustodyMatchPanel = ({
         try {
             const res = await api.uploadFaFile({ file, businessDate, fileType, replace });
             setFaWarnings(res.warnings || []);
+            reportJob({
+                id: `txn-fa-upload-${Date.now()}`,
+                label: `Transaction file uploaded — ${file.name}`,
+                status: "completed",
+                message: `${api.FA_FILE_TYPE_LABEL[fileType] || fileType} file is ready for matching.`,
+            });
             if (res.businessDate !== businessDate && onBusinessDateChange) {
                 onBusinessDateChange(res.businessDate);
             }
@@ -570,6 +612,21 @@ const CustodyMatchPanel = ({
             const res = await api.startRun(businessDate, undefined, dates);
             const status = await api.getRun(res.runId);
             setRun(status.run);
+            if (res.reused) {
+                reportJob({
+                    id: `txn-match-reused-${Date.now()}`,
+                    label: `FA vs Custody matching — ${businessDate}`,
+                    status: "completed",
+                    message: res.message || "These dates were already matched; showing that report.",
+                });
+            } else {
+                // The runId is the bell's key: the server settles it from the run's own status.
+                trackJob({
+                    id: res.runId,
+                    label: `FA vs Custody matching — ${businessDate}`,
+                    message: "Matching is running in the background.",
+                });
+            }
             /* Nothing was re-run: these dates already had a report, and the same
                files over the same dates can only say the same thing. */
             setReusedNote(res.reused ? res.message : "");
@@ -616,6 +673,11 @@ const CustodyMatchPanel = ({
     const handleRetry = async () => {
         try {
             await api.retryRun(run.runId);
+            trackJob({
+                id: run.runId,
+                label: `FA vs Custody matching — ${run.businessDate}`,
+                message: "Retrying the match in the background.",
+            });
             const status = await api.getRun(run.runId);
             setRun(status.run);
         } catch (err) {
@@ -858,12 +920,16 @@ const CustodyMatchPanel = ({
                                                 {rangeLabel(f)} · {api.formatBytes(f.sizeBytes)}
                                             </span>
                                         </div>
-                                        <StatusBadge tone={STATUS.OK}>Ready</StatusBadge>
+                                        {removingKey === f.key ? (
+                                            <StatusBadge tone={STATUS.PROCESSING}>Removing…</StatusBadge>
+                                        ) : (
+                                            <StatusBadge tone={STATUS.OK}>Ready</StatusBadge>
+                                        )}
                                         <button
                                             type="button"
                                             className="up-file-remove"
                                             onClick={() => removeCustodyFile(f)}
-                                            disabled={run?.isRunning}
+                                            disabled={run?.isRunning || Boolean(removingKey)}
                                             aria-label={`Remove ${f.originalFileName}`}
                                         >
                                             &times;
@@ -961,12 +1027,16 @@ const CustodyMatchPanel = ({
                                                 {faDateLabel(f)} · {api.formatBytes(f.sizeBytes)}
                                             </span>
                                         </div>
-                                        <StatusBadge tone={STATUS.OK}>Ready</StatusBadge>
+                                        {removingKey === f.key ? (
+                                            <StatusBadge tone={STATUS.PROCESSING}>Removing…</StatusBadge>
+                                        ) : (
+                                            <StatusBadge tone={STATUS.OK}>Ready</StatusBadge>
+                                        )}
                                         <button
                                             type="button"
                                             className="up-file-remove"
                                             onClick={() => removeFile(f, f.originalFileName, setFaError)}
-                                            disabled={faBusy || run?.isRunning}
+                                            disabled={faBusy || run?.isRunning || Boolean(removingKey)}
                                             aria-label={`Remove ${f.originalFileName}`}
                                         >
                                             &times;

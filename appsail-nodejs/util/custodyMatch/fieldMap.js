@@ -193,7 +193,6 @@ const FA_FIELDS = [
   { field: "stt", label: "STT", kind: "number", required: true },
   { field: "ref", label: "Transaction Ref", kind: "text", required: true },
   { field: "description", label: "Description", kind: "text", required: true },
-  { field: "netAmount", label: "Net Amount", kind: "number", required: true },
 
   // Not used by matching, but carried through to the production import. A
   // remapped file that cannot fill these would silently lose Security_code
@@ -206,7 +205,6 @@ const FA_FIELDS = [
   { field: "chequeNumber", label: "Cheque Number", kind: "text", required: true },
   { field: "chequeDetail", label: "Cheque Detail", kind: "text", required: true },
   { field: "bankRef", label: "Bank Ref", kind: "text", required: true },
-  { field: "netRate", label: "Net Rate", kind: "number", required: true },
   { field: "cashSetdate", label: "Cash Settlement Date", kind: "isoDate", required: true },
 ];
 
@@ -378,7 +376,6 @@ const FA_DEFAULT_PROFILE = {
   stt: byIndex(14), // TRANEXPENSE
   ref: byIndex(17), // TRANSREF
   description: byIndex(18),
-  netAmount: byIndex(23), // the SECOND "filler"
 
   setDateFlag: byIndex(11),
   mktRate: byIndex(12),
@@ -388,7 +385,6 @@ const FA_DEFAULT_PROFILE = {
   chequeNumber: byIndex(19),
   chequeDetail: byIndex(20),
   bankRef: byIndex(21),
-  netRate: byIndex(22), // the FIRST "filler"
   cashSetdate: byIndex(25),
 };
 
@@ -971,6 +967,21 @@ export const toStoredProfile = (type, profile, { updatedBy = "", updatedAtMs = D
  *
  * @returns {{profile:object, isDefault:boolean, updatedAtMs:number|null, updatedBy:string}}
  */
+/*
+ * Net Rate and Net Amount are no longer mapped on the transaction files: the
+ * import derives them (RATE ± brokerage, × quantity) when the cells are blank.
+ * Mappings saved before that still carry the two fields; drop them on read so
+ * such a mapping stays valid instead of silently falling back to the default.
+ */
+const RETIRED_FA_FIELDS = ["netRate", "netAmount"];
+
+const withoutRetiredFields = (type, profile) => {
+  if (!isFaProfileType(type)) return profile;
+  const kept = { ...profile };
+  for (const field of RETIRED_FA_FIELDS) delete kept[field];
+  return kept;
+};
+
 export const fromStoredProfile = (type, blob) => {
   const fallback = {
     profile: defaultProfile(type),
@@ -981,10 +992,12 @@ export const fromStoredProfile = (type, blob) => {
 
   if (!blob || typeof blob !== "object" || !blob.profile) return fallback;
   if (blob.version !== PROFILE_VERSION) return fallback;
-  if (!validateProfile(type, blob.profile).ok) return fallback;
+
+  const profile = withoutRetiredFields(type, blob.profile);
+  if (!validateProfile(type, profile).ok) return fallback;
 
   return {
-    profile: blob.profile,
+    profile,
     isDefault: false,
     updatedAtMs: Number(blob.updatedAtMs) || null,
     updatedBy: String(blob.updatedBy || ""),
@@ -1004,7 +1017,8 @@ export const FA_DEFAULT_COLUMNS = FA_HEADERS.map((name, index) => ({
  *
  * The inverse of the FA default profile, and the thing that lets a file in ANY
  * layout be rewritten into the template the production import still expects.
- * Column 24 (the third "filler") has no field: the import drops it anyway.
+ * The three "filler" columns (23-25) have no field. The first two are NETRATE and
+ * Net_Amount, which the import derives when blank; the third it drops anyway.
  */
 export const FA_TEMPLATE_SLOT = Object.fromEntries(
   Object.entries(DEFAULT_PROFILES[PROFILE_TYPE.FA]).map(([field, source]) => [field, source.index]),

@@ -19,6 +19,8 @@
  */
 
 import { readCaJobProgress } from "./caJobProgress.js";
+import { TABLE as CM_TABLE } from "./custodyMatch/runStore.js";
+import { RUN_STATUS as CM_RUN_STATUS } from "./custodyMatch/constants.js";
 
 const MAX_SHOWN = 5;
 const PRUNE_AFTER_MS = 24 * 60 * 60 * 1000; // drop every row older than 24 hours
@@ -40,6 +42,35 @@ const parseCatalystTime = (ct) => {
 // Corporate-action track keys fan out into background rebuild jobs, so their
 // true end state comes from readCaJobProgress, not a single Jobs row.
 const isCaKey = (jobName) => /^(SPL|BONA|MRGT|DMGT)/.test(String(jobName || ""));
+
+// FA vs Custody matching runs ("CM-<ms>") record their end state on their own
+// run row, not in Jobs, so they are settled from Custody_Match_Run instead.
+const isCmRunKey = (jobName) => /^CM-\d+$/.test(String(jobName || ""));
+
+async function settleCmRun(zcql, runId) {
+  const rows = await zcql.executeZCQLQuery(
+    `SELECT status, exceptionCount, errorMessage FROM ${CM_TABLE.RUN} ` +
+      `WHERE runId = '${escSql(runId)}' LIMIT 1`,
+  );
+  const run = rows?.[0]?.[CM_TABLE.RUN] || rows?.[0] || {};
+  const exceptions = Number(run.exceptionCount) || 0;
+
+  switch (run.status) {
+    case CM_RUN_STATUS.COMPLETED_CLEAN:
+      return { status: "completed", message: "Matching finished — no differences found." };
+    case CM_RUN_STATUS.COMPLETED_WITH_EXCEPTIONS:
+      return {
+        status: "completed",
+        message: `Matching finished — ${exceptions.toLocaleString()} exception(s) to review.`,
+      };
+    case CM_RUN_STATUS.FAILED:
+      return { status: "failed", message: run.errorMessage || "Matching failed. Open the run to retry." };
+    case CM_RUN_STATUS.SUPERSEDED:
+      return { status: "completed", message: "Files changed after this match — run it again." };
+    default:
+      return { status: "in_progress" }; // QUEUED | RUNNING | row not written yet
+  }
+}
 
 function statusFromCaProgress(progress) {
   if (progress === "COMPLETED") return "completed";
@@ -127,8 +158,13 @@ async function reconcileRow(zcql, row) {
   if (row.status !== "in_progress" || !row.jobName) return row;
 
   let next;
+  let cmMessage = null;
   try {
-    if (isCaKey(row.jobName)) {
+    if (isCmRunKey(row.jobName)) {
+      const settled = await settleCmRun(zcql, row.jobName);
+      next = settled.status;
+      cmMessage = settled.message || null;
+    } else if (isCaKey(row.jobName)) {
       next = statusFromCaProgress(await readCaJobProgress(zcql, row.jobName));
     } else {
       const jr = await zcql.executeZCQLQuery(
@@ -144,7 +180,7 @@ async function reconcileRow(zcql, row) {
 
   if (next === "in_progress" || next === row.status) return row;
 
-  const message = composeMessage(row.title, next) || row.message;
+  const message = cmMessage || composeMessage(row.title, next) || row.message;
   try {
     await zcql.executeZCQLQuery(
       `UPDATE Notifications SET status = '${escSql(next)}', message = '${escSql(message)}' ` +
