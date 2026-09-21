@@ -49,7 +49,6 @@ const FILE_BLURB = {
     CUSTODY_RESIDENTIAL: "The deal allocation file your custodian sends for Resident accounts.",
     CUSTODY_NDPMS: "The deal allocation file your custodian sends for NRE/NRO/NDPMS accounts.",
     CUSTODY_MUTUAL_FUND: "The Mutual Funds transaction file your custodian sends (Subscription / Redemption). Matched only against mutual fund rows in the transaction file.",
-    CUSTODY_NDPMS: "The deal allocation file your custodian sends for NRE / NRO (NDPMS) accounts.",
     CUSTODY_HOLDINGS: "The consolidated holdings file your custodian sends, used by Holding Comparison.",
 };
 
@@ -235,7 +234,6 @@ const autofillByName = (draft, entries, columns) => {
 /* ------------------------------------------------------------------ one row */
 
 function MappingRow({ entry, source, columns, takenBy, onChange, registerRef, fieldError }) {
-function MappingRow({ entry, source, columns, takenBy, onChange, showHints }) {
     const transforms = entry.allowTransforms || [NONE];
     const transform = transformOf(source);
     const value = valueForSource(source, columns);
@@ -290,21 +288,6 @@ function MappingRow({ entry, source, columns, takenBy, onChange, showHints }) {
         <tr className="fm-row">
             <td className="fm-cell-field">
                 <div className="fm-fieldname">{entry.label}</div>
-                <div className="fm-fieldname">
-                    {entry.label}
-                    {showHints ? (
-                        entry.required ? (
-                            <span className="fm-req" title="This field must name a column in your file">
-                                required
-                            </span>
-                        ) : (
-                            <span className="fm-builtin"> optional</span>
-                        )
-                    ) : null}
-                </div>
-                {showHints ? (
-                    <div className="fm-builtin">Expects {KIND_BLURB[entry.kind] || entry.kind}</div>
-                ) : null}
             </td>
 
             <td className="fm-cell-source">
@@ -396,7 +379,7 @@ function MappingRow({ entry, source, columns, takenBy, onChange, showHints }) {
  * @param {Function} [props.onSaved]
  * @param {string[]} [props.types]         file types offered; Holding Comparison passes only its own
  * @param {boolean}  [props.autofill]      pre-fill unanswered fields from matching column names
- * @param {boolean}  [props.showHints]     show the required/optional and "Expects …" text under each field
+ * @param {boolean}  [props.showHints]     false = compact tinted field labels (Holding Comparison)
  */
 export default function FieldMappingPanel({
     open,
@@ -655,7 +638,8 @@ export default function FieldMappingPanel({
     const validateBeforeSave = () => {
         for (const entry of entries) {
             const value = valueForSource(draft[entry.field], columns);
-            if (value === "" ) {
+            // Optional fields (holdings files have some) may stay unanswered.
+            if (value === "" && entry.required) {
                 const node = fieldNodes.current[entry.field];
                 if (node) {
                     node.scrollIntoView({ behavior: "smooth", block: "center" });
@@ -1018,7 +1002,6 @@ export default function FieldMappingPanel({
                                             onChange={setField}
                                             registerRef={registerFieldRef}
                                             fieldError={fieldErrors[entry.field]}
-                                            showHints={showHints}
                                         />
                                     ))}
                                 </tbody>
@@ -1057,21 +1040,6 @@ export default function FieldMappingPanel({
                         ) : null}
 
                         <div className="fm-actions-right">
-                            {!complete && columns.length > 0 ? (
-                                <span className="fm-blocker">
-                                    {badFields.length > 0
-                                        ? `${badFields.length} field(s) point at the wrong column.`
-                                        : `${unansweredCount} field(s) still to map.`}
-                                </span>
-                            ) : null}
-
-                            {/* Tells the user what the one enabled button will do next. */}
-                            {complete && needsSave && columns.length > 0 ? (
-                                <span className="fm-blocker">
-                                    All fields mapped &mdash; save to continue.
-                                </span>
-                            ) : null}
-
                             {showUpload ? (
                                 <span className="fm-ready">Mapping saved &mdash; ready to upload.</span>
                             ) : null}
@@ -1095,12 +1063,6 @@ export default function FieldMappingPanel({
                                     className="fm-primary"
                                     onClick={onSave}
                                     disabled={!dirty || saving || loading}
-                                    disabled={!complete || !needsSave || saving || loading}
-                                    title={
-                                        complete
-                                            ? "Save this mapping"
-                                            : "Map every field before saving"
-                                    }
                                 >
                                     {saving ? "Saving…" : "Save mapping"}
                                 </button>

@@ -51,123 +51,6 @@
 }
 
 .cm-card-head-title {
-.cm-date {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    font-size: 12px;
-    font-weight: 600;
-    color: #6b7280;
-    white-space: nowrap;
-}
-
-.cm-date input {
-    padding: 7px 10px;
-    border: 1px solid #d1d5db;
-    border-radius: 8px;
-    font-size: 14px;
-    color: #111827;
-}
-
-/* ── custodian files ──────────────────────────────────────────────────── */
-
-/* One row per uploaded file. The list scrolls in place rather than growing the
-   card without limit, so "Add custodian file" and the gate below it stay
-   reachable however many files a day needs. */
-/* The shared table, wrapped so a long list scrolls in place instead of pushing
-   "Add custodian file" and the gate below it off the card. */
-.cm-filetable {
-    display: block;
-    max-height: 340px;
-    overflow-y: auto;
-}
-
-.cm-filetable th {
-    /* Sticky so the headings stay put while the list scrolls. Everything else
-       comes from .upload-history-table. */
-    position: sticky;
-    top: 0;
-    z-index: 1;
-}
-
-/* A single row in the narrower FA box: fit the box instead of scrolling
-   sideways. The file name takes what is left and ends in "…"; the time wraps. */
-.cm-filetable--fit {
-    display: table;
-    table-layout: fixed;
-}
-
-.cm-filetable--fit .cm-col-date {
-    width: 28%;
-}
-
-.cm-filetable--fit .cm-col-when {
-    width: 32%;
-}
-
-.cm-filetable--fit .cm-cell-file {
-    max-width: none;
-}
-
-.cm-filetable--fit .cm-cell-dates {
-    white-space: normal;
-}
-
-.cm-cell-scheme {
-    font-weight: 600;
-    color: #111827;
-    white-space: nowrap;
-}
-
-.cm-cell-dates {
-    white-space: nowrap;
-    color: #374151;
-}
-
-/* The file name is the only column that can be long, so it is the one that
-   gives way — everything else keeps its natural width. */
-.cm-cell-file {
-    max-width: 220px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    color: #166534;
-}
-
-.cm-remove {
-    width: 28px;
-    height: 28px;
-    border: 1px solid #e5e7eb;
-    background: #fff;
-    border-radius: 8px;
-    font-size: 18px;
-    line-height: 1;
-    color: #6b7280;
-    cursor: pointer;
-}
-
-.cm-remove:hover:not(:disabled) {
-    background: #fee2e2;
-    color: #991b1b;
-    border-color: #fecaca;
-}
-
-/* Separated by a rule rather than a second outline inside the card. */
-.cm-addfile {
-    margin-top: 18px;
-    padding-top: 18px;
-    border-top: 1px solid #f1f3f4;
-}
-
-.cm-addfile-title {
-    display: block;
-    font-size: 12px;
-    font-weight: 600;
-    color: #374151;
-    margin-bottom: 8px;
-}
-
-.cm-addfile-controls {
     display: flex;
     align-items: center;
     gap: 10px;
@@ -1047,3 +930,165 @@
     font-size: 13px;
     line-height: 1.55;
 }
+
+/* ── Holding Comparison ───────────────────────────────────────────────────
+   Classes the Holding Comparison page reuses from this screen. The custody
+   panel above no longer uses them, so they are kept here for that page only. */
+
+/* The shared table, wrapped so a long list scrolls in place instead of pushing
+   "Add custodian file" and the gate below it off the card. */
+.cm-filetable {
+    display: block;
+    max-height: 340px;
+    overflow-y: auto;
+}
+
+.cm-filetable th {
+    /* Sticky so the headings stay put while the list scrolls. Everything else
+       comes from .upload-history-table. */
+    position: sticky;
+    top: 0;
+    z-index: 1;
+}
+
+/* A single row in the narrower FA box: fit the box instead of scrolling
+   sideways. The file name takes what is left and ends in "…"; the time wraps. */
+.cm-filetable--fit {
+    display: table;
+    table-layout: fixed;
+}
+
+.cm-filetable--fit .cm-col-date {
+    width: 28%;
+}
+
+.cm-filetable--fit .cm-col-when {
+    width: 32%;
+}
+
+.cm-filetable--fit .cm-cell-file {
+    max-width: none;
+}
+
+.cm-filetable--fit .cm-cell-dates {
+    white-space: normal;
+}
+
+.cm-cell-dates {
+    white-space: nowrap;
+    color: #374151;
+}
+
+/* The file name is the only column that can be long, so it is the one that
+   gives way — everything else keeps its natural width. */
+.cm-cell-file {
+    max-width: 220px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: #166534;
+}
+
+.cm-remove {
+    width: 28px;
+    height: 28px;
+    border: 1px solid #e5e7eb;
+    background: #fff;
+    border-radius: 8px;
+    font-size: 18px;
+    line-height: 1;
+    color: #6b7280;
+    cursor: pointer;
+}
+
+.cm-remove:hover:not(:disabled) {
+    background: #fee2e2;
+    color: #991b1b;
+    border-color: #fecaca;
+}
+
+/* Separated by a rule rather than a second outline inside the card. */
+.cm-addfile {
+    margin-top: 18px;
+    padding-top: 18px;
+    border-top: 1px solid #f1f3f4;
+}
+
+.cm-addfile-title {
+    display: block;
+    font-size: 12px;
+    font-weight: 600;
+    color: #374151;
+    margin-bottom: 8px;
+}
+
+.cm-addfile-controls {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+/* The chooser is the action, so it sits at the far right of the row. */
+.cm-addfile-controls > input[type="file"] {
+    flex: 0 0 auto;
+    margin-left: auto;
+    font-size: 12px;
+    max-width: 100%;
+}
+
+.cm-addfile-busy {
+    display: block;
+    margin-top: 8px;
+    font-size: 12px;
+    color: #6b7280;
+}
+
+.cm-fa {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    flex-wrap: wrap;
+}
+
+/* Same remove control as a custodian row, pushed to the far edge of the card so
+   the two sides read alike. */
+.cm-fa .cm-remove {
+    margin-left: auto;
+}
+
+.cm-count {
+    color: #b91c1c;
+    font-weight: 700;
+}
+
+.cm-empty {
+    text-align: center;
+    padding: 28px 12px;
+    color: #9ca3af;
+}
+
+.cm-col-head {
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 16px;
+    flex-wrap: wrap;
+    margin-bottom: 10px;
+    min-height: 42px;
+}
+
+.cm-col-head h3 {
+    margin: 0;
+    font-size: 17px;
+    font-weight: 600;
+    color: #111827;
+}
+
+/* The size trails the file name in its cell rather than taking a column of
+   its own — it is a detail, not something anyone scans down. */
+.cm-file-size {
+    margin-left: 8px;
+    color: #6b7280;
+}
+

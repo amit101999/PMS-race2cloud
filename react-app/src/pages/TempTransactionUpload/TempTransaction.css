@@ -292,6 +292,28 @@
   cursor: not-allowed;
 }
 
+/* Text-only download button, still used by the custody exception grid and the
+   Holding Comparison page, which have not moved to DownloadButton. */
+.upload-history-download-btn {
+  padding: 5px 12px;
+  border: 1px solid var(--txo-primary);
+  border-radius: var(--txo-radius-sm);
+  background: var(--txo-surface);
+  color: var(--txo-primary);
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.upload-history-download-btn:hover:not(:disabled) {
+  background: var(--txo-primary-tint);
+}
+
+.upload-history-download-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
 .dl-spinner {
   width: 11px;
   height: 11px;
