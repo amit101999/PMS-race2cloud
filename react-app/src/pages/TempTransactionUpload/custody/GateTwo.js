@@ -3,6 +3,7 @@ import React, { useState } from "react";
 import UploadErrorDetails from "./UploadErrorDetails";
 import StatusBadge, { STATUS } from "./StatusBadge";
 import * as api from "./api";
+import { useJobNotifications } from "../../../notifications/JobNotificationContext";
 
 /**
  * Gate 2 — the import.
@@ -16,6 +17,7 @@ const GateTwo = ({ run, onImported }) => {
     const [busy, setBusy] = useState(false);
     const [result, setResult] = useState(null);
     const [error, setError] = useState(null);
+    const { trackJob, reportJob } = useJobNotifications();
 
     if (!run || run.isRunning) return null;
 
@@ -50,9 +52,24 @@ const GateTwo = ({ run, onImported }) => {
         try {
             const res = await api.proceedToImport(run.runId);
             setResult(res);
+            // The import writes its end state to the Jobs row named pipelineJobName,
+            // which is what the bell reconciles against.
+            if (res.pipelineJobName) {
+                trackJob({
+                    id: res.pipelineJobName,
+                    label: `Transaction import — ${run.businessDate}`,
+                    message: `Importing ${run.counts.faRows.toLocaleString()} row(s). Holdings and cash balance update afterwards.`,
+                });
+            }
             if (onImported) onImported(res);
         } catch (err) {
             setError({ message: err.message, detail: err.detail });
+            reportJob({
+                id: `txn-import-failed-${Date.now()}`,
+                label: `Transaction import — ${run.businessDate}`,
+                status: "failed",
+                message: err.message || "The import could not be started.",
+            });
         } finally {
             setBusy(false);
         }
