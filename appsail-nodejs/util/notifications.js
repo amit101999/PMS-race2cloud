@@ -21,6 +21,7 @@
 import { readCaJobProgress } from "./caJobProgress.js";
 import { TABLE as CM_TABLE } from "./custodyMatch/runStore.js";
 import { RUN_STATUS as CM_RUN_STATUS } from "./custodyMatch/constants.js";
+import { RUN_TABLE as HC_RUN_TABLE } from "./holdingComparison/runStore.js";
 
 const MAX_SHOWN = 5;
 const PRUNE_AFTER_MS = 24 * 60 * 60 * 1000; // drop every row older than 24 hours
@@ -47,32 +48,55 @@ const isCaKey = (jobName) => /^(SPL|BONA|MRGT|DMGT)/.test(String(jobName || ""))
 // run row, not in Jobs, so they are settled from Custody_Match_Run instead.
 const isCmRunKey = (jobName) => /^CM-\d+$/.test(String(jobName || ""));
 
+// Holding Comparison runs ("HC-<ms>") do the same on Holding_Comparison_Run,
+// with the same status values.
+const isHcRunKey = (jobName) => /^HC-\d+$/.test(String(jobName || ""));
+
+// FA holdings generation reports on the Jobs row HCFA_<date>, which is reused
+// every time that date is regenerated. The bell key adds "@<ms>" so each
+// generation is its own entry; the Jobs lookup uses the part before the "@".
+const HCFA_KEY = /^(HCFA_\d{4}-\d{2}-\d{2})@\d+$/;
+
+const RUN_WORDING = {
+  CM: {
+    clean: "Matching finished — no differences found.",
+    exceptions: (n) => `Matching finished — ${n} exception(s) to review.`,
+    failed: "Matching failed. Open the run to retry.",
+    superseded: "Files changed after this match — run it again.",
+  },
+  HC: {
+    clean: "Comparison finished — custodian and FA holdings agree.",
+    exceptions: (n) => `Comparison finished — ${n} difference(s) to review.`,
+    failed: "The comparison failed. Open it to see why.",
+    superseded: "Files changed after this comparison — run it again.",
+  },
+};
+
 // File removals ("RM-<ms>") are settled by the delete endpoint once Stratus
 // stops listing the file. If AppSail restarted before that check finished,
 // close the row here instead of leaving it "in progress" until the 24h prune.
 const isRemovalKey = (jobName) => /^RM-\d+$/.test(String(jobName || ""));
 const REMOVAL_STALE_MS = 10 * 60 * 1000;
 
-async function settleCmRun(zcql, runId) {
+/** Settle a matching / comparison run notice from its own run row. */
+async function settleRunRow(zcql, runId, table, wording) {
   const rows = await zcql.executeZCQLQuery(
-    `SELECT status, exceptionCount, errorMessage FROM ${CM_TABLE.RUN} ` +
+    `SELECT status, exceptionCount, errorMessage FROM ${table} ` +
       `WHERE runId = '${escSql(runId)}' LIMIT 1`,
   );
-  const run = rows?.[0]?.[CM_TABLE.RUN] || rows?.[0] || {};
+  const run = rows?.[0]?.[table] || rows?.[0] || {};
   const exceptions = Number(run.exceptionCount) || 0;
 
+  // Both run tables use the same status values.
   switch (run.status) {
     case CM_RUN_STATUS.COMPLETED_CLEAN:
-      return { status: "completed", message: "Matching finished — no differences found." };
+      return { status: "completed", message: wording.clean };
     case CM_RUN_STATUS.COMPLETED_WITH_EXCEPTIONS:
-      return {
-        status: "completed",
-        message: `Matching finished — ${exceptions.toLocaleString()} exception(s) to review.`,
-      };
+      return { status: "completed", message: wording.exceptions(exceptions.toLocaleString()) };
     case CM_RUN_STATUS.FAILED:
-      return { status: "failed", message: run.errorMessage || "Matching failed. Open the run to retry." };
+      return { status: "failed", message: run.errorMessage || wording.failed };
     case CM_RUN_STATUS.SUPERSEDED:
-      return { status: "completed", message: "Files changed after this match — run it again." };
+      return { status: "completed", message: wording.superseded };
     default:
       return { status: "in_progress" }; // QUEUED | RUNNING | row not written yet
   }
@@ -181,17 +205,21 @@ async function reconcileRow(zcql, row) {
   }
 
   let next;
-  let cmMessage = null;
+  let runMessage = null;
   try {
-    if (isCmRunKey(row.jobName)) {
-      const settled = await settleCmRun(zcql, row.jobName);
+    if (isCmRunKey(row.jobName) || isHcRunKey(row.jobName)) {
+      const settled = isCmRunKey(row.jobName)
+        ? await settleRunRow(zcql, row.jobName, CM_TABLE.RUN, RUN_WORDING.CM)
+        : await settleRunRow(zcql, row.jobName, HC_RUN_TABLE, RUN_WORDING.HC);
       next = settled.status;
-      cmMessage = settled.message || null;
+      runMessage = settled.message || null;
     } else if (isCaKey(row.jobName)) {
       next = statusFromCaProgress(await readCaJobProgress(zcql, row.jobName));
     } else {
+      const hcfa = row.jobName.match(HCFA_KEY);
+      const jobsName = hcfa ? hcfa[1] : row.jobName;
       const jr = await zcql.executeZCQLQuery(
-        `SELECT status FROM Jobs WHERE jobName = '${escSql(row.jobName)}' LIMIT 1`,
+        `SELECT status FROM Jobs WHERE jobName = '${escSql(jobsName)}' LIMIT 1`,
       );
       const raw = jr?.length ? jr[0].Jobs?.status ?? jr[0].status : "";
       next = statusFromJobsRow(raw);
@@ -203,7 +231,7 @@ async function reconcileRow(zcql, row) {
 
   if (next === "in_progress" || next === row.status) return row;
 
-  const message = cmMessage || composeMessage(row.title, next) || row.message;
+  const message = runMessage || composeMessage(row.title, next) || row.message;
   try {
     await zcql.executeZCQLQuery(
       `UPDATE Notifications SET status = '${escSql(next)}', message = '${escSql(message)}' ` +
