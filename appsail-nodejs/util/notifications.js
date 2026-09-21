@@ -47,6 +47,12 @@ const isCaKey = (jobName) => /^(SPL|BONA|MRGT|DMGT)/.test(String(jobName || ""))
 // run row, not in Jobs, so they are settled from Custody_Match_Run instead.
 const isCmRunKey = (jobName) => /^CM-\d+$/.test(String(jobName || ""));
 
+// File removals ("RM-<ms>") are settled by the delete endpoint once Stratus
+// stops listing the file. If AppSail restarted before that check finished,
+// close the row here instead of leaving it "in progress" until the 24h prune.
+const isRemovalKey = (jobName) => /^RM-\d+$/.test(String(jobName || ""));
+const REMOVAL_STALE_MS = 10 * 60 * 1000;
+
 async function settleCmRun(zcql, runId) {
   const rows = await zcql.executeZCQLQuery(
     `SELECT status, exceptionCount, errorMessage FROM ${CM_TABLE.RUN} ` +
@@ -156,6 +162,23 @@ export async function insertNotification(zcql, { jobName, title, message, status
 
 async function reconcileRow(zcql, row) {
   if (row.status !== "in_progress" || !row.jobName) return row;
+
+  if (isRemovalKey(row.jobName)) {
+    // Age from the key itself (RM-<ms when the delete ran>): CREATEDTIME carries
+    // no timezone, so it can read hours off on a server in another zone.
+    if (Date.now() - Number(row.jobName.slice(3)) < REMOVAL_STALE_MS) return row;
+    const message = "The file was deleted from storage.";
+    try {
+      await zcql.executeZCQLQuery(
+        `UPDATE Notifications SET status = 'completed', message = '${escSql(message)}' ` +
+          `WHERE ROWID = ${onlyDigits(row.rowId)}`,
+      );
+    } catch (e) {
+      console.warn(`[notifications] settle '${row.jobName}' failed:`, e.message);
+      return row;
+    }
+    return { ...row, status: "completed", message, updatedAt: Date.now() };
+  }
 
   let next;
   let cmMessage = null;

@@ -49,6 +49,7 @@ import {
   signedGetUrl,
 } from "../../util/custodyMatch/storage.js";
 import { supersedeRunsForDate } from "../../util/custodyMatch/runStore.js";
+import { insertNotification } from "../../util/notifications.js";
 
 /** Row errors are for reading, not for scrolling. Send the first page and say how many more. */
 const MAX_REPORTED_ROW_ERRORS = 50;
@@ -749,6 +750,50 @@ export const listCustodyUploads = async (req, res) => {
  * own remove button, so the button has to take that file and leave the rest of
  * the day — other schemes, other dates, the difference reports — where they are.
  */
+/* How long to keep checking that a deleted file has left the Stratus listing. */
+const REMOVAL_CHECK_EVERY_MS = 10 * 1000;
+const REMOVAL_CHECK_FOR_MS = 5 * 60 * 1000;
+
+const isListed = (day, key) =>
+  day.custody.files.some((f) => f.key === key) || day.fa.raw.some((f) => f.key === key);
+
+/**
+ * Settle the bell's removal notice once the file is really gone.
+ *
+ * deleteObject returns before Stratus's listing catches up, so "removed" is only
+ * reported once the key stops appearing in the date's listing. Runs after the
+ * response has been sent, the same way the import's bulk-job poll does.
+ */
+const confirmRemoval = async (catalystApp, { key, businessDate, jobName, title, fileName }) => {
+  const zcql = catalystApp.zcql();
+  const deadline = Date.now() + REMOVAL_CHECK_FOR_MS;
+
+  while (Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, REMOVAL_CHECK_EVERY_MS));
+    try {
+      if (!isListed(await listDay(catalystApp, businessDate), key)) {
+        await insertNotification(zcql, {
+          jobName,
+          title,
+          status: "completed",
+          message: `${fileName} has been removed from storage.`,
+        });
+        return;
+      }
+    } catch (err) {
+      console.warn("[CustodyMatchUpload] confirmRemoval check failed:", err.message);
+    }
+  }
+
+  // The object itself was deleted; only the listing is slow. Say so rather than failing.
+  await insertNotification(zcql, {
+    jobName,
+    title,
+    status: "completed",
+    message: `${fileName} was deleted. Storage is still catching up, so it may show for a little longer after a refresh.`,
+  });
+};
+
 export const deleteUploadedFile = async (req, res) => {
   try {
     const catalystApp = req.catalystApp;
@@ -768,9 +813,18 @@ export const deleteUploadedFile = async (req, res) => {
       });
     }
 
+    const fileName = parsed.originalFileName || key.split("/").pop();
+    const notice = { jobName: `RM-${Date.now()}`, title: `File removal — ${fileName}` };
+    const zcql = catalystApp.zcql();
+
     const bucket = getBucket(catalystApp);
     const result = await deleteKeys(bucket, [key]);
     if (result.failed.length > 0) {
+      await insertNotification(zcql, {
+        ...notice,
+        status: "failed",
+        message: `${fileName} could not be removed. Please try again.`,
+      }).catch((e) => console.warn("[CustodyMatchUpload] notification failed:", e.message));
       return fail(res, 500, {
         code: "DELETE_FAILED",
         message: `Could not remove ${key.split("/").pop()}.`,
@@ -789,6 +843,24 @@ export const deleteUploadedFile = async (req, res) => {
      * look as though it needed a page refresh to disappear.
      */
     const stillThere = (f) => f.key !== key;
+
+    // "In progress" until confirmRemoval sees the key leave the listing.
+    try {
+      await insertNotification(zcql, {
+        ...notice,
+        status: "in_progress",
+        message: "Deleting from storage. This usually takes 1–3 minutes.",
+      });
+      void confirmRemoval(catalystApp, {
+        key,
+        businessDate: parsed.businessDate,
+        fileName,
+        ...notice,
+      }).catch((e) => console.error("[CustodyMatchUpload] confirmRemoval:", e.message));
+    } catch (e) {
+      // The file is removed either way; a missing bell entry must not fail the request.
+      console.warn("[CustodyMatchUpload] removal notification failed:", e.message);
+    }
 
     return res.json({
       success: true,
