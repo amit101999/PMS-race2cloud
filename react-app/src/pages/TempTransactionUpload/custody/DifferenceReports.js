@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useState } from "react";
 
 import StatusBadge, { STATUS } from "./StatusBadge";
-import DownloadButton from "./DownloadButton";
+import DownloadButton from "../../../components/common/DownloadButton";
 import * as api from "./api";
 
 const when = (ms) =>
@@ -71,12 +71,12 @@ const DifferenceReports = ({ refreshToken }) => {
                 </p>
             ) : null}
 
-            <div className="upload-history-table-wrapper">
-                <table className="upload-history-table upload-history-table--compact">
+            <div className="data-table-wrap">
+                <table className="data-table data-table--spread">
                     <thead>
                         <tr>
-                            <th>Matched on</th>
-                            <th>Report</th>
+                            <th className="date">Matched on</th>
+                            <th className="truncate">Report</th>
                             <th>Dates compared</th>
                             <th className="num">Not matching</th>
                             <th className="num">Compared</th>
@@ -99,8 +99,8 @@ const DifferenceReports = ({ refreshToken }) => {
                         ) : (
                             reports.map((r) => (
                                 <tr key={r.runId}>
-                                    <td>{when(r.matchedAtMs)}</td>
-                                    <td className="filename-cell" title={r.reportName}>
+                                    <td className="date">{when(r.matchedAtMs)}</td>
+                                    <td className="truncate mono" title={r.reportName}>
                                         {r.reportName || r.runId}
                                         {/* A later run for the same date took over as the
                                             one that can be imported. The report still

@@ -82,7 +82,7 @@ const faDateLabel = (file) =>
         : `Uploaded ${uploadedAtLabel(file.uploadedAtMs)}`;
 
 /** The upload drop-zone's icon — an arrow into a tray, used by both panels. */
-const UploadGlyph = () => (
+export const UploadGlyph = () => (
     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
         <path
             d="M12 15V4M12 4l-4.5 4.5M12 4l4.5 4.5"
@@ -102,7 +102,7 @@ const UploadGlyph = () => (
 );
 
 /** A small document icon for a staged file row, used by both panels. */
-const FileGlyph = () => (
+export const FileGlyph = () => (
     <svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true">
         <path
             d="M4 1.5h4.5L12 5v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V2.5a1 1 0 0 1 1-1Z"
@@ -336,7 +336,10 @@ const CustodyMatchPanel = ({
         try {
             const res = await api.getLatestRun(businessDate);
             setDay(res.day);
-            setRun(res.run);
+            // A superseded run was matched against files or a mapping that have
+            // since changed, so its result no longer describes this date. Treat
+            // the date as not yet matched rather than showing a stale result.
+            setRun(res.run?.status === "SUPERSEDED" ? null : res.run);
             setRunError(null);
         } catch (err) {
             setRunError({ message: err.message, detail: err.detail });
@@ -402,7 +405,8 @@ const CustodyMatchPanel = ({
         pollRef.current = setInterval(async () => {
             try {
                 const res = await api.getRun(runId);
-                setRun(res.run);
+                // A file or mapping changed mid-run: same rule as loadDay, hide the stale run.
+                setRun(res.run?.status === "SUPERSEDED" ? null : res.run);
             } catch (err) {
                 setRunError({ message: err.message, detail: err.detail });
             }
@@ -1032,9 +1036,7 @@ const CustodyMatchPanel = ({
                                     <StatusBadge tone={STATUS.PROCESSING}>{run.stageDetail || run.status}</StatusBadge>
                                 ) : run.status === "COMPLETED_CLEAN" ? (
                                     <StatusBadge tone={STATUS.OK}>Matched</StatusBadge>
-                                ) : run.status === "COMPLETED_WITH_EXCEPTIONS" ? (
-                                    <StatusBadge tone={STATUS.WARN}>Needs review</StatusBadge>
-                                ) : run.status === "FAILED" ? (
+                                ) : run.status === "COMPLETED_WITH_EXCEPTIONS" ? null : run.status === "FAILED" ? (
                                     <StatusBadge tone={STATUS.BAD}>Failed</StatusBadge>
                                 ) : (
                                     <StatusBadge tone={STATUS.NEUTRAL}>{run.status}</StatusBadge>
@@ -1072,21 +1074,6 @@ const CustodyMatchPanel = ({
                                     Matched — no differences between fund accounting and custody.
                                     The transaction file is ready to commit.
                                 </p>
-                            </div>
-                        ) : null}
-
-                        {run.status === "COMPLETED_WITH_EXCEPTIONS" ? (
-                            <div className="cm-verdict warn">
-                                <p className="cm-verdict-lead">
-                                    Matching completed. <strong>{run.counts.exceptions.toLocaleString()}</strong>{" "}
-                                    record(s) do not agree between the two sides and need review before
-                                    committing.
-                                </p>
-                                <div className="cm-verdict-actions">
-                                    <a href="#exception-details" className="cm-secondary cm-link-btn">
-                                        Review exceptions
-                                    </a>
-                                </div>
                             </div>
                         ) : null}
 
@@ -1157,6 +1144,7 @@ const CustodyMatchPanel = ({
                 onUpload={uploadPending}
                 onClose={() => setPending(null)}
                 onSaved={loadDay}
+                showHints={false}
             />
         </>
     );

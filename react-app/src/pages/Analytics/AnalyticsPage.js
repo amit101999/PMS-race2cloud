@@ -497,17 +497,17 @@ function AnalyticsPage() {
             <span className="summary-sort-icon">⇅</span>
           </div>
 
-          <div className="summary-table-wrapper">
-            <table className="summary-table">
+          <div className="data-table-wrap">
+            <table className="data-table">
               <thead>
                 <tr>
                   <th>Description</th>
-                  <th>Cost</th>
-                  <th>Mkt Val</th>
-                  <th>Income</th>
-                  <th>G/L</th>
-                  <th>% G/L</th>
-                  <th>% Assets</th>
+                  <th className="num">Cost</th>
+                  <th className="num">Mkt Val</th>
+                  <th className="num">Income</th>
+                  <th className="num">G/L</th>
+                  <th className="num">% G/L</th>
+                  <th className="num">% Assets</th>
                 </tr>
               </thead>
 
@@ -520,12 +520,12 @@ function AnalyticsPage() {
                         {item.label}
                       </div>
                     </td>
-                    <td>{item.cost}</td>
-                    <td>{item.mktVal}</td>
-                    <td>{item.income}</td>
-                    <td>{item.gl}</td>
-                    <td>{item.glPct}</td>
-                    <td>{item.pctAssets}</td>
+                    <td className="num">{item.cost}</td>
+                    <td className="num">{item.mktVal}</td>
+                    <td className="num">{item.income}</td>
+                    <td className="num">{item.gl}</td>
+                    <td className="num">{item.glPct}</td>
+                    <td className="num">{item.pctAssets}</td>
                   </tr>
                 ))}
               </tbody>

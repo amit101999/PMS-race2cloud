@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
+    KIND_BLURB,
     KIND_SHORT,
     PROFILE_LABEL,
     SOURCE_BY,
@@ -233,12 +234,17 @@ const autofillByName = (draft, entries, columns) => {
 
 /* ------------------------------------------------------------------ one row */
 
-function MappingRow({ entry, source, columns, takenBy, onChange, registerRef, fieldError }) {
+function MappingRow({ entry, source, columns, takenBy, onChange, registerRef, fieldError, showHints }) {
     const transforms = entry.allowTransforms || [NONE];
     const transform = transformOf(source);
     const value = valueForSource(source, columns);
 
     const absent = value === ABSENT;
+
+    // The holdings file reads its date (LTPDate -> asOfDate) as text, so the
+    // field name is checked as well as the kind.
+    const isDateField =
+        entry.kind === "date" || entry.kind === "isoDate" || /date$/i.test(entry.field);
     const selectedColumn =
         value && !absent ? columns.find((c) => c.index === Number(value)) || null : null;
 
@@ -287,7 +293,21 @@ function MappingRow({ entry, source, columns, takenBy, onChange, registerRef, fi
     return (
         <tr className="fm-row">
             <td className="fm-cell-field">
-                <div className="fm-fieldname">{entry.label}</div>
+                <div className="fm-fieldname">
+                    {entry.label}
+                    {showHints ? (
+                        entry.required ? (
+                            <span className="fm-req" title="This field must name a column in your file">
+                                required
+                            </span>
+                        ) : (
+                            <span className="fm-builtin"> optional</span>
+                        )
+                    ) : null}
+                </div>
+                {showHints ? (
+                    <div className="fm-builtin">Expects {KIND_BLURB[entry.kind] || entry.kind}</div>
+                ) : null}
             </td>
 
             <td className="fm-cell-source">
@@ -351,9 +371,9 @@ function MappingRow({ entry, source, columns, takenBy, onChange, registerRef, fi
                     </p>
                 ) : null}
 
-                {/* A few real values from the picked column, so the user can see the
-                    choice is right instead of trusting the heading alone. */}
-                {!badPick && selectedColumn?.samples?.length > 0 ? (
+                {/* A few real values from the picked column — for date fields only,
+                    where they show the user which date format the file uses. */}
+                {isDateField && !badPick && selectedColumn?.samples?.length > 0 ? (
                     <p className="fm-samples">
                         e.g.{" "}
                         {selectedColumn.samples
@@ -896,8 +916,8 @@ export default function FieldMappingPanel({
                                             <span
                                                 className={
                                                     map && !map.isDefault
-                                                        ? "fm-badge fm-badge--custom"
-                                                        : "fm-badge"
+                                                        ? "badge badge--ok fm-badge"
+                                                        : "badge badge--neutral fm-badge"
                                                 }
                                             >
                                                 {map && !map.isDefault
@@ -984,7 +1004,7 @@ export default function FieldMappingPanel({
                                 </p>
                             ) : null}
 
-                            <table className={showHints ? "fm-table" : "fm-table fm-table--plain"}>
+                            <table className={showHints ? "data-table" : "data-table fm-table--plain"}>
                                 <thead>
                                     <tr>
                                         <th>What we store</th>
@@ -1002,6 +1022,7 @@ export default function FieldMappingPanel({
                                             onChange={setField}
                                             registerRef={registerFieldRef}
                                             fieldError={fieldErrors[entry.field]}
+                                            showHints={showHints}
                                         />
                                     ))}
                                 </tbody>
@@ -1062,7 +1083,7 @@ export default function FieldMappingPanel({
                                     type="button"
                                     className="fm-primary"
                                     onClick={onSave}
-                                    disabled={!dirty || saving || loading}
+                                    disabled={!needsSave || saving || loading}
                                 >
                                     {saving ? "Saving…" : "Save mapping"}
                                 </button>

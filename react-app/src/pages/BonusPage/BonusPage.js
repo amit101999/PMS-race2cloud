@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import MainLayout from "../../layouts/MainLayout";
+import DownloadButton from "../../components/common/DownloadButton";
 import { Card } from "../../components/common/CommonComponents";
 import "./BonusPage.css";
 import { BASE_URL } from "../../constant";
@@ -383,16 +384,16 @@ function BonusPage() {
             <div className="alert info">No accounts affected</div>
           ) : (
             <>
-              <div className="bonus-preview-table-wrapper">
-                <table className="bonus-preview-table">
+              <div className="data-table-wrap">
+                <table className="data-table">
                   <thead>
                     <tr>
                       <th>Actual Code</th>
                       <th>ISIN</th>
-                      <th>Current Holding</th>
-                      <th>Bonus Shares</th>
-                      <th>New Holding</th>
-                      <th>Δ Change</th>
+                      <th className="num">Current Holding</th>
+                      <th className="num">Bonus Shares</th>
+                      <th className="num">New Holding</th>
+                      <th className="num">Δ Change</th>
                     </tr>
                   </thead>
 
@@ -402,7 +403,7 @@ function BonusPage() {
                       return (
                         <React.Fragment key={group.actualCode}>
                           <tr
-                            className="bonus-preview-parent-row"
+                            className="is-clickable is-group"
                             onClick={() =>
                               toggleActualExpand(group.actualCode)
                             }
@@ -424,21 +425,21 @@ function BonusPage() {
                                   {expanded ? "▾" : "▸"}
                                 </span>
                                 {group.actualCode}
-                                <span className="bonus-virtual-count">
+                                <span className="badge badge--neutral">
                                   {group.virtuals.length} virtual
                                   {group.virtuals.length === 1 ? "" : "s"}
                                 </span>
                               </button>
                             </td>
                             <td>{group.isin}</td>
-                            <td>
+                            <td className="num">
                               {Math.floor(Number(group.currentHolding) || 0)}
                             </td>
-                            <td>{Math.floor(Number(group.bonusShares) || 0)}</td>
-                            <td>
+                            <td className="num">{Math.floor(Number(group.bonusShares) || 0)}</td>
+                            <td className="num">
                               {Math.floor(Number(group.newHolding) || 0)}
                             </td>
-                            <td className="bonus-delta-cell">
+                            <td className="num positive">
                               +{Math.floor(Number(group.delta) || 0)}
                             </td>
                           </tr>
@@ -447,23 +448,23 @@ function BonusPage() {
                             group.virtuals.map((row) => (
                               <tr
                                 key={`${group.actualCode}-${row.accountCode}`}
-                                className="bonus-preview-child-row"
+                                className="is-child"
                               >
-                                <td className="bonus-virtual-cell">
-                                  <span className="bonus-virtual-label">
+                                <td className="indent">
+                                  <span className="badge badge--brand bonus-virtual-label">
                                     Virtual
                                   </span>
                                   {row.accountCode}
                                 </td>
                                 <td>{row.isin}</td>
-                                <td>
+                                <td className="num">
                                   {Math.floor(Number(row.currentHolding) || 0)}
                                 </td>
-                                <td>{row.bonusShares}</td>
-                                <td>
+                                <td className="num">{row.bonusShares}</td>
+                                <td className="num">
                                   {Math.floor(Number(row.newHolding) || 0)}
                                 </td>
-                                <td className="bonus-delta-cell">
+                                <td className="num positive">
                                   +{row.delta}
                                 </td>
                               </tr>
@@ -498,8 +499,10 @@ function BonusPage() {
               <div className="bonus-preview-actions">
                 {/* EXPORT - generates report */}
                 <button
-                  className="bonus-submit"
+                  type="button"
+                  className="btn-export"
                   disabled={exportLoading}
+                  aria-busy={exportLoading}
                   onClick={async () => {
                     try {
                       setExportLoading(true);
@@ -546,17 +549,14 @@ function BonusPage() {
                 </button>
 
                 {/* DOWNLOAD - opens generated report */}
-                <button
-                  className="bonus-submit"
+                <DownloadButton
                   disabled={!exportDownloadUrl}
                   onClick={() => {
                     if (exportDownloadUrl) {
                       window.open(exportDownloadUrl, "_blank");
                     }
                   }}
-                >
-                  Download
-                </button>
+                />
 
                 {/* APPLY BONUS */}
                 <button

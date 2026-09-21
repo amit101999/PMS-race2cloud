@@ -1,7 +1,10 @@
 import React, { useCallback, useEffect, useState } from "react";
 
+import { FileGlyph, UploadGlyph } from "../../TempTransactionUpload/custody/CustodyMatchPanel";
 import FieldMappingPanel from "../../TempTransactionUpload/custody/FieldMappingPanel";
+import StatusBadge, { STATUS } from "../../TempTransactionUpload/custody/StatusBadge";
 import UploadErrorDetails from "../../TempTransactionUpload/custody/UploadErrorDetails";
+import WorkflowTracker from "../../TempTransactionUpload/WorkflowTracker";
 import * as api from "./api";
 
 const RUN_POLL_MS = 3000;
@@ -9,6 +12,13 @@ const FA_POLL_MS = 5000;
 
 const when = (ms) =>
     ms ? new Date(ms).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" }) : "—";
+
+const WORKFLOW_STEPS = [
+    { key: "upload", label: "Upload" },
+    { key: "fa", label: "FA Holdings" },
+    { key: "compare", label: "Compare" },
+    { key: "review", label: "Review Differences" },
+];
 
 const bytes = (n) => (n >= 1024 * 1024 ? `${(n / (1024 * 1024)).toFixed(2)} MB` : `${(n / 1024).toFixed(1)} KB`);
 
@@ -34,6 +44,7 @@ const HoldingComparisonPanel = ({
     const [removing, setRemoving] = useState(false);
     const [uploadError, setUploadError] = useState(null);
     const [uploadNote, setUploadNote] = useState("");
+    const [dragActive, setDragActive] = useState(false);
     /* A file whose headers did not match, waiting on the mapping popup. */
     const [mappingFile, setMappingFile] = useState(null);
 
@@ -198,10 +209,10 @@ const HoldingComparisonPanel = ({
 
     /* ── gate 1 ───────────────────────────────────────────────────────── */
 
-    const blockers = [];
-    if (!custodyFile) blockers.push("Upload the custodian holdings file for this date.");
-    if (faStatus !== "COMPLETED" || !fa?.latestSnapshot) blockers.push("Generate FA holdings for this date.");
-    const canRun = blockers.length === 0 && !runIsRunning && !starting && !uploading;
+    // Both inputs are needed: the custodian file and a finished FA holdings snapshot.
+    const faReady = faStatus === "COMPLETED" && Boolean(fa?.latestSnapshot);
+    const inputsReady = Boolean(custodyFile) && faReady;
+    const canRun = inputsReady && !runIsRunning && !starting && !uploading;
 
     const handleRun = async () => {
         setStarting(true);
@@ -220,11 +231,23 @@ const HoldingComparisonPanel = ({
 
     const busy = runIsRunning || uploading || removing || generating || starting;
 
+    /* Where the progress bar points — worked out from the same state as the button above. */
+    let currentStage = 3; // a finished comparison: review its differences
+    if (!custodyFile) currentStage = 0;
+    else if (!faReady) currentStage = 1;
+    else if (!run || run.isRunning || run.status === "FAILED" || run.status === "SUPERSEDED") currentStage = 2;
+
     return (
         <>
-            <div className="cm-date-bar">
+            <div className="txo-tracker-bar">
+                <WorkflowTracker
+                    steps={WORKFLOW_STEPS}
+                    currentStage={currentStage}
+                    label="Holding comparison workflow"
+                />
+
                 <label className="cm-date">
-                    <span>Business date</span>
+                    <span>Date</span>
                     <input
                         type="date"
                         value={businessDate}
@@ -234,59 +257,37 @@ const HoldingComparisonPanel = ({
                 </label>
             </div>
 
-            <div className="cm-split cm-split--even">
+            <div className="txo-section-head">
+                <h2>Files</h2>
+            </div>
+
+            {/* Same upload layout as Transaction Upload: a drop zone, then the staged file as a row. */}
+            <div className="cm-split">
                 <div className="cm-col">
-                    <div className="cm-col-head">
-                        <h3>Custodian Consolidated Holdings</h3>
-                    </div>
+                    <h3 className="cm-col-title">Custodian Consolidated Holdings</h3>
 
-                    <div className="temp-transaction-card">
-                        {custodyFile ? (
-                            <table className="upload-history-table cm-filetable">
-                                <thead>
-                                    <tr>
-                                        <th>Business date</th>
-                                        <th>File</th>
-                                        <th>Uploaded</th>
-                                        <th className="action" aria-label="Remove" />
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    <tr>
-                                        <td className="cm-cell-dates">{custodyFile.businessDate}</td>
-                                        <td className="cm-cell-file" title={custodyFile.fileName}>
-                                            {custodyFile.fileName}
-                                            <span className="cm-file-size">{bytes(custodyFile.sizeBytes)}</span>
-                                        </td>
-                                        <td className="cm-cell-dates">{when(custodyFile.timeMs)}</td>
-                                        <td className="action">
-                                            <button
-                                                type="button"
-                                                className="cm-remove"
-                                                onClick={removeCustodyFile}
-                                                disabled={busy}
-                                                aria-label={`Remove ${custodyFile.fileName}`}
-                                                title="Remove this file"
-                                            >
-                                                ×
-                                            </button>
-                                        </td>
-                                    </tr>
-                                </tbody>
-                            </table>
-                        ) : (
-                            <p className="cm-empty">
-                                {loading ? "Loading…" : "No custodian file uploaded for this date."}
-                            </p>
-                        )}
-
-                        <div className="cm-addfile">
-                            <span className="cm-addfile-title">
-                                {custodyFile ? "Replace custodian file" : "Add custodian file"}
-                            </span>
+                    <div className="temp-transaction-card cm-filecard up-card">
+                        <div
+                            className={dragActive ? "up-zone is-drag" : "up-zone"}
+                            onDragEnter={(e) => {
+                                e.preventDefault();
+                                if (!busy) setDragActive(true);
+                            }}
+                            onDragOver={(e) => e.preventDefault()}
+                            onDragLeave={() => setDragActive(false)}
+                            onDrop={(e) => {
+                                e.preventDefault();
+                                setDragActive(false);
+                                if (busy) return;
+                                const file = e.dataTransfer.files && e.dataTransfer.files[0];
+                                if (file) handleFilePicked(file);
+                            }}
+                        >
                             <input
                                 type="file"
                                 accept=".csv"
+                                className="up-zone-input"
+                                aria-label="Upload custodian holdings file"
                                 disabled={busy}
                                 onChange={(e) => {
                                     const file = e.target.files[0];
@@ -294,71 +295,115 @@ const HoldingComparisonPanel = ({
                                     if (file) handleFilePicked(file);
                                 }}
                             />
-                            {uploading ? <span className="cm-addfile-busy">Validating…</span> : null}
-                            {removing ? <span className="cm-addfile-busy">Removing…</span> : null}
+                            <div className="up-zone-visual">
+                                <UploadGlyph />
+                                <span className="up-zone-title">
+                                    {uploading
+                                        ? "Validating…"
+                                        : removing
+                                          ? "Removing…"
+                                          : custodyFile
+                                            ? "Replace custodian file"
+                                            : "Upload custodian file"}
+                                </span>
+                                <span className="up-zone-sub">
+                                    Drag &amp; drop or <span className="up-zone-browse">Browse</span>
+                                </span>
+                            </div>
                         </div>
 
                         {uploadNote ? <p className="cm-sub">{uploadNote}</p> : null}
                         {uploadError ? (
                             <UploadErrorDetails message={uploadError.message} detail={uploadError.detail} />
                         ) : null}
+
+                        {custodyFile ? (
+                            <div className="up-filelist-wrap">
+                                <div className="up-filelist-head">Custodian file</div>
+                                <div className="up-filelist">
+                                    <div className="up-file-row">
+                                        <FileGlyph />
+                                        <div className="up-file-main">
+                                            <span className="up-file-name" title={custodyFile.fileName}>
+                                                {custodyFile.fileName}
+                                            </span>
+                                            <span className="up-file-meta">
+                                                {custodyFile.businessDate} · {bytes(custodyFile.sizeBytes)} · Uploaded{" "}
+                                                {when(custodyFile.timeMs)}
+                                            </span>
+                                        </div>
+                                        <StatusBadge tone={STATUS.OK}>Ready</StatusBadge>
+                                        <button
+                                            type="button"
+                                            className="up-file-remove"
+                                            onClick={removeCustodyFile}
+                                            disabled={busy}
+                                            aria-label={`Remove ${custodyFile.fileName}`}
+                                            title="Remove this file"
+                                        >
+                                            &times;
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        ) : loading ? (
+                            <p className="cm-empty">Loading…</p>
+                        ) : null}
                     </div>
                 </div>
 
                 <div className="cm-col">
-                    <div className="cm-col-head">
-                        <h3>FA Holdings</h3>
-                    </div>
+                    <h3 className="cm-col-title">FA Holdings</h3>
 
-                    <div className="temp-transaction-card">
-                        {fa?.latestSnapshot ? (
-                            <table className="upload-history-table cm-filetable cm-filetable--fit">
-                                <thead>
-                                    <tr>
-                                        <th className="cm-col-date">Business date</th>
-                                        <th>File</th>
-                                        <th className="cm-col-when">Generated</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    <tr>
-                                        <td className="cm-cell-dates">{fa.latestSnapshot.businessDate}</td>
-                                        <td className="cm-cell-file" title={fa.latestSnapshot.fileName}>
-                                            {fa.latestSnapshot.fileName}
-                                            <span className="cm-file-size">{bytes(fa.latestSnapshot.sizeBytes)}</span>
-                                        </td>
-                                        <td className="cm-cell-dates">{when(fa.latestSnapshot.timeMs)}</td>
-                                    </tr>
-                                </tbody>
-                            </table>
-                        ) : (
-                            <p className="cm-empty">
-                                {loading ? "Loading…" : "No FA holdings generated for this date."}
-                            </p>
-                        )}
-
-                        <div className="cm-addfile">
-                            <span className="cm-addfile-title">
-                                {fa?.latestSnapshot ? "Regenerate FA holdings" : "Generate FA holdings"}
+                    <div className="temp-transaction-card cm-filecard up-card">
+                        {/* FA holdings are generated from our own data rather than uploaded,
+                            so this side has a button where the other has a drop zone. */}
+                        <div className="up-controls">
+                            <button
+                                type="button"
+                                className="cm-primary"
+                                onClick={handleGenerate}
+                                disabled={busy || api.FA_IN_PROGRESS.includes(faStatus)}
+                            >
+                                {api.FA_IN_PROGRESS.includes(faStatus)
+                                    ? "Generating…"
+                                    : fa?.latestSnapshot
+                                      ? "Regenerate FA Holdings"
+                                      : "Generate FA Holdings"}
+                            </button>
+                            <span className={faStatus === "COMPLETED" ? "cm-staged" : "cm-staged muted"}>
+                                {api.FA_STATUS_LABEL[faStatus] || faStatus}
                             </span>
-                            <div className="cm-fa">
-                                <button
-                                    type="button"
-                                    className="cm-primary"
-                                    onClick={handleGenerate}
-                                    disabled={busy || api.FA_IN_PROGRESS.includes(faStatus)}
-                                >
-                                    {api.FA_IN_PROGRESS.includes(faStatus) ? "Generating…" : "Generate FA Holdings"}
-                                </button>
-                                <span className={faStatus === "COMPLETED" ? "cm-staged" : "cm-staged muted"}>
-                                    {api.FA_STATUS_LABEL[faStatus] || faStatus}
-                                </span>
-                            </div>
                         </div>
 
                         {fa?.message || faError ? (
                             <p className="cm-verdict bad">{faError || fa.message}</p>
                         ) : null}
+
+                        {fa?.latestSnapshot ? (
+                            <div className="up-filelist-wrap">
+                                <div className="up-filelist-head">Generated file</div>
+                                <div className="up-filelist">
+                                    <div className="up-file-row">
+                                        <FileGlyph />
+                                        <div className="up-file-main">
+                                            <span className="up-file-name" title={fa.latestSnapshot.fileName}>
+                                                {fa.latestSnapshot.fileName}
+                                            </span>
+                                            <span className="up-file-meta">
+                                                {fa.latestSnapshot.businessDate} · {bytes(fa.latestSnapshot.sizeBytes)} ·
+                                                Generated {when(fa.latestSnapshot.timeMs)}
+                                            </span>
+                                        </div>
+                                        <StatusBadge tone={STATUS.OK}>Ready</StatusBadge>
+                                    </div>
+                                </div>
+                            </div>
+                        ) : (
+                            <p className="cm-empty">
+                                {loading ? "Loading…" : "No FA holdings generated for this date."}
+                            </p>
+                        )}
                     </div>
                 </div>
             </div>
@@ -368,14 +413,6 @@ const HoldingComparisonPanel = ({
                     <button type="button" className="cm-primary" onClick={handleRun} disabled={!canRun}>
                         {runIsRunning || starting ? "Comparing…" : "Run Comparison"}
                     </button>
-
-                    {blockers.length > 0 && !runIsRunning ? (
-                        <ul className="cm-blockers">
-                            {blockers.map((b) => (
-                                <li key={b}>{b}</li>
-                            ))}
-                        </ul>
-                    ) : null}
                 </div>
 
                 {run ? (

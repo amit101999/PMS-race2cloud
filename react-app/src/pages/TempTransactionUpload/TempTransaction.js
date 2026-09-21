@@ -6,7 +6,8 @@ import DifferenceReports from "./custody/DifferenceReports";
 import PreviousCustodianUploads from "./custody/PreviousCustodianUploads";
 import ExceptionGrid from "./custody/ExceptionGrid";
 import GateTwo from "./custody/GateTwo";
-import DownloadButton from "./custody/DownloadButton";
+import WorkflowTracker from "./WorkflowTracker";
+import DownloadButton from "../../components/common/DownloadButton";
 import { todayIso } from "./custody/api";
 import "./tokens.css";
 import "./TempTransaction.css";
@@ -166,55 +167,14 @@ const TempTransaction = () => {
         <MainLayout title="Transaction Upload">
             <div className="temp-transaction-container txn-ops">
                 <div className="txo-tracker-bar">
-                <ol className="txo-tracker" aria-label="Reconciliation workflow">
-                    {WORKFLOW_STEPS.map((step, i) => {
-                        const reached = i <= currentStage;
-                        return (
-                            <li
-                                key={step.key}
-                                className={
-                                    i === currentStage
-                                        ? "is-current"
-                                        : i < currentStage
-                                            ? "is-done"
-                                            : "is-pending"
-                                }
-                            >
-                                <div className="txo-tracker-row">
-                                    {i !== 0 ? (
-                                        <span
-                                            className={reached ? "txo-tracker-line is-filled" : "txo-tracker-line"}
-                                        />
-                                    ) : null}
-                                    <span className="txo-tracker-node" aria-hidden="true">
-                                        {reached ? (
-                                            <svg width="9" height="7" viewBox="0 0 9 7" fill="none">
-                                                <path
-                                                    d="M1 3.5L3.2 5.7L8 1"
-                                                    stroke="white"
-                                                    strokeWidth="1.4"
-                                                    strokeLinecap="round"
-                                                    strokeLinejoin="round"
-                                                />
-                                            </svg>
-                                        ) : null}
-                                    </span>
-                                    {i !== WORKFLOW_STEPS.length - 1 ? (
-                                        <span
-                                            className={
-                                                i < currentStage ? "txo-tracker-line is-filled" : "txo-tracker-line"
-                                            }
-                                        />
-                                    ) : null}
-                                </div>
-                                <span className="txo-tracker-label">{step.label}</span>
-                            </li>
-                        );
-                    })}
-                </ol>
+                <WorkflowTracker
+                    steps={WORKFLOW_STEPS}
+                    currentStage={currentStage}
+                    label="Reconciliation workflow"
+                />
 
                 <label className="cm-date">
-                    <span>Business date</span>
+                    <span>Date</span>
                     <input
                         type="date"
                         value={businessDate}
@@ -256,12 +216,12 @@ const TempTransaction = () => {
                         </p>
                     )}
 
-                    <div className="upload-history-table-wrapper">
-                        <table className="upload-history-table upload-history-table--compact">
+                    <div className="data-table-wrap">
+                        <table className="data-table data-table--spread">
                             <thead>
                                 <tr>
-                                    <th>Uploaded date</th>
-                                    <th>File name</th>
+                                    <th className="date">Uploaded date</th>
+                                    <th className="truncate">File name</th>
                                     <th className="num">Size</th>
                                     <th className="action">Download</th>
                                 </tr>
@@ -282,8 +242,8 @@ const TempTransaction = () => {
                                 ) : (
                                     historyItems.map((item) => (
                                         <tr key={item.key}>
-                                            <td>{formatUploadedAt(item.uploadedAt)}</td>
-                                            <td className="filename-cell" title={item.originalFileName}>
+                                            <td className="date">{formatUploadedAt(item.uploadedAt)}</td>
+                                            <td className="truncate mono" title={item.originalFileName}>
                                                 {item.originalFileName}
                                             </td>
                                             <td className="num">{formatBytes(item.sizeBytes)}</td>

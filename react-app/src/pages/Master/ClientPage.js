@@ -216,8 +216,8 @@ function ClientPage() {
                 <div className="client-state">No clients match your filter.</div>
               ) : (
                 <>
-                  <div className="client-table-wrapper">
-                    <table className="client-table">
+                  <div className="data-table-wrap">
+                    <table className="data-table">
                       <thead>
                         <tr>
                           {columns.map((c) => (

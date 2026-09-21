@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useState } from "react";
+import DownloadButton from "../../../components/common/DownloadButton";
 
 import * as api from "./api";
 
@@ -61,13 +62,13 @@ const PreviousFiles = ({ title, load, emptyText, refreshToken, hiddenKeys }) => 
                 </p>
             ) : null}
 
-            <div className="upload-history-table-wrapper">
-                <table className="upload-history-table">
+            <div className="data-table-wrap">
+                <table className="data-table data-table--spread">
                     <thead>
                         <tr>
-                            <th>Created on</th>
-                            <th>Business date</th>
-                            <th>File name</th>
+                            <th className="date">Created on</th>
+                            <th className="date">Business date</th>
+                            <th className="truncate">File name</th>
                             <th className="num">Size</th>
                             <th className="action">Download</th>
                         </tr>
@@ -84,21 +85,17 @@ const PreviousFiles = ({ title, load, emptyText, refreshToken, hiddenKeys }) => 
                         ) : (
                             items.map((item) => (
                                 <tr key={item.key}>
-                                    <td>{when(item.timeMs)}</td>
-                                    <td>{item.businessDate}</td>
-                                    <td className="filename-cell" title={item.fileName}>
+                                    <td className="date">{when(item.timeMs)}</td>
+                                    <td className="date">{item.businessDate}</td>
+                                    <td className="truncate mono" title={item.fileName}>
                                         {item.fileName}
                                     </td>
                                     <td className="num">{bytes(item.sizeBytes)}</td>
                                     <td className="action">
-                                        <button
-                                            type="button"
-                                            className="upload-history-download-btn"
+                                        <DownloadButton
                                             onClick={() => download(item)}
-                                            disabled={busyKey === item.key}
-                                        >
-                                            {busyKey === item.key ? "Preparing…" : "Download"}
-                                        </button>
+                                            busy={busyKey === item.key}
+                                        />
                                     </td>
                                 </tr>
                             ))

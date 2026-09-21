@@ -1,6 +1,6 @@
 .job-tray {
   position: fixed;
-  top: 18px;
+  top: 19px; /* centred in the 80px header (CommonComponents HEADER_HEIGHT) */
   right: 24px;
   z-index: 2000;
 }

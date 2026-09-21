@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import MainLayout from "../../layouts/MainLayout";
 import { Card } from "../../components/common/CommonComponents";
+import DownloadButton from "../../components/common/DownloadButton";
 import { useAccountCodes } from "../../hooks/GetAllCodes";
 import { BASE_URL } from "../../constant";
 import "../SplitPage/SplitPage.css";
@@ -18,12 +19,12 @@ function formatINR(val) {
  * inline badge in the table so DIVIDEND / BY- / SL+ etc. stand out.
  */
 function tranTypeBadgeClass(tt) {
-  if (tt === "DIVIDEND") return "tt-badge tt-badge-dividend";
-  if (tt === "BY-") return "tt-badge tt-badge-buy";
-  if (tt === "SL+") return "tt-badge tt-badge-sell";
-  if (["CS+", "CSI", "IN+", "IN1"].includes(tt)) return "tt-badge tt-badge-cashin";
-  if (tt === "CS-") return "tt-badge tt-badge-cashout";
-  return "tt-badge tt-badge-default";
+  if (tt === "DIVIDEND") return "badge badge--info";
+  if (tt === "BY-") return "badge badge--buy";
+  if (tt === "SL+") return "badge badge--sell";
+  if (["CS+", "CSI", "IN+", "IN1"].includes(tt)) return "badge badge--warn";
+  if (tt === "CS-") return "badge badge--brand";
+  return "badge badge--neutral";
 }
 
 function CashBalancePage() {
@@ -446,21 +447,21 @@ function CashBalancePage() {
                 <div className="cash-empty">No transactions found for the selected filters.</div>
               ) : (
                 <>
-                  <div className="cash-table-wrapper">
-                    <table className="cash-table">
+                  <div className="data-table-wrap">
+                    <table className="data-table">
                       <thead>
                         <tr>
-                          <th>Tran Date</th>
-                          <th>Set Date</th>
+                          <th className="date">Tran Date</th>
+                          <th className="date">Set Date</th>
                           <th>Account</th>
                           <th>ISIN</th>
-                          <th>Security Name</th>
-                          <th>Tran Type</th>
-                          <th>QTY</th>
-                          <th>Rate</th>
-                          <th>STT</th>
-                          <th>Amount</th>
-                          <th className="cash-th-balance">Balance</th>
+                          <th className="wrap">Security Name</th>
+                          <th className="status">Tran Type</th>
+                          <th className="num">QTY</th>
+                          <th className="num">Rate</th>
+                          <th className="num">STT</th>
+                          <th className="num">Amount</th>
+                          <th className="num">Balance</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -469,12 +470,12 @@ function CashBalancePage() {
                           const balValid = !Number.isNaN(bal);
                           return (
                             <tr key={r.ROWID ?? idx}>
-                              <td>{r.Transaction_Date || "–"}</td>
-                              <td>{r.Settlement_Date || "–"}</td>
+                              <td className="date">{r.Transaction_Date || "–"}</td>
+                              <td className="date">{r.Settlement_Date || "–"}</td>
                               <td>{r.Account_Code || "–"}</td>
                               <td>{r.ISIN || "–"}</td>
-                              <td className="cash-col-name">{r.Security_Name || "–"}</td>
-                              <td>
+                              <td className="wrap">{r.Security_Name || "–"}</td>
+                              <td className="status">
                                 {r.Transaction_Type ? (
                                   <span className={tranTypeBadgeClass(r.Transaction_Type)}>
                                     {r.Transaction_Type}
@@ -483,9 +484,9 @@ function CashBalancePage() {
                                   "–"
                                 )}
                               </td>
-                              <td>{r.Quantity ?? "–"}</td>
-                              <td>{r.Price != null ? formatINR(r.Price) : "–"}</td>
-                              <td className={Number(r.STT) < 0 ? "cash-debit" : Number(r.STT) > 0 ? "cash-credit" : ""}>
+                              <td className="num">{r.Quantity ?? "–"}</td>
+                              <td className="num">{r.Price != null ? formatINR(r.Price) : "–"}</td>
+                              <td className={Number(r.STT) < 0 ? "num negative" : Number(r.STT) > 0 ? "num positive" : "num"}>
                                 {r.STT != null && r.STT !== "" && !Number.isNaN(Number(r.STT))
                                   ? formatINR(r.STT)
                                   : "–"}
@@ -493,17 +494,17 @@ function CashBalancePage() {
                               <td
                                 className={
                                   Number(r.Total_Amount) < 0
-                                    ? "cash-debit"
+                                    ? "num negative"
                                     : Number(r.Total_Amount) > 0
-                                      ? "cash-credit"
-                                      : ""
+                                      ? "num positive"
+                                      : "num"
                                 }
                               >
                                 {r.Total_Amount != null && r.Total_Amount !== "" && !Number.isNaN(Number(r.Total_Amount))
                                   ? formatINR(r.Total_Amount)
                                   : "–"}
                               </td>
-                              <td className={`cash-col-balance ${balValid && bal >= 0 ? "cash-balance-positive" : ""} ${balValid && bal < 0 ? "cash-balance-negative" : ""}`}>
+                              <td className={`num strong ${balValid && bal >= 0 ? "positive" : ""} ${balValid && bal < 0 ? "negative" : ""}`}>
                                 {balValid ? formatINR(bal) : "–"}
                               </td>
                             </tr>
@@ -602,12 +603,11 @@ function CashBalancePage() {
               {rows.length > 0 && (
                 <div className="cash-export-bar">
                   {exportStatus === "COMPLETED" ? (
-                    <button className="cash-export-btn cash-download-btn" onClick={handleDownload}>
-                      Download CSV
-                    </button>
+                    <DownloadButton onClick={handleDownload} />
                   ) : (
                     <button
-                      className="cash-export-btn"
+                      type="button"
+                      className="btn-export"
                       onClick={handleExport}
                       disabled={loading || exportStatus === "RUNNING" || exportStatus === "STARTING" || exportStatus === "PENDING"}
                     >
@@ -617,7 +617,7 @@ function CashBalancePage() {
                         ? "Starting..."
                         : exportStatus === "ERROR" || exportStatus === "FAILED"
                         ? "Retry Export"
-                        : "Export CSV"}
+                        : "Export"}
                     </button>
                   )}
                   {(exportStatus === "RUNNING" || exportStatus === "PENDING") && (

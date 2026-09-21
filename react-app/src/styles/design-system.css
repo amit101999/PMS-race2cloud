@@ -1,0 +1,431 @@
+/*
+ * The app's one shared design system for tables, table action buttons and
+ * badges. Every table in the app uses `.data-table`; pages must not add their
+ * own th/td styling — if a table needs something new, add it here.
+ *
+ * Cell classes (put the same class on the <th> and its <td>s):
+ *   .num     numbers — right aligned, tabular figures
+ *   .date    dates — compact, never wraps
+ *   .status  badges — centred vertically, sized to content
+ *   .action  buttons — right aligned, sized to content
+ *   .wrap    long free text (names, remarks) — allowed to wrap
+ *   .truncate  long single-line values (file names) — cut with "…"
+ *
+ * Row classes: .is-clickable, .is-active, .is-group / .is-child (expandable
+ * rows, with .indent on the child's first cell), .is-warn, .is-total.
+ *
+ * Columns size to their content: cells don't wrap by default and the
+ * num/date/status/action columns shrink to fit, so spare width goes to the
+ * text columns instead of opening gaps between every column.
+ *
+ * Table modifier: .data-table--spread gives every column an equal share of
+ * the width. For short history tables (a file name plus a few small columns),
+ * where giving all spare width to the one text column leaves a wide gap.
+ */
+
+:root {
+  /* The sidebar's maroon — the single brand/action colour for the app. */
+  --ds-brand: #8b1538;
+  --ds-brand-hover: #6c0f2b;
+  --ds-brand-tint: #f8e8ec;
+
+  --ds-surface: #ffffff;
+  --ds-surface-sunken: #f8f9fb;
+  --ds-border: #dde1e7;
+  --ds-border-subtle: #eceef2;
+  --ds-border-strong: #c2c8d1;
+
+  --ds-text: #1a1d24;
+  --ds-text-muted: #667085;
+  --ds-text-faint: #98a2b3;
+
+  --ds-success: #15803d;
+  --ds-success-bg: #eaf6ee;
+  --ds-warning: #9a6400;
+  --ds-warning-bg: #fdf3e0;
+  --ds-error: #b3261e;
+  --ds-error-bg: #fbeceb;
+  --ds-info: #2c5aa0;
+  --ds-info-bg: #eaf1fb;
+  --ds-neutral: #667085;
+  --ds-neutral-bg: #eef0f3;
+
+  --ds-radius-sm: 4px;
+  --ds-radius-md: 6px;
+}
+
+/* ─────────────────────────────── Tables ─────────────────────────────── */
+
+.data-table-wrap {
+  width: 100%;
+  max-width: 100%;
+  overflow-x: auto;
+  background: var(--ds-surface);
+  border: 1px solid var(--ds-border);
+  border-radius: var(--ds-radius-md);
+}
+
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  border-spacing: 0;
+  font-size: 13px;
+  line-height: 1.35;
+  color: var(--ds-text);
+  background: var(--ds-surface);
+}
+
+.data-table th,
+.data-table td {
+  padding: 6px 10px;
+  text-align: left;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
+.data-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  height: 32px;
+  background: var(--ds-brand-tint);
+  color: var(--ds-brand-hover);
+  font-size: 12px;
+  font-weight: 600;
+  border-bottom: 1px solid var(--ds-border-strong);
+}
+
+.data-table td {
+  height: 32px;
+  border-bottom: 1px solid var(--ds-border-subtle);
+}
+
+.data-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.data-table tbody tr:hover {
+  background: var(--ds-surface-sunken);
+}
+
+.data-table tbody tr.is-clickable {
+  cursor: pointer;
+}
+
+.data-table tbody tr.is-active,
+.data-table tbody tr.is-active:hover {
+  background: var(--ds-brand-tint);
+}
+
+/* Expandable tables: a group row, and the child rows it opens. */
+.data-table tbody tr.is-group td {
+  font-weight: 600;
+}
+
+.data-table tbody tr.is-child {
+  background: var(--ds-surface-sunken);
+}
+
+.data-table tbody tr.is-child td {
+  color: var(--ds-text-muted);
+}
+
+.data-table td.indent {
+  padding-left: 28px;
+}
+
+/* A row that needs attention (e.g. will be skipped, has a mismatch). */
+.data-table tbody tr.is-warn,
+.data-table tbody tr.is-warn:hover {
+  background: var(--ds-warning-bg);
+}
+
+/* Totals / summary rows */
+.data-table tfoot td,
+.data-table tbody tr.is-total td {
+  font-weight: 600;
+  background: var(--ds-surface-sunken);
+  border-top: 1px solid var(--ds-border-strong);
+}
+
+.data-table .num,
+.data-table .date,
+.data-table .status,
+.data-table .action {
+  width: 1%;
+}
+
+.data-table--spread {
+  table-layout: fixed;
+}
+
+.data-table--spread .num,
+.data-table--spread .date,
+.data-table--spread .status,
+.data-table--spread .action {
+  width: auto;
+}
+
+/* The file-name column gets a larger share; the <th> needs the class too,
+   since a fixed layout takes its widths from the header row. */
+.data-table--spread .truncate,
+.data-table--spread .wrap {
+  width: 32%;
+  max-width: none;
+}
+
+/* With the width spread out, each heading sits centred over its values and
+   the action button sits mid-column instead of against the table edge.
+   File names stay left-aligned: their lengths vary, so centring them looks
+   ragged. The extra .data-table keeps these above the .num/.action rules. */
+.data-table.data-table--spread th,
+.data-table.data-table--spread td {
+  text-align: center;
+}
+
+/* Equal columns can be narrower than a long value; clip it rather than let it
+   run into the next column. */
+.data-table--spread td {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.data-table.data-table--spread th.truncate,
+.data-table.data-table--spread td.truncate,
+.data-table.data-table--spread th.wrap,
+.data-table.data-table--spread td.wrap {
+  text-align: left;
+}
+
+.data-table .num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.data-table .date {
+  font-variant-numeric: tabular-nums;
+}
+
+.data-table .action {
+  text-align: right;
+}
+
+.data-table .center {
+  text-align: center;
+}
+
+.data-table .wrap {
+  white-space: normal;
+  min-width: 160px;
+  max-width: 360px;
+  overflow-wrap: anywhere;
+}
+
+/* Long single-line values (file names): cut with "…"; put the full value in
+   the cell's title attribute. */
+.data-table .truncate {
+  max-width: 280px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.data-table .muted {
+  color: var(--ds-text-muted);
+}
+
+.data-table .strong {
+  font-weight: 600;
+}
+
+/* Signed values: gains / increases vs losses / decreases. */
+.data-table .positive {
+  color: var(--ds-success);
+  font-weight: 600;
+}
+
+.data-table .negative {
+  color: var(--ds-error);
+  font-weight: 600;
+}
+
+.data-table .empty-cell {
+  height: auto;
+  padding: 24px 10px;
+  text-align: center;
+  color: var(--ds-text-muted);
+  white-space: normal;
+}
+
+@media (max-width: 768px) {
+  .data-table {
+    font-size: 12.5px;
+  }
+
+  .data-table th,
+  .data-table td {
+    padding: 5px 8px;
+  }
+
+  .data-table .wrap {
+    min-width: 120px;
+  }
+}
+
+/* ─────────────────────────── Table buttons ─────────────────────────── */
+
+/* One compact outlined button in the brand colour. `.btn-export` is text only
+   ("Export"); `.btn-download` puts a down arrow before "Download";
+   `.btn-action` is any other in-row action (View, Preview, …). */
+.btn-export,
+.btn-download,
+.btn-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid var(--ds-brand);
+  border-radius: var(--ds-radius-sm);
+  background: var(--ds-surface);
+  color: var(--ds-brand);
+  font-family: inherit;
+  font-size: 12.5px;
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+  text-decoration: none;
+  cursor: pointer;
+  transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+
+.btn-export:hover:not(:disabled),
+.btn-download:hover:not(:disabled),
+.btn-action:hover:not(:disabled) {
+  background: var(--ds-brand-tint);
+  border-color: var(--ds-brand-hover);
+  color: var(--ds-brand-hover);
+}
+
+.btn-export:focus-visible,
+.btn-download:focus-visible,
+.btn-action:focus-visible {
+  outline: 2px solid var(--ds-brand-hover);
+  outline-offset: 2px;
+}
+
+.btn-export:disabled,
+.btn-download:disabled,
+.btn-action:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+/* Download fills with the sidebar maroon on hover/press; text and icon
+   (currentColor) turn white. */
+.btn-download:hover:not(:disabled),
+.btn-download:active:not(:disabled) {
+  background: var(--ds-brand);
+  border-color: var(--ds-brand);
+  color: #ffffff;
+}
+
+.btn-download svg {
+  flex-shrink: 0;
+}
+
+.btn-spinner {
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  border: 1.5px solid rgba(139, 21, 56, 0.25);
+  border-top-color: var(--ds-brand);
+  animation: ds-spin 0.7s linear infinite;
+}
+
+@keyframes ds-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* ─────────────────────────────── Badges ─────────────────────────────── */
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  height: 20px;
+  padding: 0 7px;
+  border-radius: var(--ds-radius-sm);
+  background: var(--ds-neutral-bg);
+  color: var(--ds-neutral);
+  font-family: inherit;
+  font-size: 11.5px;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+  vertical-align: middle;
+}
+
+.badge .badge-glyph {
+  font-size: 10px;
+  line-height: 1;
+}
+
+.badge--buy,
+.badge--ok {
+  background: var(--ds-success-bg);
+  color: var(--ds-success);
+}
+
+.badge--sell,
+.badge--bad {
+  background: var(--ds-error-bg);
+  color: var(--ds-error);
+}
+
+.badge--warn {
+  background: var(--ds-warning-bg);
+  color: var(--ds-warning);
+}
+
+.badge--info,
+.badge--processing {
+  background: var(--ds-info-bg);
+  color: var(--ds-info);
+}
+
+.badge--brand {
+  background: var(--ds-brand-tint);
+  color: var(--ds-brand-hover);
+}
+
+.badge--neutral {
+  background: var(--ds-neutral-bg);
+  color: var(--ds-neutral);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .badge--processing .badge-glyph {
+    animation: ds-pulse 1.4s ease-in-out infinite;
+  }
+}
+
+@keyframes ds-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .btn-export,
+  .btn-download,
+  .btn-action {
+    transition: none;
+  }
+
+  .btn-spinner {
+    animation: none;
+  }
+}

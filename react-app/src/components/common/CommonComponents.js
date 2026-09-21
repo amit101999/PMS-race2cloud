@@ -105,33 +105,13 @@ export function StatCard({ label, value, subLabel, style = {} }) {
    BADGE / TAG
    =========================== */
 
+// All three render the shared .badge from styles/design-system.css so every
+// badge in the app has the same size, radius and type.
 export function Badge({ children, variant = "neutral", style = {} }) {
-  const base = {
-    display: "inline-flex",
-    alignItems: "center",
-    padding: "2px 8px",
-    borderRadius: 9999,
-    fontSize: 11,
-    fontWeight: 500,
-  };
-
-  const variants = {
-    buy: {
-      backgroundColor: "#dcfce7",
-      color: "#166534",
-    },
-    sell: {
-      backgroundColor: "#fee2e2",
-      color: "#b91c1c",
-    },
-    neutral: {
-      backgroundColor: "#e5e7eb",
-      color: "#374151",
-    },
-  };
-
   return (
-    <span style={{ ...base, ...variants[variant], ...style }}>{children}</span>
+    <span className={`badge badge--${variant}`} style={style}>
+      {children}
+    </span>
   );
 }
 
@@ -140,23 +120,16 @@ export function Badge({ children, variant = "neutral", style = {} }) {
    =========================== */
 
 export function TransactionTypeCard({ children, style = {} }) {
-  const cardStyle = {
-    display: "inline-flex",
-    alignItems: "center",
-    justifyContent: "center",
-    padding: "4px 12px",
-    borderRadius: 8,
-    fontSize: 12,
-    fontWeight: 600,
-    textTransform: "uppercase",
-    backgroundColor: "#fce7f3",
-    color: "#5a3e2e",
-    minWidth: "60px",
-    textAlign: "center",
-    ...style,
-  };
+  const text = String(children || "").toUpperCase();
+  let variant = "brand";
+  if (text === "BY-" || text.includes("BUY")) variant = "buy";
+  if (text === "SL+" || text.includes("SELL")) variant = "sell";
 
-  return <span style={cardStyle}>{children}</span>;
+  return (
+    <span className={`badge badge--${variant}`} style={style}>
+      {children}
+    </span>
+  );
 }
 
 /* ===========================
@@ -164,38 +137,13 @@ export function TransactionTypeCard({ children, style = {} }) {
    =========================== */
 
 export function ExchangeCard({ exchange, style = {} }) {
-  const cardStyle = {
-    display: "inline-flex",
-    alignItems: "center",
-    justifyContent: "center",
-    padding: "4px 12px",
-    borderRadius: 8,
-    fontSize: 12,
-    fontWeight: 600,
-    textTransform: "uppercase",
-    minWidth: "60px",
-    textAlign: "center",
-    ...style,
-  };
+  const variant = exchange === "NSE" || exchange === "BSE" ? "ok" : "neutral";
 
-  const variants = {
-    NSE: {
-      backgroundColor: "#d1fae5",
-      color: "#065f46",
-    },
-    BSE: {
-      backgroundColor: "#d1fae5",
-      color: "#065f46",
-    },
-    default: {
-      backgroundColor: "#e5e7eb",
-      color: "#374151",
-    },
-  };
-
-  const variant = variants[exchange] || variants.default;
-
-  return <span style={{ ...cardStyle, ...variant, ...style }}>{exchange}</span>;
+  return (
+    <span className={`badge badge--${variant}`} style={style}>
+      {exchange}
+    </span>
+  );
 }
 
 /* ===========================
@@ -335,49 +283,17 @@ export function SelectInput({ label, options = [], style = {}, ...props }) {
    TABLE
    =========================== */
 
+// Styling comes from the shared .data-table system (styles/design-system.css).
+// A column may set `className` ("num", "date", "status", "action", "wrap")
+// to get the matching alignment on both its header and its cells.
 export function Table({ columns = [], data = [], style = {} }) {
-  const container = {
-    width: "100%",
-    maxWidth: "100%",
-    overflowX: "auto",
-    overflowY: "visible",
-    backgroundColor: "transparent",
-    boxSizing: "border-box",
-    ...style,
-  };
-
-  const thStyle = {
-    fontSize: 12,
-    fontWeight: 600,
-    textTransform: "uppercase",
-    letterSpacing: "0.06em",
-    color: "#6b7280",
-    padding: "8px 12px",
-    borderBottom: "1px solid #e5e7eb",
-    whiteSpace: "nowrap",
-  };
-
-  const tdStyle = {
-    fontSize: 13,
-    color: "#111827",
-    padding: "8px 12px",
-    borderBottom: "1px solid #f3f4f6",
-    whiteSpace: "nowrap",
-  };
-
   return (
-    <div style={container}>
-      <table
-        style={{
-          width: "100%",
-          minWidth: "max-content",
-          borderCollapse: "collapse",
-        }}
-      >
-        <thead style={{ backgroundColor: "#f9fafb" }}>
+    <div className="data-table-wrap" style={style}>
+      <table className="data-table">
+        <thead>
           <tr>
             {columns.map((col) => (
-              <th key={col.key} style={thStyle}>
+              <th key={col.key} className={col.className}>
                 {col.header}
               </th>
             ))}
@@ -385,14 +301,9 @@ export function Table({ columns = [], data = [], style = {} }) {
         </thead>
         <tbody>
           {data.map((row, i) => (
-            <tr
-              key={i}
-              style={{
-                backgroundColor: i % 2 === 0 ? "#ffffff" : "#f9fafb",
-              }}
-            >
+            <tr key={i}>
               {columns.map((col) => (
-                <td key={col.key} style={tdStyle}>
+                <td key={col.key} className={col.className}>
                   {col.render ? col.render(row[col.key], row) : row[col.key]}
                 </td>
               ))}
@@ -504,6 +415,10 @@ export function Pagination({
    LAYOUT (SIDEBAR / TOPBAR)
    =========================== */
 
+const SIDEBAR_WIDTH = 240;
+// The notification bell (NotificationTray.css, .job-tray) is centred in this height.
+const HEADER_HEIGHT = 80;
+
 export function Sidebar({ items = [], activeKey }) {
   const navigate = useNavigate();
   const location = useLocation();
@@ -525,12 +440,20 @@ export function Sidebar({ items = [], activeKey }) {
     }
   }, [location.pathname, items]);
 
+  // Fixed rather than sticky: html/body set overflow-x: hidden (index.css),
+  // which stops position: sticky from working. PageLayout reserves the width.
   const sidebarStyle = {
-    width: 240,
-    flexShrink: 0,
+    position: "fixed",
+    top: 0,
+    left: 0,
+    width: SIDEBAR_WIDTH,
+    height: "100vh",
+    overflowY: "auto",
+    // Menu buttons are full width plus a 4px left margin, which would
+    // otherwise add a horizontal scrollbar.
+    overflowX: "hidden",
     background: "#8b1538", // Changed to dark pink/maroon (solid color instead of gradient)
     color: "#ffffff",
-    minHeight: "100vh",
     boxSizing: "border-box",
     display: "flex",
     flexDirection: "column",
@@ -643,35 +566,52 @@ export function Sidebar({ items = [], activeKey }) {
 }
 
 export function Topbar({ title, rightContent }) {
+  // Fixed for the same reason as the sidebar (sticky does not work here).
+  // z-index sits above page content (Analytics filters use up to 210) and
+  // below pop-ups and the notification bell (NotificationTray.css, 2000).
   const bar = {
+    position: "fixed",
+    top: 0,
+    left: SIDEBAR_WIDTH,
+    right: 0,
+    height: HEADER_HEIGHT,
+    boxSizing: "border-box",
+    zIndex: 300,
     display: "flex",
     alignItems: "center",
     justifyContent: "space-between",
-    padding: "16px 24px",
+    // The right side leaves room for the fixed notification bell (42px wide,
+    // 24px from the edge), so buttons passed in rightContent never sit under it.
+    padding: "0 82px 0 24px",
     background: "#ffffff", // Changed from gradient to white
     color: "#111827", // Changed from white to dark text
     boxShadow: "0 2px 8px rgba(0, 0, 0, 0.08)", // Lighter shadow
   };
 
-  const titleStyle = { fontSize: 20, fontWeight: 600, color: "#111827" };
+  const titleStyle = { margin: 0, fontSize: 20, fontWeight: 600, color: "#111827" };
   const subtitleStyle = { fontSize: 12, opacity: 0.85 };
   const handleexport = () => {
     console.log("export");
   };
 
   return (
-    <header style={bar}>
-      <div>
-        <h1 style={titleStyle}>{title}</h1>
-      </div>
-      {/* The prop was accepted but never rendered, so anything a page passed
-          here disappeared silently. */}
-      {rightContent ? (
-        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-          {rightContent}
+    <>
+      <header style={bar}>
+        <div>
+          <h1 style={titleStyle}>{title}</h1>
         </div>
-      ) : null}
-    </header>
+        {/* The prop was accepted but never rendered, so anything a page passed
+            here disappeared silently. */}
+        {rightContent ? (
+          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            {rightContent}
+          </div>
+        ) : null}
+      </header>
+      {/* The fixed header takes no space, so this keeps page content from
+          starting underneath it. */}
+      <div style={{ height: HEADER_HEIGHT, flexShrink: 0 }} />
+    </>
   );
 }
 
@@ -684,6 +624,8 @@ export function PageLayout({ sidebar, children }) {
     width: "100%",
     maxWidth: "100vw",
     boxSizing: "border-box",
+    // The sidebar is position: fixed, so it takes no space of its own.
+    paddingLeft: SIDEBAR_WIDTH,
   };
 
   const main = {

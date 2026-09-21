@@ -176,69 +176,10 @@
   color: #4b5563;
 }
 
-.upload-result-table {
-  margin-top: 12px;
-  overflow-x: auto;
-  border: 1px solid #e5e7eb;
-  border-radius: 8px;
-  background: #fff;
-  width: 100%;
-  min-height: 360px;
-}
-
-.upload-result-table table {
-  width: 100%;
-  min-width: 100%;
-  font-size: 14px !important;
-}
-
-.upload-result-table th,
-.upload-result-table td {
-  padding: 14px 18px !important;
-  min-width: 110px;
-  font-size: 14px !important;
-}
-
-.upload-result-table thead th {
-  font-size: 13px !important;
-  font-weight: 600;
-}
-
 .upload-result-empty {
   margin: 8px 0 0 0;
   color: #6b7280;
   font-size: 13px;
-}
-
-.comparison-editable-table .comparison-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 13px;
-}
-
-.comparison-editable-table .comparison-cell-readonly {
-  display: block;
-  padding: 8px 10px;
-  font-size: 13px;
-  color: #111827;
-  min-width: 80px;
-}
-
-.comparison-editable-table .comparison-cell-input {
-  width: 100%;
-  min-width: 80px;
-  padding: 8px 10px;
-  border: 1px solid #e5e7eb;
-  border-radius: 6px;
-  font-size: 13px;
-  background: #fff;
-  box-sizing: border-box;
-}
-
-.comparison-editable-table .comparison-cell-input:focus {
-  outline: none;
-  border-color: #c2185b;
-  box-shadow: 0 0 0 2px rgba(194, 24, 91, 0.15);
 }
 
 .comparison-actions {
@@ -288,36 +229,6 @@
   font-size: 13px;
   color: #4b5563;
   font-weight: 500;
-}
-
-.comparison-table-wrap {
-  margin-top: 12px;
-}
-
-.comparison-table-wrap table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 14px;
-}
-
-.comparison-table-wrap th,
-.comparison-table-wrap td {
-  padding: 12px 14px;
-  text-align: left;
-  border: 1px solid #e5e7eb;
-}
-
-.comparison-table-wrap thead th {
-  font-weight: 600;
-  background: #f9fafb;
-}
-
-.diff-row-mismatch {
-  background: #fef2f2;
-}
-
-.diff-row-mismatch td {
-  border-color: #fecaca;
 }
 
 .recent-exports-section {
@@ -403,100 +314,6 @@
   color: #1f2937;
 }
 
-.diff-history-table {
-  width: 100%;
-  border-collapse: separate;
-  border-spacing: 0;
-  border: 1px solid #e5e7eb;
-  border-radius: 12px;
-  overflow: hidden;
-}
-
-.diff-history-table thead th {
-  background: #f9fafb;
-  color: #374151;
-  font-size: 12px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  padding: 14px 16px;
-  text-align: left;
-  border-bottom: 1px solid #e5e7eb;
-}
-
-.diff-history-table thead th:last-child {
-  text-align: center;
-}
-
-.diff-history-table tbody tr {
-  transition: background 0.15s ease-in-out;
-  border-bottom: 1px solid #f3f4f6;
-}
-
-.diff-history-table tbody tr:last-child td {
-  border-bottom: none;
-}
-
-.diff-history-table tbody tr:hover {
-  background: #f9fafb;
-}
-
-.diff-history-table tbody td {
-  padding: 14px 16px;
-  color: #111827;
-  font-size: 14px;
-}
-
-.diff-history-table tbody td:first-child {
-  font-weight: 600;
-  color: #374151;
-  font-family: monospace;
-}
-
-.diff-history-table tbody td:last-child {
-  text-align: center;
-}
-
-.diff-status-badge {
-  font-size: 12px;
-  font-weight: 600;
-  padding: 4px 12px;
-  border-radius: 8px;
-  display: inline-block;
-}
-
-.diff-status-badge.completed {
-  background: #d1fae5;
-  color: #047857;
-}
-
-.diff-status-badge.pending {
-  background: #fef3c7;
-  color: #b45309;
-}
-
-.diff-status-badge.failed {
-  background: #fee2e2;
-  color: #b91c1c;
-}
-
-.diff-download-btn {
-  padding: 7px 18px;
-  font-size: 13px;
-  font-weight: 600;
-  color: #fff;
-  background: linear-gradient(135deg, #c2185b, #8b1538);
-  border: none;
-  border-radius: 8px;
-  cursor: pointer;
-  transition: all 0.2s ease;
-}
-
-.diff-download-btn:hover {
-  transform: translateY(-1px);
-  box-shadow: 0 3px 8px rgba(194, 24, 91, 0.3);
-}
-
 @media (max-width: 768px) {
   .upload-sections {
     grid-template-columns: 1fr;
@@ -505,6 +322,9 @@
   .upload-btn {
     width: 100%;
     align-self: stretch;
-  }
-}
+  }}
 
+
+.upload-result-table {
+  margin-top: 12px;
+}

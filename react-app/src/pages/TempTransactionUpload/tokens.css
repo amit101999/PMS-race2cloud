@@ -7,37 +7,36 @@
  * pilot for the institutional visual language; other pages opt in later.
  */
 .txn-ops {
+  /* Page-level aliases of the app-wide tokens in styles/design-system.css.
+     The primary colour is the sidebar's maroon, so this page never has a
+     second "go" colour. */
   --txo-bg: #f3f5f7;
-  --txo-surface: #ffffff;
-  --txo-surface-sunken: #f8f9fb;
-  --txo-border: #dde1e7;
-  --txo-border-strong: #c2c8d1;
+  --txo-surface: var(--ds-surface);
+  --txo-surface-sunken: var(--ds-surface-sunken);
+  --txo-border: var(--ds-border);
+  --txo-border-strong: var(--ds-border-strong);
 
-  --txo-text: #1a1d24;
-  --txo-text-muted: #667085;
-  --txo-text-faint: #98a2b3;
+  --txo-text: var(--ds-text);
+  --txo-text-muted: var(--ds-text-muted);
+  --txo-text-faint: var(--ds-text-faint);
 
-  /* The sidebar's own maroon (#8b1538) — reused here so the primary action
-     color is the app's existing brand color, not a new one, and used
-     everywhere a primary action appears (match, commit, upload) so the eye
-     never has to track two different "go" colors. */
-  --txo-primary: #8b1538;
-  --txo-primary-hover: #6c0f2b;
-  --txo-primary-tint: #f8e8ec;
+  --txo-primary: var(--ds-brand);
+  --txo-primary-hover: var(--ds-brand-hover);
+  --txo-primary-tint: var(--ds-brand-tint);
 
-  --txo-success: #15803d;
-  --txo-success-bg: #eaf6ee;
-  --txo-warning: #9a6400;
-  --txo-warning-bg: #fdf3e0;
-  --txo-error: #b3261e;
-  --txo-error-bg: #fbeceb;
-  --txo-info: #2c5aa0;
-  --txo-info-bg: #eaf1fb;
-  --txo-neutral: #667085;
-  --txo-neutral-bg: #eef0f3;
+  --txo-success: var(--ds-success);
+  --txo-success-bg: var(--ds-success-bg);
+  --txo-warning: var(--ds-warning);
+  --txo-warning-bg: var(--ds-warning-bg);
+  --txo-error: var(--ds-error);
+  --txo-error-bg: var(--ds-error-bg);
+  --txo-info: var(--ds-info);
+  --txo-info-bg: var(--ds-info-bg);
+  --txo-neutral: var(--ds-neutral);
+  --txo-neutral-bg: var(--ds-neutral-bg);
 
-  --txo-radius-sm: 4px;
-  --txo-radius-md: 6px;
+  --txo-radius-sm: var(--ds-radius-sm);
+  --txo-radius-md: var(--ds-radius-md);
   --txo-shadow-sm: 0 1px 2px rgba(16, 24, 40, 0.05);
 
   font-family: "IBM Plex Sans", system-ui, -apple-system, sans-serif;
@@ -45,7 +44,6 @@
 }
 
 .txn-ops .mono,
-.txn-ops .num,
 .txn-ops .cm-run-id,
 .txn-ops code {
   font-family: "IBM Plex Mono", "Courier New", monospace;
@@ -56,59 +54,4 @@
 .txn-ops h3,
 .txn-ops h4 {
   font-family: "IBM Plex Sans", system-ui, sans-serif;
-}
-
-/* ─────────────── Status badges (one system, used everywhere) ─────────────── */
-
-.txn-ops .status-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 12.5px;
-  font-weight: 600;
-  padding: 3px 9px 3px 7px;
-  border-radius: 999px;
-  line-height: 1.4;
-  white-space: nowrap;
-}
-
-.txn-ops .status-badge .status-glyph {
-  font-size: 11px;
-  line-height: 1;
-}
-
-.txn-ops .status-badge.ok {
-  background: var(--txo-success-bg);
-  color: var(--txo-success);
-}
-
-.txn-ops .status-badge.warn {
-  background: var(--txo-warning-bg);
-  color: var(--txo-warning);
-}
-
-.txn-ops .status-badge.bad {
-  background: var(--txo-error-bg);
-  color: var(--txo-error);
-}
-
-.txn-ops .status-badge.processing {
-  background: var(--txo-info-bg);
-  color: var(--txo-info);
-}
-
-.txn-ops .status-badge.neutral {
-  background: var(--txo-neutral-bg);
-  color: var(--txo-neutral);
-}
-
-@media (prefers-reduced-motion: no-preference) {
-  .txn-ops .status-badge.processing .status-glyph {
-    animation: txo-pulse 1.4s ease-in-out infinite;
-  }
-}
-
-@keyframes txo-pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.35; }
 }
