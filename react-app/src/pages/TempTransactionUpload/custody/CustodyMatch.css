@@ -259,6 +259,40 @@
     color: var(--txo-text-faint);
 }
 
+/* Transaction Upload's run card: status + counts left, run ID badge right. */
+.cm-run-head {
+    flex-wrap: wrap;
+}
+
+.cm-run-summary {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    flex-wrap: wrap;
+    min-width: 0;
+}
+
+/* The status badge renders nothing for some states; don't leave a gap for it. */
+.cm-run-summary .cm-run-status:empty {
+    display: none;
+}
+
+.cm-run-summary .cm-stats {
+    margin-top: 0;
+}
+
+.cm-run-badge {
+    flex-shrink: 0;
+    padding: 3px 10px;
+    border: 1px solid var(--txo-border);
+    border-radius: 999px;
+    background: var(--txo-surface);
+    color: var(--txo-text-muted);
+    font-size: 11.5px;
+    font-weight: 600;
+    white-space: nowrap;
+}
+
 .cm-bar {
     height: 5px;
     background: var(--txo-border);

@@ -1090,19 +1090,38 @@ const CustodyMatchPanel = ({
 
                 {run ? (
                     <div className={`cm-progress ${run.status.toLowerCase()}`}>
-                        <div className="cm-progress-head">
-                            <span className="cm-run-status">
-                                {run.isRunning ? (
-                                    <StatusBadge tone={STATUS.PROCESSING}>{run.stageDetail || run.status}</StatusBadge>
-                                ) : run.status === "COMPLETED_CLEAN" ? (
-                                    <StatusBadge tone={STATUS.OK}>Matched</StatusBadge>
-                                ) : run.status === "COMPLETED_WITH_EXCEPTIONS" ? null : run.status === "FAILED" ? (
-                                    <StatusBadge tone={STATUS.BAD}>Failed</StatusBadge>
-                                ) : (
-                                    <StatusBadge tone={STATUS.NEUTRAL}>{run.status}</StatusBadge>
-                                )}
-                            </span>
-                            <span className="cm-run-id mono">{run.runId}</span>
+                        {/* One row: status and counts on the left, the run ID badge on the right. */}
+                        <div className="cm-progress-head cm-run-head">
+                            <div className="cm-run-summary">
+                                <span className="cm-run-status">
+                                    {run.isRunning ? (
+                                        <StatusBadge tone={STATUS.PROCESSING}>{run.stageDetail || run.status}</StatusBadge>
+                                    ) : run.status === "COMPLETED_CLEAN" ? (
+                                        <StatusBadge tone={STATUS.OK}>Matched</StatusBadge>
+                                    ) : run.status === "COMPLETED_WITH_EXCEPTIONS" ? null : run.status === "FAILED" ? (
+                                        <StatusBadge tone={STATUS.BAD}>Failed</StatusBadge>
+                                    ) : (
+                                        <StatusBadge tone={STATUS.NEUTRAL}>{run.status}</StatusBadge>
+                                    )}
+                                </span>
+                                <div className="cm-stats">
+                                    <span><strong className="mono">{run.counts.faRows.toLocaleString()}</strong> FA rows</span>
+                                    <span><strong className="mono">{run.counts.custodyRows.toLocaleString()}</strong> custody rows</span>
+                                    <span><strong className="mono">{run.counts.resolved.toLocaleString()}</strong> resolved to actual codes</span>
+                                    {run.counts.unmapped > 0 ? (
+                                        <span className="warn"><strong className="mono">{run.counts.unmapped}</strong> unmapped</span>
+                                    ) : null}
+                                    {run.counts.totalKeys > 0 ? (
+                                        <span>
+                                            <strong className="mono">
+                                                {run.counts.comparedKeys.toLocaleString()} / {run.counts.totalKeys.toLocaleString()}
+                                            </strong>{" "}
+                                            keys compared
+                                        </span>
+                                    ) : null}
+                                </div>
+                            </div>
+                            <span className="cm-run-badge mono" title="Run ID">{run.runId}</span>
                         </div>
 
                         {run.isRunning ? (
@@ -1110,23 +1129,6 @@ const CustodyMatchPanel = ({
                                 <div className="cm-bar-fill" style={{ width: `${run.progressPercent}%` }} />
                             </div>
                         ) : null}
-
-                        <div className="cm-stats">
-                            <span><strong className="mono">{run.counts.faRows.toLocaleString()}</strong> FA rows</span>
-                            <span><strong className="mono">{run.counts.custodyRows.toLocaleString()}</strong> custody rows</span>
-                            <span><strong className="mono">{run.counts.resolved.toLocaleString()}</strong> resolved to actual codes</span>
-                            {run.counts.unmapped > 0 ? (
-                                <span className="warn"><strong className="mono">{run.counts.unmapped}</strong> unmapped</span>
-                            ) : null}
-                            {run.counts.totalKeys > 0 ? (
-                                <span>
-                                    <strong className="mono">
-                                        {run.counts.comparedKeys.toLocaleString()} / {run.counts.totalKeys.toLocaleString()}
-                                    </strong>{" "}
-                                    keys compared
-                                </span>
-                            ) : null}
-                        </div>
 
                         {run.status === "COMPLETED_CLEAN" ? (
                             <div className="cm-verdict ok">
