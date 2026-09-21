@@ -23,6 +23,13 @@ import { FOLDER, getBucket, latestForDate } from "../../util/holdingComparison/s
  */
 const GENERATION_STALE_MS = 30 * 60 * 1000;
 
+/*
+ * Stratus lists a new file about 20 seconds after it is written, so a COMPLETED
+ * row with no file yet is normal for a short while. Past this, the file has been
+ * deleted and the date has nothing generated.
+ */
+const SNAPSHOT_LISTING_GRACE_MS = 2 * 60 * 1000;
+
 const fail = (res, status, body) => res.status(status).json({ success: false, ...body });
 
 /** Catalyst CREATEDTIME/MODIFIEDTIME is an IST wall-clock string like "2026-06-19 17:41:28:675". */
@@ -86,6 +93,16 @@ export const readFaStatus = async (catalystApp, date) => {
   }
 
   const latestSnapshot = await latestForDate(getBucket(catalystApp), FOLDER.FA, date);
+
+  // The Jobs row outlives the file: once the snapshot is deleted from Stratus,
+  // report the date as not generated rather than COMPLETED with nothing to show.
+  if (
+    status === FA_STATUS.COMPLETED &&
+    !latestSnapshot &&
+    Date.now() - faJob.modifiedMs > SNAPSHOT_LISTING_GRACE_MS
+  ) {
+    status = FA_STATUS.NOT_STARTED;
+  }
 
   return { status, message, latestSnapshot };
 };

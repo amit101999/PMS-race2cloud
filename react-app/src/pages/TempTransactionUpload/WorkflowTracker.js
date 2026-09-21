@@ -2,8 +2,9 @@ import React from "react";
 
 /**
  * The workflow progress bar shown at the top of Transaction Upload and Holding
- * Comparison. Steps up to and including `currentStage` are filled; styles are
- * the .txo-tracker rules in TempTransaction.css.
+ * Comparison. Steps before `currentStage` are done (filled, ticked); the
+ * current step is a ring with a dot. Styles are the .txo-tracker rules in
+ * TempTransaction.css.
  *
  * @param {{ steps: Array<{key: string, label: string}>, currentStage: number, label: string }} props
  */
@@ -23,7 +24,8 @@ const WorkflowTracker = ({ steps, currentStage, label }) => (
                             <span className={reached ? "txo-tracker-line is-filled" : "txo-tracker-line"} />
                         ) : null}
                         <span className="txo-tracker-node" aria-hidden="true">
-                            {reached ? (
+                            {/* Only finished steps are ticked; the current one is marked as "you are here". */}
+                            {i < currentStage ? (
                                 <svg width="9" height="7" viewBox="0 0 9 7" fill="none">
                                     <path
                                         d="M1 3.5L3.2 5.7L8 1"
