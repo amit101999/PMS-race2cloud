@@ -99,6 +99,32 @@
     top: -20px;
 }
 
+.fm-panel-body .fm-table--plain thead th {
+    /* Read as column headings over the tall label boxes and dropdowns below,
+       not as a dense data-table header. */
+    height: 44px;
+    padding-top: 12px;
+    padding-bottom: 12px;
+    font-size: 11.5px;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+}
+
+/* Line each heading's text up with the text inside the boxes under it:
+   the field label (12px cell padding + 3px stripe + 12px padding) and the
+   dropdown (10px cell padding + ~10px inside the select). */
+.fm-panel-body .fm-table--plain thead th:first-child {
+    padding-left: 27px;
+}
+
+.fm-panel-body .fm-table--plain thead th:nth-child(2) {
+    padding-left: 20px;
+}
+
+.fm-panel-body .fm-table--plain tbody tr:first-child td {
+    padding-top: 12px;
+}
+
 .fm-panel-foot {
     display: flex;
     align-items: center;

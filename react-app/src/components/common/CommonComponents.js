@@ -568,7 +568,7 @@ export function Sidebar({ items = [], activeKey }) {
 export function Topbar({ title, rightContent }) {
   // Fixed for the same reason as the sidebar (sticky does not work here).
   // z-index sits above page content (Analytics filters use up to 210) and
-  // below pop-ups and the notification bell (NotificationTray.css, 2000).
+  // below the notification bell (NotificationTray.css, 350) and pop-ups (400+).
   const bar = {
     position: "fixed",
     top: 0,

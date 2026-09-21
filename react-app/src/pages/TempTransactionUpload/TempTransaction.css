@@ -84,10 +84,16 @@
   white-space: nowrap;
 }
 
-.txo-tracker li.is-done .txo-tracker-node,
+.txo-tracker li.is-done .txo-tracker-node {
+  background: var(--txo-primary);
+  border-color: var(--txo-primary);
+}
+
+/* The step in progress: a maroon ring with a dot, not a tick — it is not done yet. */
 .txo-tracker li.is-current .txo-tracker-node {
   background: var(--txo-primary);
   border-color: var(--txo-primary);
+  box-shadow: inset 0 0 0 3px var(--txo-surface);
 }
 
 .txo-tracker li.is-done .txo-tracker-label {

@@ -2,7 +2,9 @@
   position: fixed;
   top: 19px; /* centred in the 80px header (CommonComponents HEADER_HEIGHT) */
   right: 24px;
-  z-index: 2000;
+  /* Part of the header: above it (300) and the page, but below pop-ups and
+     their backdrops (400+), so an open dialog covers the bell too. */
+  z-index: 350;
 }
 
 .job-tray-bell {
