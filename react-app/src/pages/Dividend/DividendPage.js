@@ -38,6 +38,17 @@ const STATUS_LABEL = {
   missing_in_file: "Missing in file",
 };
 
+// Badge tone (styles/design-system.css) for each reconciliation status.
+const STATUS_TONE = {
+  ready: "ok",
+  mismatch: "warn",
+  partial: "warn",
+  overpaid: "bad",
+  already_paid: "info",
+  missing_in_system: "bad",
+  missing_in_file: "bad",
+};
+
 /** RFC 4180-style CSV cell (comma-safe). */
 function csvEscapeCell(value) {
   const s = value == null ? "" : String(value);
@@ -946,28 +957,25 @@ function DividendPage() {
             </div>
           )}
 
-          <div className="dividend-preview-table-wrapper">
-            <table className="dividend-table dividend-recon-table">
+          <div className="data-table-wrap dividend-recon-wrap">
+            <table className="data-table">
               <thead>
                 <tr>
                   <th>Account</th>
-                  <th>Holding<br />PMS / File / Diff</th>
-                  <th>Rate<br />PMS / File</th>
-                  <th>Gross<br />PMS / File / Diff</th>
-                  <th>CA Tax Amt</th>
-                  <th>Net</th>
-                  <th>Already<br />Received</th>
-                  <th>To Receive<br />(Net)</th>
-                  <th>Status</th>
+                  <th className="num">Holding<br />PMS / File / Diff</th>
+                  <th className="num">Rate<br />PMS / File</th>
+                  <th className="num">Gross<br />PMS / File / Diff</th>
+                  <th className="num">CA Tax Amt</th>
+                  <th className="num">Net</th>
+                  <th className="num">Already<br />Received</th>
+                  <th className="num">To Receive<br />(Net)</th>
+                  <th className="status">Status</th>
                 </tr>
               </thead>
               <tbody>
                 {paginatedGroups.length === 0 && (
                   <tr>
-                    <td
-                      colSpan={9}
-                      style={{ textAlign: "center", color: "#6b7280" }}
-                    >
+                    <td colSpan={9} className="empty-cell">
                       No rows in this filter.
                     </td>
                   </tr>
@@ -975,17 +983,17 @@ function DividendPage() {
                 {paginatedGroups.map((group) => {
                   const expanded = expandedKeys.has(group.key);
                   const deltaClass = (d) =>
-                    d === 0 ? "delta-zero" : d > 0 ? "delta-pos" : "delta-neg";
+                    d === 0 ? "muted" : d > 0 ? "positive" : "negative";
                   return (
                     <React.Fragment key={group.key}>
                       <tr
-                        className="recon-row dividend-group-row"
+                        className="is-clickable is-group"
                         role="button"
                         onClick={() => toggleGroup(group.key)}
                         title={group.clientName || ""}
                       >
                         <td>
-                          <div style={{ fontWeight: 600 }}>
+                          <div>
                             <span className="dividend-expand-toggle">
                               {expanded ? "▾" : "▸"}
                             </span>
@@ -998,35 +1006,35 @@ function DividendPage() {
                             </div>
                           )}
                         </td>
-                        <td>
+                        <td className="num">
                           {group.holdingSys} / {group.holdingFile} /{" "}
                           <span className={deltaClass(group.holdingDelta)}>
                             {group.holdingDelta > 0 ? "+" : ""}
                             {group.holdingDelta || 0}
                           </span>
                         </td>
-                        <td>
+                        <td className="num">
                           {group.rateSysMixed ? "—" : (group.rateSys ?? "—")} /{" "}
                           {group.rateFileMixed ? "—" : (group.rateFile ?? "—")}
                         </td>
-                        <td>
+                        <td className="num">
                           {group.grossSys} / {group.grossFile} /{" "}
                           <span className={deltaClass(group.grossDelta)}>
                             {group.grossDelta > 0 ? "+" : ""}
                             {group.grossDelta || 0}
                           </span>
                         </td>
-                        <td>{group.tdsFile}</td>
-                        <td style={{ fontWeight: 600 }}>{group.netFile}</td>
-                        <td>{group.alreadyReceivedGross || 0}</td>
-                        <td style={{ fontWeight: 600 }}>{group.toReceiveNet}</td>
-                        <td>
+                        <td className="num">{group.tdsFile}</td>
+                        <td className="num">{group.netFile}</td>
+                        <td className="num">{group.alreadyReceivedGross || 0}</td>
+                        <td className="num">{group.toReceiveNet}</td>
+                        <td className="status">
                           <span className="recon-status-breakdown">
                             {Object.entries(group.statusCounts).map(
                               ([status, count]) => (
                                 <span
                                   key={status}
-                                  className={`recon-badge recon-badge-${status}`}
+                                  className={`badge badge--${STATUS_TONE[status] || "neutral"}`}
                                 >
                                   {count} {STATUS_LABEL[status] || status}
                                 </span>
@@ -1039,11 +1047,11 @@ function DividendPage() {
                         group.children.map((row) => (
                           <tr
                             key={`${group.key}::${row.accountCode}`}
-                            className={`recon-row dividend-detail-row recon-row-${row.status}`}
+                            className={`is-child recon-row-${row.status}`}
                             title={row.clientName || ""}
                           >
-                            <td className="dividend-detail-code">
-                              <div style={{ fontWeight: 600 }}>
+                            <td className="indent">
+                              <div className="strong">
                                 {row.accountCode}
                               </div>
                               {row.clientName && (
@@ -1052,7 +1060,7 @@ function DividendPage() {
                                 </div>
                               )}
                             </td>
-                            <td>
+                            <td className="num">
                               {row.holdingSys ?? "—"} / {row.holdingFile ?? "—"}{" "}
                               /{" "}
                               <span className={deltaClass(row.holdingDelta)}>
@@ -1060,21 +1068,22 @@ function DividendPage() {
                                 {row.holdingDelta || 0}
                               </span>
                             </td>
-                            <td>
+                            <td className="num">
                               {row.rateSys ?? "—"} / {row.rateFile ?? "—"}
                             </td>
-                            <td>
+                            <td className="num">
                               {row.grossSys ?? "—"} / {row.grossFile ?? "—"} /{" "}
                               <span className={deltaClass(row.grossDelta)}>
                                 {row.grossDelta > 0 ? "+" : ""}
                                 {row.grossDelta || 0}
                               </span>
                             </td>
-                            <td>{row.tdsFile ?? "—"}</td>
-                            <td style={{ fontWeight: 600 }}>
+                            <td className="num">{row.tdsFile ?? "—"}</td>
+                            <td className="num strong">
                               {row.netFile ?? "—"}
                             </td>
                             <td
+                              className="num"
                               title={
                                 row.alreadyCreditedCash
                                   ? "DIVIDEND cash credit recorded for this record date"
@@ -1083,12 +1092,12 @@ function DividendPage() {
                             >
                               {row.alreadyReceivedGross || 0}
                             </td>
-                            <td style={{ fontWeight: 600 }}>
+                            <td className="num strong">
                               {row.toReceiveNet}
                             </td>
-                            <td>
+                            <td className="status">
                               <span
-                                className={`recon-badge recon-badge-${row.status}`}
+                                className={`badge badge--${STATUS_TONE[row.status] || "neutral"}`}
                               >
                                 {STATUS_LABEL[row.status] || row.status}
                               </span>
@@ -1147,7 +1156,7 @@ function DividendPage() {
           <div className="dividend-preview-actions">
             <button
               type="button"
-              className="dividend-submit"
+              className="btn-export"
               disabled={
                 !reconEvents ||
                 reconEvents.length === 0 ||
@@ -1285,31 +1294,31 @@ function DividendPage() {
           <h3 style={{ fontSize: 16, fontWeight: 600, marginBottom: 16 }}>
             Previous Dividends
           </h3>
-          <div className="dividend-table-wrapper">
-            <table className="dividend-table">
+          <div className="data-table-wrap">
+            <table className="data-table">
               <thead>
                 <tr>
                   <th>Security Code</th>
-                  <th>Security Name</th>
+                  <th className="wrap">Security Name</th>
                   <th>Type</th>
-                  <th>Dividend Rate</th>
+                  <th className="num">Dividend Rate</th>
                   <th>Unit</th>
-                  <th>Ex-Date</th>
-                  <th>Record Date</th>
-                  <th>Payment Date</th>
+                  <th className="date">Ex-Date</th>
+                  <th className="date">Record Date</th>
+                  <th className="date">Payment Date</th>
                 </tr>
               </thead>
               <tbody>
                 {dividendList.map((row, idx) => (
                   <tr key={idx}>
                     <td>{row.securityCode}</td>
-                    <td>{row.securityName}</td>
+                    <td className="wrap">{row.securityName}</td>
                     <td>{row.dividendType}</td>
-                    <td>{row.rate}</td>
+                    <td className="num">{row.rate}</td>
                     <td>{row.unit}</td>
-                    <td>{row.exDate}</td>
-                    <td>{row.recordDate}</td>
-                    <td>{row.paymentDate ?? "—"}</td>
+                    <td className="date">{row.exDate}</td>
+                    <td className="date">{row.recordDate}</td>
+                    <td className="date">{row.paymentDate ?? "—"}</td>
                   </tr>
                 ))}
               </tbody>

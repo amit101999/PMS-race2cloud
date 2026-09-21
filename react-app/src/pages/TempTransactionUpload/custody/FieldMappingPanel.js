@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
+    KIND_BLURB,
     KIND_SHORT,
     PROFILE_LABEL,
     SOURCE_BY,
@@ -49,7 +50,6 @@ const FILE_BLURB = {
     CUSTODY_RESIDENTIAL: "The deal allocation file your custodian sends for Resident accounts.",
     CUSTODY_NDPMS: "The deal allocation file your custodian sends for NRE/NRO/NDPMS accounts.",
     CUSTODY_MUTUAL_FUND: "The Mutual Funds transaction file your custodian sends (Subscription / Redemption). Matched only against mutual fund rows in the transaction file.",
-    CUSTODY_NDPMS: "The deal allocation file your custodian sends for NRE / NRO (NDPMS) accounts.",
     CUSTODY_HOLDINGS: "The consolidated holdings file your custodian sends, used by Holding Comparison.",
 };
 
@@ -234,8 +234,7 @@ const autofillByName = (draft, entries, columns) => {
 
 /* ------------------------------------------------------------------ one row */
 
-function MappingRow({ entry, source, columns, takenBy, onChange, registerRef, fieldError }) {
-function MappingRow({ entry, source, columns, takenBy, onChange, showHints }) {
+function MappingRow({ entry, source, columns, takenBy, onChange, registerRef, fieldError, showHints }) {
     const transforms = entry.allowTransforms || [NONE];
     const transform = transformOf(source);
     const value = valueForSource(source, columns);
@@ -289,7 +288,6 @@ function MappingRow({ entry, source, columns, takenBy, onChange, showHints }) {
     return (
         <tr className="fm-row">
             <td className="fm-cell-field">
-                <div className="fm-fieldname">{entry.label}</div>
                 <div className="fm-fieldname">
                     {entry.label}
                     {showHints ? (
@@ -655,7 +653,7 @@ export default function FieldMappingPanel({
     const validateBeforeSave = () => {
         for (const entry of entries) {
             const value = valueForSource(draft[entry.field], columns);
-            if (value === "" ) {
+            if (value === "" && entry.required) {
                 const node = fieldNodes.current[entry.field];
                 if (node) {
                     node.scrollIntoView({ behavior: "smooth", block: "center" });
@@ -912,8 +910,8 @@ export default function FieldMappingPanel({
                                             <span
                                                 className={
                                                     map && !map.isDefault
-                                                        ? "fm-badge fm-badge--custom"
-                                                        : "fm-badge"
+                                                        ? "badge badge--ok fm-badge"
+                                                        : "badge badge--neutral fm-badge"
                                                 }
                                             >
                                                 {map && !map.isDefault
@@ -1000,7 +998,7 @@ export default function FieldMappingPanel({
                                 </p>
                             ) : null}
 
-                            <table className={showHints ? "fm-table" : "fm-table fm-table--plain"}>
+                            <table className={showHints ? "data-table" : "data-table fm-table--plain"}>
                                 <thead>
                                     <tr>
                                         <th>What we store</th>
@@ -1094,13 +1092,7 @@ export default function FieldMappingPanel({
                                     type="button"
                                     className="fm-primary"
                                     onClick={onSave}
-                                    disabled={!dirty || saving || loading}
-                                    disabled={!complete || !needsSave || saving || loading}
-                                    title={
-                                        complete
-                                            ? "Save this mapping"
-                                            : "Map every field before saving"
-                                    }
+                                    disabled={!needsSave || saving || loading}
                                 >
                                     {saving ? "Saving…" : "Save mapping"}
                                 </button>

@@ -5,14 +5,11 @@ function HoldingsGrid({ holdings = [], onSelectStock }) {
   if (!holdings.length) {
     return (
       <div className="holdings-wrapper">
-        <div className="holdings-table-wrapper">
-          <table className="holdings-table">
+        <div className="data-table-wrap">
+          <table className="data-table">
             <tbody>
               <tr>
-                <td
-                  colSpan="7"
-                  style={{ textAlign: "center", padding: "20px" }}
-                >
+                <td colSpan="9" className="empty-cell">
                   No holdings available
                 </td>
               </tr>
@@ -45,19 +42,19 @@ function HoldingsGrid({ holdings = [], onSelectStock }) {
     <div className="holdings-wrapper">
       <h2 className="holdings-title">Stock Holdings ({holdings.length})</h2>
 
-      <div className="holdings-table-wrapper">
-        <table className="holdings-table">
+      <div className="data-table-wrap">
+        <table className="data-table">
           <thead>
             <tr>
-              <th>Security Name</th>
+              <th className="wrap">Security Name</th>
               <th>Security Code</th>
               <th>Security ISIN</th>
-              <th>Current Holding</th>
-              <th>Average Holding Value</th>
-              <th>Holding Value</th>
-              <th>Last Price</th>
-              <th>Market value</th>
-              <th></th>
+              <th className="num">Current Holding</th>
+              <th className="num">Average Holding Value</th>
+              <th className="num">Holding Value</th>
+              <th className="num">Last Price</th>
+              <th className="num">Market value</th>
+              <th className="action"></th>
             </tr>
           </thead>
 
@@ -68,38 +65,38 @@ function HoldingsGrid({ holdings = [], onSelectStock }) {
               return (
                 <tr
                   key={`${item.stockName}-${index}`}
-                  className={isSold ? "sold-row" : ""}
+                  className={isSold ? "is-clickable sold-row" : "is-clickable"}
                   onClick={() => onSelectStock(item)}
                 >
-                  <td className="security-name">{item.stockName}</td>
+                  <td className="wrap security-name">{item.stockName}</td>
                   <td className="security-code">{item.securityCode || "—"}</td>
                   <td className="security-code">{item.isin || "—"}</td>
-                  <td className="holding-value">
+                  <td className="num holding-value">
+                    {isSold && <span className="badge badge--sell sold-badge">FULLY SOLD</span>}
                     {formatQuantity(item.currentHolding)}
-                    {isSold && <span className="sold-badge">FULLY SOLD</span>}
                   </td>
-                  <td className="security-code">
+                  <td className="num">
                     {formatNumber(item.avgPrice)}
                   </td>
-                  <td className="security-code">
+                  <td className="num">
                     {formatNumber(item.holdingValue)}
                   </td>
-                  <td className="security-code">
+                  <td className="num">
                     {formatNumber(item.lastPrice)}
                   </td>
-                  <td className="security-code">
+                  <td className="num">
                     {formatNumber(item.marketValue)}
                   </td>
-                  <td className="view-cell">
+                  <td className="action">
                     <button
                       type="button"
-                      className="view-btn"
+                      className="btn-action"
                       onClick={(e) => {
                         e.stopPropagation();
                         onSelectStock(item);
                       }}
                     >
-                      👁 View
+                      View
                     </button>
                   </td>
                 </tr>

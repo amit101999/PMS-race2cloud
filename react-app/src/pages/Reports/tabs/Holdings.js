@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState, useMemo } from "react";
+import DownloadButton from "../../../components/common/DownloadButton";
 import { useAccountCodes } from "../../../hooks/GetAllCodes.js";
 import { BASE_URL } from "../../../constant.js";
 import { useJobNotifications } from "../../../notifications/JobNotificationContext";
@@ -605,22 +606,15 @@ function HoldingsTab() {
       <div className="action-footer">
         {!downloadUrl ? (
           <button
-            className="export-btn"
+            type="button"
+            className="btn-export"
             onClick={handleExport}
             disabled={loading}
           >
             {loading ? "Generating..." : "Export"}
           </button>
         ) : (
-          <a
-            href={downloadUrl}
-            className="export-btn"
-            download
-            target="_blank"
-            rel="noreferrer"
-          >
-            Download CSV
-          </a>
+          <DownloadButton href={downloadUrl} />
         )}
       </div>
 
@@ -628,54 +622,53 @@ function HoldingsTab() {
         <div className="export-jobs-container">
           <h4>Previous Export History</h4>
 
-          <table className="export-table">
+          <div className="data-table-wrap">
+          <table className="data-table">
             <thead>
               <tr>
-                <th>File Name</th>
+                <th className="wrap">File Name</th>
                 <th>Type</th>
-                <th>Timestamp</th>
-                <th>Status</th>
-                <th>Action</th>
+                <th className="date">Timestamp</th>
+                <th className="status">Status</th>
+                <th className="action">Action</th>
               </tr>
             </thead>
             <tbody>
               {sortedExportJobs.map((job) => (
                 <tr key={job.jobName}>
-                  <td>{job.jobName}</td>
+                  <td className="wrap">{job.jobName}</td>
                   <td>
                     {job.mode === "consolidated" ? "Consolidated" : "Scheme Wise"}
                   </td>
-                  <td>
+                  <td className="date">
                     {job.createdAt ? formatExportTimestamp(job.createdAt) : "—"}
                   </td>
-                  <td>
+                  <td className="status">
                     <span
-                      className={`export-status ${job.status === "COMPLETED"
-                          ? "completed"
+                      className={`badge ${job.status === "COMPLETED"
+                          ? "badge--ok"
                           : job.status === "FAILED" || job.status === "ERROR"
-                            ? "failed"
-                            : "pending"
+                            ? "badge--bad"
+                            : "badge--processing"
                         }`}
                     >
                       {job.status}
                     </span>
                   </td>
-                  <td>
+                  <td className="action">
                     {job.status === "COMPLETED" ? (
-                      <button
-                        className="export-btn"
+                      <DownloadButton
                         onClick={() => handleExportAllDownload(job.asOnDate, job.mode)}
-                      >
-                        Download
-                      </button>
+                      />
                     ) : (
-                      <span style={{ color: "#9ca3af" }}>-</span>
+                      <span className="muted">-</span>
                     )}
                   </td>
                 </tr>
               ))}
             </tbody>
           </table>
+          </div>
         </div>
       )}
     </>

@@ -105,33 +105,13 @@ export function StatCard({ label, value, subLabel, style = {} }) {
    BADGE / TAG
    =========================== */
 
+// All three render the shared .badge from styles/design-system.css so every
+// badge in the app has the same size, radius and type.
 export function Badge({ children, variant = "neutral", style = {} }) {
-  const base = {
-    display: "inline-flex",
-    alignItems: "center",
-    padding: "2px 8px",
-    borderRadius: 9999,
-    fontSize: 11,
-    fontWeight: 500,
-  };
-
-  const variants = {
-    buy: {
-      backgroundColor: "#dcfce7",
-      color: "#166534",
-    },
-    sell: {
-      backgroundColor: "#fee2e2",
-      color: "#b91c1c",
-    },
-    neutral: {
-      backgroundColor: "#e5e7eb",
-      color: "#374151",
-    },
-  };
-
   return (
-    <span style={{ ...base, ...variants[variant], ...style }}>{children}</span>
+    <span className={`badge badge--${variant}`} style={style}>
+      {children}
+    </span>
   );
 }
 
@@ -140,23 +120,16 @@ export function Badge({ children, variant = "neutral", style = {} }) {
    =========================== */
 
 export function TransactionTypeCard({ children, style = {} }) {
-  const cardStyle = {
-    display: "inline-flex",
-    alignItems: "center",
-    justifyContent: "center",
-    padding: "4px 12px",
-    borderRadius: 8,
-    fontSize: 12,
-    fontWeight: 600,
-    textTransform: "uppercase",
-    backgroundColor: "#fce7f3",
-    color: "#5a3e2e",
-    minWidth: "60px",
-    textAlign: "center",
-    ...style,
-  };
+  const text = String(children || "").toUpperCase();
+  let variant = "brand";
+  if (text === "BY-" || text.includes("BUY")) variant = "buy";
+  if (text === "SL+" || text.includes("SELL")) variant = "sell";
 
-  return <span style={cardStyle}>{children}</span>;
+  return (
+    <span className={`badge badge--${variant}`} style={style}>
+      {children}
+    </span>
+  );
 }
 
 /* ===========================
@@ -164,38 +137,13 @@ export function TransactionTypeCard({ children, style = {} }) {
    =========================== */
 
 export function ExchangeCard({ exchange, style = {} }) {
-  const cardStyle = {
-    display: "inline-flex",
-    alignItems: "center",
-    justifyContent: "center",
-    padding: "4px 12px",
-    borderRadius: 8,
-    fontSize: 12,
-    fontWeight: 600,
-    textTransform: "uppercase",
-    minWidth: "60px",
-    textAlign: "center",
-    ...style,
-  };
+  const variant = exchange === "NSE" || exchange === "BSE" ? "ok" : "neutral";
 
-  const variants = {
-    NSE: {
-      backgroundColor: "#d1fae5",
-      color: "#065f46",
-    },
-    BSE: {
-      backgroundColor: "#d1fae5",
-      color: "#065f46",
-    },
-    default: {
-      backgroundColor: "#e5e7eb",
-      color: "#374151",
-    },
-  };
-
-  const variant = variants[exchange] || variants.default;
-
-  return <span style={{ ...cardStyle, ...variant, ...style }}>{exchange}</span>;
+  return (
+    <span className={`badge badge--${variant}`} style={style}>
+      {exchange}
+    </span>
+  );
 }
 
 /* ===========================
@@ -335,49 +283,17 @@ export function SelectInput({ label, options = [], style = {}, ...props }) {
    TABLE
    =========================== */
 
+// Styling comes from the shared .data-table system (styles/design-system.css).
+// A column may set `className` ("num", "date", "status", "action", "wrap")
+// to get the matching alignment on both its header and its cells.
 export function Table({ columns = [], data = [], style = {} }) {
-  const container = {
-    width: "100%",
-    maxWidth: "100%",
-    overflowX: "auto",
-    overflowY: "visible",
-    backgroundColor: "transparent",
-    boxSizing: "border-box",
-    ...style,
-  };
-
-  const thStyle = {
-    fontSize: 12,
-    fontWeight: 600,
-    textTransform: "uppercase",
-    letterSpacing: "0.06em",
-    color: "#6b7280",
-    padding: "8px 12px",
-    borderBottom: "1px solid #e5e7eb",
-    whiteSpace: "nowrap",
-  };
-
-  const tdStyle = {
-    fontSize: 13,
-    color: "#111827",
-    padding: "8px 12px",
-    borderBottom: "1px solid #f3f4f6",
-    whiteSpace: "nowrap",
-  };
-
   return (
-    <div style={container}>
-      <table
-        style={{
-          width: "100%",
-          minWidth: "max-content",
-          borderCollapse: "collapse",
-        }}
-      >
-        <thead style={{ backgroundColor: "#f9fafb" }}>
+    <div className="data-table-wrap" style={style}>
+      <table className="data-table">
+        <thead>
           <tr>
             {columns.map((col) => (
-              <th key={col.key} style={thStyle}>
+              <th key={col.key} className={col.className}>
                 {col.header}
               </th>
             ))}
@@ -385,14 +301,9 @@ export function Table({ columns = [], data = [], style = {} }) {
         </thead>
         <tbody>
           {data.map((row, i) => (
-            <tr
-              key={i}
-              style={{
-                backgroundColor: i % 2 === 0 ? "#ffffff" : "#f9fafb",
-              }}
-            >
+            <tr key={i}>
               {columns.map((col) => (
-                <td key={col.key} style={tdStyle}>
+                <td key={col.key} className={col.className}>
                   {col.render ? col.render(row[col.key], row) : row[col.key]}
                 </td>
               ))}

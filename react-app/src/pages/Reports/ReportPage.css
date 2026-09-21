@@ -404,73 +404,6 @@
   letter-spacing: -0.01em;
 }
 
-/* ================= TABLE ================= */
-
-.export-table {
-  width: 100%;
-  border-collapse: separate;
-  border-spacing: 0;
-  font-size: 14px;
-  background: #ffffff;
-  border-radius: 12px;
-  overflow: hidden;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
-}
-
-.export-table thead th {
-  background: #f9fafb;
-  color: #374151;
-  font-weight: 700;
-  text-align: left;
-  padding: 14px 16px;
-  border-bottom: 2px solid #e5e7eb;
-  font-size: 12px;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-}
-
-.export-table thead th:first-child {
-  border-top-left-radius: 12px;
-}
-
-.export-table thead th:last-child {
-  border-top-right-radius: 12px;
-  text-align: center;
-}
-
-/* ================= ROWS ================= */
-
-.export-table tbody tr {
-  transition: background 0.15s ease-in-out;
-  border-bottom: 1px solid #f3f4f6;
-}
-
-.export-table tbody tr:last-child td {
-  border-bottom: none;
-}
-
-.export-table tbody tr:hover {
-  background: #f9fafb;
-}
-
-.export-table tbody td {
-  padding: 16px;
-  color: #111827;
-  font-size: 14px;
-  vertical-align: middle;
-}
-
-.export-table tbody td:first-child {
-  font-weight: 600;
-  color: #374151;
-  font-family: 'SF Mono', 'Monaco', 'Consolas', monospace;
-  font-size: 13px;
-}
-
-.export-table tbody td:last-child {
-  text-align: center;
-}
-
 /* ================= STATUS STYLES ================= */
 
 .export-status {
@@ -502,21 +435,6 @@
   background: #eff6ff;
   color: #1d4ed8;
   border: 1px solid #93c5fd;
-}
-
-/* ================= ACTION BUTTON IN TABLE ================= */
-
-.export-table .export-btn {
-  padding: 8px 16px;
-  font-size: 13px;
-  border-radius: 6px;
-  background: linear-gradient(135deg, #c2185b, #8b1538);
-  box-shadow: 0 2px 6px rgba(194, 24, 91, 0.2);
-}
-
-.export-table .export-btn:hover {
-  transform: translateY(-1px);
-  box-shadow: 0 3px 8px rgba(194, 24, 91, 0.3);
 }
 
 /* ================= EMPTY STATE ================= */

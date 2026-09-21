@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState, useMemo } from "react";
+import DownloadButton from "../../../components/common/DownloadButton";
 import { useAccountCodes } from "../../../hooks/GetAllCodes.js";
 import { BASE_URL } from "../../../constant.js";
 import { useJobNotifications } from "../../../notifications/JobNotificationContext";
@@ -402,7 +403,7 @@ function CashTab() {
       </div>
 
       <div className="action-footer">
-        <button type="button" className="export-btn" onClick={handlePrimaryAction} disabled={loading}>
+        <button type="button" className="btn-export" onClick={handlePrimaryAction} disabled={loading}>
           {loading ? "Starting..." : "Export"}
         </button>
       </div>
@@ -411,52 +412,48 @@ function CashTab() {
         <div className="export-jobs-container">
           <h4>Previous Export History</h4>
 
-          <table className="export-table">
+          <div className="data-table-wrap">
+          <table className="data-table">
             <thead>
               <tr>
-                <th>File Name</th>
-                <th>Timestamp</th>
-                <th>Status</th>
-                <th>Action</th>
+                <th className="wrap">File Name</th>
+                <th className="date">Timestamp</th>
+                <th className="status">Status</th>
+                <th className="action">Action</th>
               </tr>
             </thead>
             <tbody>
               {sortedExportJobs.map((job) => (
                 <tr key={job.jobName}>
-                  <td>{job.jobName}</td>
-                  <td>
+                  <td className="wrap">{job.jobName}</td>
+                  <td className="date">
                     {job.createdAt ? formatExportTimestamp(job.createdAt) : "—"}
                   </td>
-                  <td>
+                  <td className="status">
                     <span
-                      className={`export-status ${
+                      className={`badge ${
                         job.status === "COMPLETED"
-                          ? "completed"
+                          ? "badge--ok"
                           : job.status === "FAILED" || job.status === "ERROR"
-                            ? "failed"
-                            : "pending"
+                            ? "badge--bad"
+                            : "badge--processing"
                       }`}
                     >
                       {job.status}
                     </span>
                   </td>
-                  <td>
+                  <td className="action">
                     {job.status === "COMPLETED" ? (
-                      <button
-                        type="button"
-                        className="export-btn"
-                        onClick={() => handleCashDownload(job)}
-                      >
-                        Download
-                      </button>
+                      <DownloadButton onClick={() => handleCashDownload(job)} />
                     ) : (
-                      <span style={{ color: "#9ca3af" }}>-</span>
+                      <span className="muted">-</span>
                     )}
                   </td>
                 </tr>
               ))}
             </tbody>
           </table>
+          </div>
         </div>
       )}
     </>

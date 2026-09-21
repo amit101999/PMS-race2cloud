@@ -8,7 +8,7 @@ import "./ClientPage.css";
 const PAGE_SIZE = 10;
 
 const COLUMNS = [
-  { key: "securityName", label: "Security Name" },
+  { key: "securityName", label: "Security Name", className: "wrap" },
   { key: "isin", label: "ISIN" },
   { key: "securityCode", label: "Security Code" },
 ];
@@ -175,12 +175,12 @@ function SecurityPage() {
                 <div className="client-state">No securities match your filter.</div>
               ) : (
                 <>
-                  <div className="client-table-wrapper">
-                    <table className="client-table">
+                  <div className="data-table-wrap">
+                    <table className="data-table">
                       <thead>
                         <tr>
                           {COLUMNS.map((c) => (
-                            <th key={c.key}>{c.label}</th>
+                            <th key={c.key} className={c.className}>{c.label}</th>
                           ))}
                         </tr>
                       </thead>
@@ -188,7 +188,7 @@ function SecurityPage() {
                         {pageRows.map((row, i) => (
                           <tr key={row.isin ?? i}>
                             {COLUMNS.map((c) => (
-                              <td key={c.key}>{displayValue(row[c.key])}</td>
+                              <td key={c.key} className={c.className}>{displayValue(row[c.key])}</td>
                             ))}
                           </tr>
                         ))}

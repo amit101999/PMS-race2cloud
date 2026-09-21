@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from "react";
+import DownloadButton from "../../../components/common/DownloadButton";
 import { BASE_URL } from "../../../constant.js";
 import { useJobNotifications } from "../../../notifications/JobNotificationContext";
 import { parseReportStatus } from "../../../notifications/reportJobStatus";
@@ -26,9 +27,9 @@ function formatExportTimestamp(iso) {
 }
 
 function statusBadgeClass(status) {
-  if (status === "COMPLETED") return "completed";
-  if (status === "FAILED" || status === "ERROR") return "failed";
-  return "pending";
+  if (status === "COMPLETED") return "badge badge--ok";
+  if (status === "FAILED" || status === "ERROR") return "badge badge--bad";
+  return "badge badge--processing";
 }
 
 function CorporateActionTab() {
@@ -377,25 +378,27 @@ function CorporateActionTab() {
         <>
           <div className="action-footer">
             <button
-              className="export-btn"
+              type="button"
+              className="btn-export"
               onClick={handleExport}
               disabled={loading}
             >
-              {loading ? "Generating..." : "Export CSV"}
+              {loading ? "Generating..." : "Export"}
             </button>
           </div>
 
           {exportHistory.length > 0 && (
             <div className="export-jobs-container">
               <h4>Previous Export History</h4>
-              <table className="export-table">
+              <div className="data-table-wrap">
+              <table className="data-table">
                 <thead>
                   <tr>
-                    <th>From Date</th>
-                    <th>To Date</th>
-                    <th>Timestamp</th>
-                    <th>Status</th>
-                    <th>Action</th>
+                    <th className="date">From Date</th>
+                    <th className="date">To Date</th>
+                    <th className="date">Timestamp</th>
+                    <th className="status">Status</th>
+                    <th className="action">Action</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -403,30 +406,26 @@ function CorporateActionTab() {
                     <tr
                       key={`${row.jobName || `${row.fromDate}-${row.toDate}`}-${idx}`}
                     >
-                      <td>{row.fromDate}</td>
-                      <td>{row.toDate}</td>
-                      <td>
+                      <td className="date">{row.fromDate}</td>
+                      <td className="date">{row.toDate}</td>
+                      <td className="date">
                         {row.createdAt
                           ? formatExportTimestamp(row.createdAt)
                           : "-"}
                       </td>
-                      <td>
-                        <span className={`export-status ${statusBadgeClass(row.status)}`}>
+                      <td className="status">
+                        <span className={statusBadgeClass(row.status)}>
                           {row.status || "COMPLETED"}
                         </span>
                       </td>
-                      <td>
-                        <button
-                          className="export-btn"
-                          onClick={() => handleHistoryDownload(row)}
-                        >
-                          Download
-                        </button>
+                      <td className="action">
+                        <DownloadButton onClick={() => handleHistoryDownload(row)} />
                       </td>
                     </tr>
                   ))}
                 </tbody>
               </table>
+              </div>
             </div>
           )}
         </>
@@ -468,47 +467,44 @@ function CorporateActionTab() {
               {impactJobs.length > 0 && (
                 <div className="export-jobs-container">
                   <h4>Previous Report History</h4>
-                  <table className="export-table">
+                  <div className="data-table-wrap">
+                  <table className="data-table">
                     <thead>
                       <tr>
-                        <th>From Date</th>
-                        <th>To Date</th>
-                        <th>Timestamp</th>
-                        <th>Status</th>
-                        <th>Action</th>
+                        <th className="date">From Date</th>
+                        <th className="date">To Date</th>
+                        <th className="date">Timestamp</th>
+                        <th className="status">Status</th>
+                        <th className="action">Action</th>
                       </tr>
                     </thead>
                     <tbody>
                       {sortedImpactJobs.map((job, idx) => (
                         <tr key={job.jobName || `${job.fromDate}-${job.toDate}-${idx}`}>
-                          <td>{job.fromDate}</td>
-                          <td>{job.toDate}</td>
-                          <td>
+                          <td className="date">{job.fromDate}</td>
+                          <td className="date">{job.toDate}</td>
+                          <td className="date">
                             {job.createdAt ? formatExportTimestamp(job.createdAt) : "—"}
                           </td>
-                          <td>
-                            <span className={`export-status ${statusBadgeClass(job.status)}`}>
+                          <td className="status">
+                            <span className={statusBadgeClass(job.status)}>
                               {job.status}
                             </span>
                           </td>
-                          <td>
+                          <td className="action">
                             {job.status === "COMPLETED" ? (
-                              <button
-                                className="export-btn"
-                                onClick={() => handleImpactDownload(job)}
-                              >
-                                Download
-                              </button>
+                              <DownloadButton onClick={() => handleImpactDownload(job)} />
                             ) : job.status === "NO_DATA" ? (
-                              <span style={{ color: "#9ca3af" }}>No data</span>
+                              <span className="muted">No data</span>
                             ) : (
-                              <span style={{ color: "#9ca3af" }}>-</span>
+                              <span className="muted">-</span>
                             )}
                           </td>
                         </tr>
                       ))}
                     </tbody>
                   </table>
+                  </div>
                 </div>
               )}
             </>

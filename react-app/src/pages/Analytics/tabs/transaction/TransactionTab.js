@@ -266,14 +266,14 @@ const TransactionTab = ({ accountCode, asOnDate }) => {
       {error && <div className="error-text">{error}</div>}
 
       {!loading && !error && (
-        <div className="transaction-table-wrapper">
-          <table className="transaction-table">
+        <div className="data-table-wrap">
+          <table className="data-table">
             <thead>
               <tr>
-                <th>TRANDATE</th>
-                <th>SETDATE</th>
+                <th className="date">TRANDATE</th>
+                <th className="date">SETDATE</th>
                 <th>Type</th>
-                <th>Security Name</th>
+                <th className="wrap">Security Name</th>
                 <th>ISIN</th>
                 <th className="num">Quantity</th>
                 <th className="num">Price</th>
@@ -290,10 +290,10 @@ const TransactionTab = ({ accountCode, asOnDate }) => {
               ) : (
                 data.map((t) => (
                   <tr key={t.rowId}>
-                    <td>{t.trandate ?? t.date ?? "-"}</td>
-                    <td>{t.setdate ?? "-"}</td>
+                    <td className="date">{t.trandate ?? t.date ?? "-"}</td>
+                    <td className="date">{t.setdate ?? "-"}</td>
                     <td>{t.type || "-"}</td>
-                    <td>{t.securityName || "-"}</td>
+                    <td className="wrap">{t.securityName || "-"}</td>
                     <td>{t.isin || "-"}</td>
                     <td className="num">{formatQuantity(t.quantity, t.type)}</td>
                     <td className="num">{formatNumber(t.price)}</td>

@@ -242,23 +242,24 @@ const HoldingComparisonPanel = ({
 
                     <div className="temp-transaction-card">
                         {custodyFile ? (
-                            <table className="upload-history-table cm-filetable">
+                            <div className="data-table-wrap">
+                            <table className="data-table">
                                 <thead>
                                     <tr>
-                                        <th>Business date</th>
+                                        <th className="date">Business date</th>
                                         <th>File</th>
-                                        <th>Uploaded</th>
+                                        <th className="date">Uploaded</th>
                                         <th className="action" aria-label="Remove" />
                                     </tr>
                                 </thead>
                                 <tbody>
                                     <tr>
-                                        <td className="cm-cell-dates">{custodyFile.businessDate}</td>
-                                        <td className="cm-cell-file" title={custodyFile.fileName}>
+                                        <td className="date">{custodyFile.businessDate}</td>
+                                        <td className="truncate" title={custodyFile.fileName}>
                                             {custodyFile.fileName}
                                             <span className="cm-file-size">{bytes(custodyFile.sizeBytes)}</span>
                                         </td>
-                                        <td className="cm-cell-dates">{when(custodyFile.timeMs)}</td>
+                                        <td className="date">{when(custodyFile.timeMs)}</td>
                                         <td className="action">
                                             <button
                                                 type="button"
@@ -274,6 +275,7 @@ const HoldingComparisonPanel = ({
                                     </tr>
                                 </tbody>
                             </table>
+                            </div>
                         ) : (
                             <p className="cm-empty">
                                 {loading ? "Loading…" : "No custodian file uploaded for this date."}
@@ -312,25 +314,27 @@ const HoldingComparisonPanel = ({
 
                     <div className="temp-transaction-card">
                         {fa?.latestSnapshot ? (
-                            <table className="upload-history-table cm-filetable cm-filetable--fit">
+                            <div className="data-table-wrap">
+                            <table className="data-table">
                                 <thead>
                                     <tr>
-                                        <th className="cm-col-date">Business date</th>
+                                        <th className="date">Business date</th>
                                         <th>File</th>
-                                        <th className="cm-col-when">Generated</th>
+                                        <th className="date">Generated</th>
                                     </tr>
                                 </thead>
                                 <tbody>
                                     <tr>
-                                        <td className="cm-cell-dates">{fa.latestSnapshot.businessDate}</td>
-                                        <td className="cm-cell-file" title={fa.latestSnapshot.fileName}>
+                                        <td className="date">{fa.latestSnapshot.businessDate}</td>
+                                        <td className="truncate" title={fa.latestSnapshot.fileName}>
                                             {fa.latestSnapshot.fileName}
                                             <span className="cm-file-size">{bytes(fa.latestSnapshot.sizeBytes)}</span>
                                         </td>
-                                        <td className="cm-cell-dates">{when(fa.latestSnapshot.timeMs)}</td>
+                                        <td className="date">{when(fa.latestSnapshot.timeMs)}</td>
                                     </tr>
                                 </tbody>
                             </table>
+                            </div>
                         ) : (
                             <p className="cm-empty">
                                 {loading ? "Loading…" : "No FA holdings generated for this date."}

@@ -65,80 +65,6 @@
   margin: 20px 0 10px;
 }
 
-.hd-table-wrapper {
-  overflow-x: auto;
-  margin-top: 16px;
-  border: 1px solid #e5e7eb;
-  border-radius: 12px;
-  background: white;
-}
-
-.hd-table {
-  width: 100%;
-  border-collapse: collapse;
-  min-width: 800px;
-}
-
-.hd-table thead {
-  background: #f9fafb;
-  position: sticky;
-  top: 0;
-  z-index: 10;
-}
-
-.hd-table th {
-  padding: 12px 16px;
-  text-align: left;
-  font-weight: 600;
-  font-size: 12px;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: #6b7280;
-  border-bottom: 2px solid #e5e7eb;
-  white-space: nowrap;
-}
-
-.hd-table td {
-  padding: 12px 16px;
-  border-bottom: 1px solid #f3f4f6;
-  font-size: 13px;
-  color: #111827;
-  white-space: nowrap;
-}
-
-.hd-table tbody tr {
-  transition: background-color 0.15s ease;
-}
-
-.hd-table tbody tr:hover {
-  background-color: #f9fafb !important;
-}
-
-.hd-table tr.buy {
-  background: #f0fdf4;
-}
-
-.hd-table tr.sell {
-  background: #fef2f2;
-}
-
-.hd-table tr.bonus {
-  background: #eef2ff;
-}
-
-.hd-table tbody tr:last-child td {
-  border-bottom: none;
-}
-
-.pl {
-  color: #059669;
-  font-weight: 600;
-}
-
-.pl.negative {
-  color: #dc2626;
-}
-
 /* Transaction History paging bar — sits under the table, inside the modal. */
 .hd-pagination {
   display: flex;
@@ -156,4 +82,8 @@
 .hd-pagination-info {
   font-size: 12px;
   color: #6b7280;
+}
+
+.hd-table-wrap {
+  margin-top: 16px;
 }

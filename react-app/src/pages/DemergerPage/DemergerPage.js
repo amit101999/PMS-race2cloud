@@ -676,10 +676,10 @@ function DemergerPage() {
                 <div className="bonus-preview-actions">
                   <button
                     type="button"
-                    className="bonus-submit"
+                    className="btn-export"
                     onClick={handleExportDemergerCsv}
                   >
-                    Export CSV
+                    Export
                   </button>
                 </div>
               </div>
@@ -695,19 +695,19 @@ function DemergerPage() {
                 <code>Demerger_Record</code> and refreshes <code>Holdings</code> via DemergerFn.
               </div>
 
-              <div className="bonus-preview-table-wrapper">
-                <table className="bonus-preview-table">
+              <div className="data-table-wrap">
+                <table className="data-table">
                   <thead>
                     <tr>
                       <th>Account Code</th>
                       <th>Old ISIN</th>
-                      <th>Source Buy Date</th>
-                      <th>Old Qty</th>
-                      <th>Old WAP (Before)</th>
-                      <th>Old WAP (After)</th>
+                      <th className="date">Source Buy Date</th>
+                      <th className="num">Old Qty</th>
+                      <th className="num">Old WAP (Before)</th>
+                      <th className="num">Old WAP (After)</th>
                       <th>New ISIN</th>
-                      <th>New Qty</th>
-                      <th>New WAP</th>
+                      <th className="num">New Qty</th>
+                      <th className="num">New WAP</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -717,13 +717,13 @@ function DemergerPage() {
                       >
                         <td>{row.accountCode}</td>
                         <td>{row.oldIsin}</td>
-                        <td>{row.sourceLotDate}</td>
-                        <td>{row.oldQty}</td>
-                        <td>{row.oldWapBefore}</td>
-                        <td>{row.oldWapAfter}</td>
+                        <td className="date">{row.sourceLotDate}</td>
+                        <td className="num">{row.oldQty}</td>
+                        <td className="num">{row.oldWapBefore}</td>
+                        <td className="num">{row.oldWapAfter}</td>
                         <td>{row.newIsin}</td>
-                        <td>{row.newQty}</td>
-                        <td>{row.newWap}</td>
+                        <td className="num">{row.newQty}</td>
+                        <td className="num">{row.newWap}</td>
                       </tr>
                     ))}
                   </tbody>

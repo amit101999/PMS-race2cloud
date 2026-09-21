@@ -58,31 +58,31 @@ const HoldingTab = ({
           <h2 className="holdings-title">
             ISIN Report ({selectedIsin || "—"}) - Accounts ({rows.length})
           </h2>
-          <div className="holdings-table-wrapper">
-            <table className="holdings-table">
+          <div className="data-table-wrap">
+            <table className="data-table">
               <thead>
                 <tr>
                   <th>Virtual Code</th>
                   <th>Actual Code</th>
-                  <th>Quantity</th>
-                  <th>WAP</th>
-                  <th>Holding Value</th>
-                  <th>Last Price</th>
-                  <th>Market Value</th>
-                  <th></th>
+                  <th className="num">Quantity</th>
+                  <th className="num">WAP</th>
+                  <th className="num">Holding Value</th>
+                  <th className="num">Last Price</th>
+                  <th className="num">Market Value</th>
+                  <th className="action"></th>
                 </tr>
               </thead>
               <tbody>
                 {loadingIsinReport && (
                   <tr>
-                    <td colSpan="8" style={{ textAlign: "center", padding: "20px" }}>
+                    <td colSpan="8" className="empty-cell">
                       Loading ISIN report...
                     </td>
                   </tr>
                 )}
                 {!loadingIsinReport && paginatedRows.length === 0 && (
                   <tr>
-                    <td colSpan="8" style={{ textAlign: "center", padding: "20px" }}>
+                    <td colSpan="8" className="empty-cell">
                       No accounts hold this ISIN
                     </td>
                   </tr>
@@ -91,26 +91,26 @@ const HoldingTab = ({
                   paginatedRows.map((row, idx) => (
                     <tr
                       key={`${row.virtualCode || "virtual"}-${idx}`}
+                      className="is-clickable"
                       onClick={() => openIsinRowTransactions(row)}
-                      style={{ cursor: "pointer" }}
                     >
                       <td>{row.virtualCode || "—"}</td>
                       <td>{row.actualCode || "—"}</td>
-                      <td>{formatNumber(row.currentHolding, 3)}</td>
-                      <td>{formatNumber(row.avgPrice)}</td>
-                      <td>{formatNumber(row.holdingValue)}</td>
-                      <td>{formatNumber(row.lastPrice)}</td>
-                      <td>{formatNumber(row.marketValue)}</td>
-                      <td className="view-cell">
+                      <td className="num">{formatNumber(row.currentHolding, 3)}</td>
+                      <td className="num">{formatNumber(row.avgPrice)}</td>
+                      <td className="num">{formatNumber(row.holdingValue)}</td>
+                      <td className="num">{formatNumber(row.lastPrice)}</td>
+                      <td className="num">{formatNumber(row.marketValue)}</td>
+                      <td className="action">
                         <button
                           type="button"
-                          className="view-btn"
+                          className="btn-action"
                           onClick={(e) => {
                             e.stopPropagation();
                             openIsinRowTransactions(row);
                           }}
                         >
-                          👁 View
+                          View
                         </button>
                       </td>
                     </tr>

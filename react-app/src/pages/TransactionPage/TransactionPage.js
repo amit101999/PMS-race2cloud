@@ -66,6 +66,9 @@ function TransactionPage({ stock, accountCode, asOnDate, onClose }) {
 
   if (!stock) return null;
 
+  // Badge tone (styles/design-system.css) for each getRowClass() category.
+  const TYPE_BADGE_TONE = { buy: "buy", sell: "sell", bonus: "info" };
+
   const getRowClass = (type) => {
     if (!type) return "";
     const typeUpper = String(type).toUpperCase();
@@ -208,52 +211,50 @@ function TransactionPage({ stock, accountCode, asOnDate, onClose }) {
           </div>
         ) : (
           <>
-          <div className="hd-table-wrapper">
-            <table className="hd-table">
+          <div className="data-table-wrap hd-table-wrap">
+            <table className="data-table">
               <thead>
                 <tr>
-                  <th>Transaction Date</th>
-                  <th>Settlement Date</th>
-                  {showMergerDate && <th>Merger Date</th>}
-                  {showDemergerDate && <th>Demerger Date</th>}
-                  <th>Type</th>
+                  <th className="date">Transaction Date</th>
+                  <th className="date">Settlement Date</th>
+                  {showMergerDate && <th className="date">Merger Date</th>}
+                  {showDemergerDate && <th className="date">Demerger Date</th>}
+                  <th className="status">Type</th>
                   <th>ISIN</th>
-                  <th>Quantity</th>
-                  <th>Price</th>
-                  <th>Total Amount</th>
-                  <th>Holding</th>
-                  <th>WAP</th>
-                  <th>Holding Value</th>
-                  <th>P/L</th>
+                  <th className="num">Quantity</th>
+                  <th className="num">Price</th>
+                  <th className="num">Total Amount</th>
+                  <th className="num">Holding</th>
+                  <th className="num">WAP</th>
+                  <th className="num">Holding Value</th>
+                  <th className="num">P/L</th>
                 </tr>
               </thead>
               <tbody>
                 {transactions.length === 0 ? (
                   <tr>
-                    <td
-                      colSpan={tableColSpan}
-                      style={{
-                        textAlign: "center",
-                        padding: "40px",
-                        color: "#6b7280",
-                      }}
-                    >
+                    <td colSpan={tableColSpan} className="empty-cell">
                       No transactions found
                     </td>
                   </tr>
                 ) : (
                   pageTransactions.map((tx, idx) => (
-                    <tr
-                      key={startIndex + idx}
-                      className={getRowClass(tx.tranType)}
-                    >
-                      <td>{tx.originalTrandate || tx.trandate || "-"}</td>
-                      <td>{tx.setdate || "-"}</td>
-                      {showMergerDate && <td>{tx.caDate || "-"}</td>}
-                      {showDemergerDate && <td>{tx.caDate || "-"}</td>}
-                      <td>{tx.tranType || "-"}</td>
+                    <tr key={startIndex + idx}>
+                      <td className="date">{tx.originalTrandate || tx.trandate || "-"}</td>
+                      <td className="date">{tx.setdate || "-"}</td>
+                      {showMergerDate && <td className="date">{tx.caDate || "-"}</td>}
+                      {showDemergerDate && <td className="date">{tx.caDate || "-"}</td>}
+                      <td className="status">
+                        {tx.tranType ? (
+                          <span className={`badge badge--${TYPE_BADGE_TONE[getRowClass(tx.tranType)] || "neutral"}`}>
+                            {tx.tranType}
+                          </span>
+                        ) : (
+                          "-"
+                        )}
+                      </td>
                       <td>{tx.isin || "-"}</td>
-                      <td>
+                      <td className="num">
                         {formatQuantity(tx.qty, tx.tranType)}
                         <span>
                           {/^BY-|SQB|OPI/i.test(String(tx.tranType || "")) &&
@@ -262,20 +263,20 @@ function TransactionPage({ stock, accountCode, asOnDate, onClose }) {
                             : ""}
                         </span>
                       </td>
-                      <td>{Math.trunc(tx.price * 100) / 100}</td>
-                      <td>{formatCurrency(tx.netAmount)}</td>
-                      <td>{formatQuantity(tx.holdings, tx.tranType)}</td>
-                      <td>
+                      <td className="num">{Math.trunc(tx.price * 100) / 100}</td>
+                      <td className="num">{formatCurrency(tx.netAmount)}</td>
+                      <td className="num">{formatQuantity(tx.holdings, tx.tranType)}</td>
+                      <td className="num">
                         {Math.trunc(tx.averageCostOfHoldings * 100) / 100}
                       </td>
-                      <td>{Math.trunc(tx.costOfHoldings * 100) / 100}</td>
+                      <td className="num">{Math.trunc(tx.costOfHoldings * 100) / 100}</td>
                       <td
                         className={
                           tx.profitLoss !== null && tx.profitLoss !== undefined
                             ? Number(tx.profitLoss) >= 0
-                              ? "pl"
-                              : "pl negative"
-                            : ""
+                              ? "num positive"
+                              : "num negative"
+                            : "num"
                         }
                       >
                         {formatCurrency(tx.profitLoss)}

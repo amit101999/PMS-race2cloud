@@ -336,7 +336,10 @@ const CustodyMatchPanel = ({
         try {
             const res = await api.getLatestRun(businessDate);
             setDay(res.day);
-            setRun(res.run);
+            // A superseded run was matched against files or a mapping that have
+            // since changed, so its result no longer describes this date. Treat
+            // the date as not yet matched rather than showing a stale result.
+            setRun(res.run?.status === "SUPERSEDED" ? null : res.run);
             setRunError(null);
         } catch (err) {
             setRunError({ message: err.message, detail: err.detail });
@@ -402,7 +405,8 @@ const CustodyMatchPanel = ({
         pollRef.current = setInterval(async () => {
             try {
                 const res = await api.getRun(runId);
-                setRun(res.run);
+                // A file or mapping changed mid-run: same rule as loadDay, hide the stale run.
+                setRun(res.run?.status === "SUPERSEDED" ? null : res.run);
             } catch (err) {
                 setRunError({ message: err.message, detail: err.detail });
             }
@@ -1157,6 +1161,7 @@ const CustodyMatchPanel = ({
                 onUpload={uploadPending}
                 onClose={() => setPending(null)}
                 onSaved={loadDay}
+                showHints={false}
             />
         </>
     );

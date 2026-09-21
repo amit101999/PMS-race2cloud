@@ -116,41 +116,6 @@
   font-weight: 500;
 }
 
-.client-table-wrapper {
-  width: 100%;
-  overflow-x: auto;
-}
-
-.client-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 14px;
-}
-
-.client-table thead th {
-  text-align: left;
-  padding: 11px 14px;
-  background: #faf7f8;
-  color: #8b1538;
-  font-weight: 600;
-  font-size: 12px;
-  text-transform: uppercase;
-  letter-spacing: 0.4px;
-  border-bottom: 2px solid #f0e6ea;
-  white-space: nowrap;
-}
-
-.client-table tbody td {
-  padding: 10px 14px;
-  border-bottom: 1px solid #f3f4f6;
-  color: #111827;
-  white-space: nowrap;
-}
-
-.client-table tbody tr:hover {
-  background: #faf7f8;
-}
-
 /* Two-line dropdown options (Security Name + ISIN search) */
 .client-page .dropdown-option {
   display: flex;

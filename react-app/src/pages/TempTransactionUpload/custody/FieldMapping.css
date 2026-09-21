@@ -182,19 +182,10 @@
     color: #6b7280;
 }
 
+/* Look comes from the shared .badge; this only places it in the card. */
 .fm-badge {
     margin-top: 2px;
-    padding: 2px 8px;
-    border-radius: 999px;
-    background: #f3f4f6;
-    color: #6b7280;
-    font-size: 11px;
-    font-weight: 600;
-}
-
-.fm-badge--custom {
-    background: #dbeafe;
-    color: #1e40af;
+    align-self: flex-start;
 }
 
 /* ── step 2: the mapping ──────────────────────────────────────────────── */
@@ -245,42 +236,13 @@
     color: #2563eb;
 }
 
-.fm-table {
-    width: 100%;
-    border-collapse: collapse;
-}
-
-/* A light brand tint with a crisp maroon underline — reads as a header
-   band, tied to the app's own accent, without being heavy. */
-.fm-table th {
-    text-align: left;
-    font-size: 11px;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    color: var(--txo-primary-hover, #6c0f2b);
-    padding: 10px 12px;
-    background: var(--txo-primary-tint, #f8e8ec);
-    border-bottom: 2px solid var(--txo-primary, #8b1538);
-}
-
-.fm-table th:first-child {
-    padding-left: 12px;
-    border-radius: 6px 0 0 0;
-}
-
-.fm-table th:last-child {
-    border-radius: 0 6px 0 0;
-}
-
+/* Header and row chrome come from the shared .data-table. Rows here hold a
+   dropdown plus hints/errors, so they align to the top and may wrap. */
 .fm-row td {
-    padding: 14px 0;
-    border-bottom: 1px solid #f1f2f4;
     vertical-align: top;
-}
-
-.fm-row:last-child td {
-    border-bottom: none;
+    white-space: normal;
+    padding-top: 8px;
+    padding-bottom: 8px;
 }
 
 /* Plain, calm rows — the field name is set apart by typography, not a

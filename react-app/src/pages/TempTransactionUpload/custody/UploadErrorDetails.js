@@ -43,22 +43,22 @@ const UploadErrorDetails = ({ message, detail }) => {
                         {detail.rowErrorCount != null ? ` (${detail.rowErrorCount} total)` : ""}:
                     </strong>
                     <div className="cm-error-rows-scroll">
-                        <table className="cm-error-table">
+                        <table className="data-table">
                             <thead>
                                 <tr>
-                                    <th>Row</th>
+                                    <th className="num">Row</th>
                                     <th>Column</th>
                                     <th>Value</th>
-                                    <th>Problem</th>
+                                    <th className="wrap">Problem</th>
                                 </tr>
                             </thead>
                             <tbody>
                                 {detail.rowErrors.map((e, i) => (
                                     <tr key={`${e.row}-${e.code}-${i}`}>
-                                        <td className="mono">{e.row}</td>
+                                        <td className="num mono">{e.row}</td>
                                         <td className="mono">{e.column || "—"}</td>
                                         <td>{e.value === "" || e.value == null ? "(empty)" : String(e.value)}</td>
-                                        <td>{e.message}</td>
+                                        <td className="wrap">{e.message}</td>
                                     </tr>
                                 ))}
                             </tbody>

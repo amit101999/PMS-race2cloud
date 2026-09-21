@@ -23,8 +23,8 @@ const GLYPH = {
 
 /** @param {{ tone: string, children: React.ReactNode }} props */
 const StatusBadge = ({ tone = STATUS.NEUTRAL, children }) => (
-    <span className={`status-badge ${tone}`}>
-        <span className="status-glyph" aria-hidden="true">
+    <span className={`badge badge--${tone}`}>
+        <span className="badge-glyph" aria-hidden="true">
             {GLYPH[tone] || GLYPH.neutral}
         </span>
         {children}

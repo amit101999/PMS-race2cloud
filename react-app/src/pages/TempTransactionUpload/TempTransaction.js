@@ -6,7 +6,7 @@ import DifferenceReports from "./custody/DifferenceReports";
 import PreviousCustodianUploads from "./custody/PreviousCustodianUploads";
 import ExceptionGrid from "./custody/ExceptionGrid";
 import GateTwo from "./custody/GateTwo";
-import DownloadButton from "./custody/DownloadButton";
+import DownloadButton from "../../components/common/DownloadButton";
 import { todayIso } from "./custody/api";
 import "./tokens.css";
 import "./TempTransaction.css";
@@ -256,11 +256,11 @@ const TempTransaction = () => {
                         </p>
                     )}
 
-                    <div className="upload-history-table-wrapper">
-                        <table className="upload-history-table upload-history-table--compact">
+                    <div className="data-table-wrap">
+                        <table className="data-table">
                             <thead>
                                 <tr>
-                                    <th>Uploaded date</th>
+                                    <th className="date">Uploaded date</th>
                                     <th>File name</th>
                                     <th className="num">Size</th>
                                     <th className="action">Download</th>
@@ -282,8 +282,8 @@ const TempTransaction = () => {
                                 ) : (
                                     historyItems.map((item) => (
                                         <tr key={item.key}>
-                                            <td>{formatUploadedAt(item.uploadedAt)}</td>
-                                            <td className="filename-cell" title={item.originalFileName}>
+                                            <td className="date">{formatUploadedAt(item.uploadedAt)}</td>
+                                            <td className="truncate mono" title={item.originalFileName}>
                                                 {item.originalFileName}
                                             </td>
                                             <td className="num">{formatBytes(item.sizeBytes)}</td>

@@ -64,25 +64,26 @@ const ExceptionGrid = ({ run }) => {
                 </h3>
                 <button
                     type="button"
-                    className="upload-history-download-btn"
+                    className="btn-export"
                     onClick={handleExport}
                     disabled={exporting}
+                    aria-busy={exporting}
                 >
                     {exporting ? "Preparing…" : "Export"}
                 </button>
             </div>
 
-            <div className="upload-history-table-wrapper">
-                <table className="upload-history-table">
+            <div className="data-table-wrap">
+                <table className="data-table">
                     <thead>
                         <tr>
                             <th>Actual Code</th>
                             <th>ISIN</th>
-                            <th>Date</th>
+                            <th className="date">Date</th>
                             <th className="num">FA Holding Qty</th>
                             <th className="num">Custody Qty</th>
                             <th className="num">Difference</th>
-                            <th>Exception</th>
+                            <th className="status">Exception</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -99,15 +100,15 @@ const ExceptionGrid = ({ run }) => {
                                 <tr key={`${r.accountCode}|${r.isin}`}>
                                     <td className="mono">{r.accountCode}</td>
                                     <td className="mono" title={r.securityName}>{r.isin}</td>
-                                    <td className="mono">{r.asOfDate || "—"}</td>
+                                    <td className="date">{r.asOfDate || "—"}</td>
                                     <td className="num">{qty(r.faQuantity)}</td>
                                     <td className="num">{qty(r.custodyQuantity)}</td>
                                     <td className="num">
                                         {Number(r.difference) > 0 ? "+" : ""}
                                         {qty(r.difference)}
                                     </td>
-                                    <td>
-                                        <span className={`cm-tag ${r.exceptionType.toLowerCase()}`}>
+                                    <td className="status">
+                                        <span className={`badge cm-tag ${r.exceptionType.toLowerCase()}`}>
                                             {api.EXCEPTION_LABEL[r.exceptionType] || r.exceptionType}
                                         </span>
                                     </td>
