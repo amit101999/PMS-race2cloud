@@ -15,14 +15,12 @@
 @media (max-width: 1024px) {
   .cash-balance-page .filters-card {
     grid-template-columns: 1fr 1fr;
-  }
-}
+  }}
 
 @media (max-width: 600px) {
   .cash-balance-page .filters-card {
     grid-template-columns: 1fr;
-  }
-}
+  }}
 
 .cash-filter-field {
   display: flex;
@@ -129,8 +127,7 @@
 
   .cash-summary-card:nth-child(2) {
     max-width: 100%;
-  }
-}
+  }}
 
 /* ===========================
    TABLE SECTION
@@ -160,106 +157,6 @@
   font-size: 13px;
   color: #6b7280;
   font-weight: 500;
-}
-
-.cash-table-wrapper {
-  border-radius: 14px;
-  overflow-x: auto;
-  overflow-y: visible;
-  -webkit-overflow-scrolling: touch;
-  border: 1px solid #e5e7eb;
-  background: #ffffff;
-  max-width: 100%;
-}
-
-.cash-table {
-  width: max-content;
-  min-width: 100%;
-  border-collapse: collapse;
-  font-size: 14px;
-}
-
-.cash-table thead th {
-  text-align: left;
-  vertical-align: middle;
-  padding: 14px 16px;
-  background: #f9fafb;
-  color: #374151;
-  font-weight: 600;
-  border-bottom: 1px solid #e5e7eb;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  font-size: 12px;
-  white-space: nowrap;
-}
-
-.cash-table tbody tr {
-  background: #ffffff;
-  transition: background 0.15s ease, color 0.15s ease;
-}
-
-.cash-table tbody tr + tr {
-  border-top: 1px solid #e5e7eb;
-}
-
-.cash-table td {
-  text-align: left;
-  vertical-align: middle;
-  padding: 14px 16px;
-  color: #374151;
-  font-weight: 500;
-  white-space: nowrap;
-}
-
-.cash-col-name {
-  max-width: 180px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.cash-th-balance,
-.cash-col-balance {
-  min-width: 140px;
-  text-align: right;
-  font-variant-numeric: tabular-nums;
-}
-
-.cash-col-balance {
-  font-weight: 700;
-  background: #f8fafc;
-}
-
-.cash-table tbody tr:hover .cash-col-balance {
-  background: #fce7f3;
-}
-
-.cash-table tbody tr:nth-child(even) {
-  background: #f9fafb;
-}
-
-.cash-table tbody tr:hover {
-  background: #fce7f3;
-}
-
-.cash-credit {
-  color: #166534;
-  font-weight: 600;
-}
-
-.cash-debit {
-  color: #b91c1c;
-  font-weight: 600;
-}
-
-.cash-balance-positive {
-  color: #166534 !important;
-  font-weight: 700;
-}
-
-.cash-balance-negative {
-  color: #b91c1c !important;
-  font-weight: 700;
 }
 
 /* ===========================
@@ -353,37 +250,6 @@
   margin-top: 16px;
 }
 
-.cash-export-btn {
-  background: linear-gradient(135deg, #c2185b, #8b1538);
-  color: white;
-  padding: 10px 22px;
-  border-radius: 10px;
-  border: none;
-  font-size: 14px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: transform 0.1s ease, box-shadow 0.1s ease;
-}
-
-.cash-export-btn:hover:not(:disabled) {
-  transform: translateY(-1px);
-  box-shadow: 0 6px 14px rgba(194, 24, 91, 0.35);
-}
-
-.cash-export-btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-  box-shadow: none;
-}
-
-.cash-download-btn {
-  background: linear-gradient(135deg, #166534, #15803d);
-}
-
-.cash-download-btn:hover:not(:disabled) {
-  box-shadow: 0 6px 14px rgba(22, 101, 52, 0.35);
-}
-
 .cash-export-status {
   font-size: 13px;
   color: #6b7280;
@@ -454,54 +320,3 @@
   color: #6b7280;
   font-weight: 400;
 }
-
-/* ===========================
-   TRAN TYPE INLINE BADGE (in table cell)
-   =========================== */
-.tt-badge {
-  display: inline-block;
-  padding: 2px 8px;
-  border-radius: 6px;
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  border: 1px solid transparent;
-  white-space: nowrap;
-}
-
-.tt-badge-default {
-  background: #f3f4f6;
-  color: #4b5563;
-  border-color: #e5e7eb;
-}
-
-.tt-badge-dividend {
-  background: #dcfce7;
-  color: #166534;
-  border-color: #86efac;
-}
-
-.tt-badge-buy {
-  background: #fee2e2;
-  color: #991b1b;
-  border-color: #fca5a5;
-}
-
-.tt-badge-sell {
-  background: #dbeafe;
-  color: #1e40af;
-  border-color: #93c5fd;
-}
-
-.tt-badge-cashin {
-  background: #fef9c3;
-  color: #854d0e;
-  border-color: #fde68a;
-}
-
-.tt-badge-cashout {
-  background: #fce7f3;
-  color: #9d174d;
-  border-color: #f9a8d4;
-}
-

@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import MainLayout from "../../layouts/MainLayout";
+import DownloadButton from "../../components/common/DownloadButton";
 import { Card } from "../../components/common/CommonComponents";
 import "./SplitPage.css";
 import { BASE_URL } from "../../constant";
@@ -425,14 +426,14 @@ function SplitPage() {
             <div className="alert info">No eligible holdings found before split date.</div>
           ) : (
             <>
-              <div className="bonus-preview-table-wrapper">
-                <table className="bonus-preview-table">
+              <div className="data-table-wrap">
+                <table className="data-table">
                   <thead>
                     <tr>
                       <th>Actual Code</th>
-                      <th>Current Holding</th>
-                      <th>New Holding</th>
-                      <th>Δ Change</th>
+                      <th className="num">Current Holding</th>
+                      <th className="num">New Holding</th>
+                      <th className="num">Δ Change</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -441,7 +442,7 @@ function SplitPage() {
                       return (
                         <React.Fragment key={group.key}>
                           <tr
-                            className="split-group-row"
+                            className="is-clickable is-group"
                             role="button"
                             tabIndex={0}
                             onClick={() => toggleGroup(group.key)}
@@ -458,9 +459,9 @@ function SplitPage() {
                               </span>
                               {group.actualCode || "—"} ({group.children.length})
                             </td>
-                            <td>{group.currentHolding}</td>
-                            <td>{group.newHolding}</td>
-                            <td className="delta-cell">
+                            <td className="num">{group.currentHolding}</td>
+                            <td className="num">{group.newHolding}</td>
+                            <td className="num positive">
                               {group.delta > 0 ? `+${group.delta}` : group.delta}
                             </td>
                           </tr>
@@ -469,18 +470,18 @@ function SplitPage() {
                             group.children.map((row, cIdx) => (
                               <tr
                                 key={`${group.key}-${row.accountCode}-${cIdx}`}
-                                className="split-detail-row"
+                                className="is-child"
                               >
-                                <td className="split-detail-code">
+                                <td className="indent">
                                   {row.accountCode}
                                 </td>
-                                <td>
+                                <td className="num">
                                   {Math.floor(Number(row.currentHolding) || 0)}
                                 </td>
-                                <td>
+                                <td className="num">
                                   {Math.floor(Number(row.newHolding) || 0)}
                                 </td>
-                                <td className="delta-cell">
+                                <td className="num positive">
                                   {row.delta > 0 ? `+${row.delta}` : row.delta}
                                 </td>
                               </tr>
@@ -512,8 +513,10 @@ function SplitPage() {
 
               <div className="bonus-preview-actions">
                 <button
-                  className="bonus-submit"
+                  type="button"
+                  className="btn-export"
                   disabled={exportLoading}
+                  aria-busy={exportLoading}
                   onClick={async () => {
                     try {
                       setExportLoading(true);
@@ -545,15 +548,12 @@ function SplitPage() {
                 >
                   {exportLoading ? "Generating…" : "Export"}
                 </button>
-                <button
-                  className="bonus-submit"
+                <DownloadButton
                   disabled={!exportDownloadUrl}
                   onClick={() => {
                     if (exportDownloadUrl) window.open(exportDownloadUrl, "_blank");
                   }}
-                >
-                  Download
-                </button>
+                />
                 <button
                   className="bonus-submit"
                   disabled={loading}

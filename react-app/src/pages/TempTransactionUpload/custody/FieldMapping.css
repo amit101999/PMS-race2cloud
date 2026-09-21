@@ -6,7 +6,7 @@
     position: fixed;
     inset: 0;
     background: rgba(17, 24, 39, 0.35);
-    z-index: 40;
+    z-index: 400; /* above the fixed page header (300) */
 }
 
 .fm-panel {
@@ -21,7 +21,7 @@
     box-shadow: -8px 0 24px rgba(16, 24, 40, 0.1);
     display: flex;
     flex-direction: column;
-    z-index: 41;
+    z-index: 401;
 }
 
 .fm-panel-head {
@@ -90,6 +90,13 @@
     flex: 1;
     overflow-y: auto;
     padding: 20px 28px 24px;
+}
+
+/* The mapping table's sticky header would otherwise stop 20px below the top
+   of the scroll area (the padding above), letting rows show above it. Keep
+   this in step with .fm-panel-body's top padding. */
+.fm-panel-body .data-table thead th {
+    top: -20px;
 }
 
 .fm-panel-foot {
@@ -182,19 +189,10 @@
     color: #6b7280;
 }
 
+/* Look comes from the shared .badge; this only places it in the card. */
 .fm-badge {
     margin-top: 2px;
-    padding: 2px 8px;
-    border-radius: 999px;
-    background: #f3f4f6;
-    color: #6b7280;
-    font-size: 11px;
-    font-weight: 600;
-}
-
-.fm-badge--custom {
-    background: #dbeafe;
-    color: #1e40af;
+    align-self: flex-start;
 }
 
 /* ── step 2: the mapping ──────────────────────────────────────────────── */
@@ -245,42 +243,13 @@
     color: #2563eb;
 }
 
-.fm-table {
-    width: 100%;
-    border-collapse: collapse;
-}
-
-/* A light brand tint with a crisp maroon underline — reads as a header
-   band, tied to the app's own accent, without being heavy. */
-.fm-table th {
-    text-align: left;
-    font-size: 11px;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    color: var(--txo-primary-hover, #6c0f2b);
-    padding: 10px 12px;
-    background: var(--txo-primary-tint, #f8e8ec);
-    border-bottom: 2px solid var(--txo-primary, #8b1538);
-}
-
-.fm-table th:first-child {
-    padding-left: 12px;
-    border-radius: 6px 0 0 0;
-}
-
-.fm-table th:last-child {
-    border-radius: 0 6px 0 0;
-}
-
+/* Header and row chrome come from the shared .data-table. Rows here hold a
+   dropdown plus hints/errors, so they align to the top and may wrap. */
 .fm-row td {
-    padding: 14px 0;
-    border-bottom: 1px solid #f1f2f4;
     vertical-align: top;
-}
-
-.fm-row:last-child td {
-    border-bottom: none;
+    white-space: normal;
+    padding-top: 8px;
+    padding-bottom: 8px;
 }
 
 /* Plain, calm rows — the field name is set apart by typography, not a
@@ -427,14 +396,15 @@
     border-color: #9ca3af;
 }
 
+/* Maroon, like every other primary action in the app (design-system.css). */
 .fm-primary {
-    background: #2563eb;
+    background: var(--ds-brand);
     color: #fff;
     transition: background-color 0.15s ease, transform 0.1s ease;
 }
 
 .fm-primary:hover:not(:disabled) {
-    background: #1d4ed8;
+    background: var(--ds-brand-hover);
     transform: translateY(-1px);
 }
 
@@ -545,11 +515,12 @@
     box-sizing: border-box;
     min-height: 34px;
     padding: 0 12px;
-    border: 1px solid #dbeafe;
-    border-left: 3px solid #3b82f6;
+    /* The app's maroon theme (design-system.css), not a separate blue. */
+    border: 1px solid #efd3dc;
+    border-left: 3px solid var(--ds-brand);
     border-radius: 6px;
-    background: #eff6ff;
-    color: #1e3a8a;
+    background: var(--ds-brand-tint);
+    color: var(--ds-brand-hover);
     font-weight: 500;
 }
 

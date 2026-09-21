@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState, useMemo } from "react";
+import DownloadButton from "../../../components/common/DownloadButton";
 import { useAccountCodes } from "../../../hooks/GetAllCodes.js";
 import { BASE_URL } from "../../../constant.js";
 import { useJobNotifications } from "../../../notifications/JobNotificationContext";
@@ -171,22 +172,15 @@ function ReportsTab() {
       <div className="action-footer">
         {!downloadUrl ? (
           <button
-            className="export-btn"
+            type="button"
+            className="btn-export"
             onClick={handleExport}
             disabled={loading}
           >
             {loading ? "Generating..." : "Export"}
           </button>
         ) : (
-          <a
-            href={downloadUrl}
-            className="export-btn"
-            download
-            target="_blank"
-            rel="noreferrer"
-          >
-            Download CSV
-          </a>
+          <DownloadButton href={downloadUrl} />
         )}
       </div>
     </>

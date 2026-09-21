@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useState } from "react";
 
-import DownloadButton from "./DownloadButton";
+import DownloadButton from "../../../components/common/DownloadButton";
 import * as api from "./api";
 
 const when = (ms) =>
@@ -66,15 +66,15 @@ const PreviousCustodianUploads = ({ latest }) => {
                 </p>
             ) : null}
 
-            <div className="upload-history-table-wrapper">
-                <table className="upload-history-table upload-history-table--compact">
+            <div className="data-table-wrap">
+                <table className="data-table data-table--spread">
                     <thead>
                         <tr>
-                            <th>Uploaded on</th>
-                            <th>File name</th>
+                            <th className="date">Uploaded on</th>
+                            <th className="truncate">File name</th>
                             <th>Scheme</th>
                             <th>Type</th>
-                            <th>Business date</th>
+                            <th className="date">Business date</th>
                             <th className="action">Download</th>
                         </tr>
                     </thead>
@@ -94,13 +94,13 @@ const PreviousCustodianUploads = ({ latest }) => {
                         ) : (
                             items.map((item) => (
                                 <tr key={item.key}>
-                                    <td>{when(item.uploadedAtMs)}</td>
-                                    <td className="filename-cell" title={item.fileName}>
+                                    <td className="date">{when(item.uploadedAtMs)}</td>
+                                    <td className="truncate mono" title={item.fileName}>
                                         {item.fileName}
                                     </td>
                                     <td>{item.scheme}</td>
                                     <td>{api.FILE_TYPE_LABEL[item.fileType] || item.fileType}</td>
-                                    <td>{item.businessDate}</td>
+                                    <td className="date">{item.businessDate}</td>
                                     <td className="action">
                                         <DownloadButton
                                             onClick={() => download(item)}

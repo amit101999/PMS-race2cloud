@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from "react";
 import MainLayout from "../../layouts/MainLayout";
 import { Card, Table } from "../../components/common/CommonComponents";
+import DownloadButton from "../../components/common/DownloadButton";
 import { BASE_URL } from "../../constant";
 import "./TransactionUploadPage.css";
 
@@ -11,9 +12,9 @@ const HOLDING_COLUMNS = [
   { key: "ISIN", header: "ISIN" },
   { key: "Security_Name", header: "Security Name" },
   { key: "Tran_Type", header: "Tran Type" },
-  { key: "transactionQty", header: "Transaction Qty" },
-  { key: "oldQuantity", header: "Old Qty" },
-  { key: "newQuantity", header: "New Qty" },
+  { key: "transactionQty", header: "Transaction Qty", className: "num" },
+  { key: "oldQuantity", header: "Old Qty", className: "num" },
+  { key: "newQuantity", header: "New Qty", className: "num" },
 ];
 
 function TransactionUploadPage() {
@@ -359,49 +360,48 @@ function TransactionUploadPage() {
             <div className="diff-history-container">
               <h4>Previous Comparison Reports</h4>
 
-              <table className="diff-history-table">
+              <div className="data-table-wrap">
+              <table className="data-table">
                 <thead>
                   <tr>
                     <th>Job Name</th>
-                    <th>Date</th>
-                    <th>Status</th>
-                    <th>Action</th>
+                    <th className="date">Date</th>
+                    <th className="status">Status</th>
+                    <th className="action">Action</th>
                   </tr>
                 </thead>
                 <tbody>
                   {diffJobs.map((job) => (
                     <tr key={job.jobName}>
                       <td>{job.jobName}</td>
-                      <td>{job.date}</td>
-                      <td>
+                      <td className="date">{job.date}</td>
+                      <td className="status">
                         <span
-                          className={`diff-status-badge ${
+                          className={`badge ${
                             job.status === "COMPLETED"
-                              ? "completed"
+                              ? "badge--ok"
                               : job.status === "FAILED"
-                              ? "failed"
-                              : "pending"
+                              ? "badge--bad"
+                              : "badge--processing"
                           }`}
                         >
                           {job.status}
                         </span>
                       </td>
-                      <td>
+                      <td className="action">
                         {job.status === "COMPLETED" ? (
-                          <button
-                            className="diff-download-btn"
+                          <DownloadButton
                             onClick={() => handleDiffDownload(job.jobName)}
-                          >
-                            Download
-                          </button>
+                          />
                         ) : (
-                          <span style={{ color: "#9ca3af" }}>—</span>
+                          <span className="muted">—</span>
                         )}
                       </td>
                     </tr>
                   ))}
                 </tbody>
               </table>
+              </div>
             </div>
           )}
         </Card>

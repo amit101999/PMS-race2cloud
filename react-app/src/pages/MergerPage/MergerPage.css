@@ -34,14 +34,12 @@
 @media (max-width: 960px) {
   .merger-top-row {
     grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-}
+  }}
 
 @media (max-width: 520px) {
   .merger-top-row {
     grid-template-columns: 1fr;
-  }
-}
+  }}
 
 .merger-section {
   grid-column: 1 / -1;
@@ -79,8 +77,7 @@
   .merger-old-two-cols {
     grid-template-columns: 1fr;
     max-width: 400px;
-  }
-}
+  }}
 
 /* "Merge Into New Company": three fields in one row */
 .merger-companies-stack>h3.merger-section-title {
@@ -271,27 +268,4 @@
   border-top: none;
   padding-top: 0;
   margin-top: 0;
-}
-
-.merger-preview-table-scroll {
-  overflow-x: auto;
-  -webkit-overflow-scrolling: touch;
-}
-
-.merger-preview-detail-table th,
-.merger-preview-detail-table td {
-  white-space: nowrap;
-}
-
-.merger-preview-detail-table td:nth-child(2),
-.merger-preview-detail-table td:nth-child(3),
-.merger-preview-detail-table td:nth-child(4) {
-  white-space: normal;
-  max-width: 140px;
-  word-break: break-all;
-}
-
-.merger-account-cell {
-  font-weight: 600;
-  color: #111827;
 }

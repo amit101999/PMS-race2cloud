@@ -6,6 +6,7 @@ import ExceptionGrid from "./holdingComparison/ExceptionGrid";
 import HoldingComparisonPanel from "./holdingComparison/HoldingComparisonPanel";
 import PreviousFiles from "./holdingComparison/PreviousFiles";
 import * as api from "./holdingComparison/api";
+import "../TempTransactionUpload/tokens.css";
 import "../TempTransactionUpload/TempTransaction.css";
 import "../TempTransactionUpload/custody/CustodyMatch.css";
 
@@ -39,7 +40,7 @@ const HoldingComparison = () => {
 
     return (
         <MainLayout title="Holding Comparison">
-            <div className="temp-transaction-container">
+            <div className="temp-transaction-container txn-ops">
                 <HoldingComparisonPanel
                     businessDate={businessDate}
                     onBusinessDateChange={setBusinessDate}

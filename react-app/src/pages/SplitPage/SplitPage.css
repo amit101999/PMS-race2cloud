@@ -153,35 +153,6 @@
      TABLE (REUSES ANALYTICS STYLE)
      =========================== */
   
-  .hd-table-wrapper {
-    overflow-x: auto;
-  }
-  
-  .hd-table {
-    width: 100%;
-    border-collapse: collapse;
-    font-size: 14px;
-  }
-  
-  .hd-table th {
-    text-align: left;
-    padding: 12px;
-    background: #f9fafb;
-    color: #374151;
-    font-weight: 600;
-    border-bottom: 1px solid #e5e7eb;
-  }
-  
-  .hd-table td {
-    padding: 12px;
-    border-bottom: 1px solid #e5e7eb;
-    color: #374151;
-  }
-  
-  .hd-table tbody tr:hover {
-    background: #f9fafb;
-  }
-  
   /* ===========================
      PAGINATION
      =========================== */
@@ -242,73 +213,10 @@
     margin-bottom: 14px;
   }
 
-  .bonus-preview-table-wrapper {
-    border-radius: 14px;
-    overflow: hidden;
-    border: 1px solid #e5e7eb;
-    background: #ffffff;
-  }
-
-  .bonus-preview-table {
-    width: 100%;
-    border-collapse: collapse;
-    font-size: 14px;
-  }
-
-  .bonus-preview-table thead th {
-    text-align: left;
-    vertical-align: middle;
-    padding: 14px 16px;
-    background: #f9fafb;
-    color: #374151;
-    font-weight: 600;
-    border-bottom: 1px solid #e5e7eb;
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
-    font-size: 12px;
-  }
-
-  .bonus-preview-table tbody tr {
-    background: #ffffff;
-    transition: background 0.15s ease, color 0.15s ease;
-  }
-
-  .bonus-preview-table tbody tr + tr {
-    border-top: 1px solid #e5e7eb;
-  }
-
-  .bonus-preview-table td {
-    text-align: left;
-    vertical-align: middle;
-    padding: 14px 16px;
-    color: #374151;
-    font-weight: 500;
-  }
-
   /* Δ Change column: green normally, white on the dark-green hover row */
-  .bonus-preview-table td.delta-cell {
-    color: #166534;
-    font-weight: 600;
-  }
 
   /* Group (collapsed / clickable) rows get the dark-green hover treatment.
      Detail rows are excluded so a drill-down child doesn't flip to green. */
-  .bonus-preview-table tbody tr.split-group-row {
-    cursor: pointer;
-  }
-
-  .bonus-preview-table tbody tr.split-group-row td {
-    font-weight: 600;
-  }
-
-  .bonus-preview-table tbody tr.split-group-row:hover {
-    background: #166534;
-  }
-
-  .bonus-preview-table tbody tr.split-group-row:hover td,
-  .bonus-preview-table tbody tr.split-group-row:hover td.delta-cell {
-    color: #ffffff;
-  }
 
   .split-expand-toggle {
     display: inline-block;
@@ -318,23 +226,7 @@
     margin-right: 6px;
   }
 
-  .bonus-preview-table tbody tr.split-group-row:hover .split-expand-toggle {
-    color: #ffffff;
-  }
-
   /* Drill-down rows: lighter, indented, muted — read as children. */
-  .bonus-preview-table tbody tr.split-detail-row {
-    background: #f9fafb;
-  }
-
-  .bonus-preview-table tbody tr.split-detail-row td {
-    color: #6b7280;
-    font-weight: 500;
-  }
-
-  .bonus-preview-table tbody tr.split-detail-row td.split-detail-code {
-    padding-left: 40px;
-  }
 
   .bonus-preview-actions {
     display: flex;

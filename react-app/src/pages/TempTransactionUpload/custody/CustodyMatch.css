@@ -48,70 +48,19 @@
     align-items: flex-start;
     gap: 24px;
     flex-wrap: wrap;
+    /* Keeps the Export button off the table below (Holding Comparison's
+       Differences card; same gap as .upload-history-card-head). */
+    margin-bottom: 14px;
 }
 
 .cm-card-head-title {
-.cm-date {
     display: flex;
-    flex-direction: column;
-    gap: 4px;
-    font-size: 12px;
-    font-weight: 600;
-    color: #6b7280;
-    white-space: nowrap;
-}
-
-.cm-date input {
-    padding: 7px 10px;
-    border: 1px solid #d1d5db;
-    border-radius: 8px;
-    font-size: 14px;
-    color: #111827;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
 }
 
 /* ── custodian files ──────────────────────────────────────────────────── */
-
-/* One row per uploaded file. The list scrolls in place rather than growing the
-   card without limit, so "Add custodian file" and the gate below it stay
-   reachable however many files a day needs. */
-/* The shared table, wrapped so a long list scrolls in place instead of pushing
-   "Add custodian file" and the gate below it off the card. */
-.cm-filetable {
-    display: block;
-    max-height: 340px;
-    overflow-y: auto;
-}
-
-.cm-filetable th {
-    /* Sticky so the headings stay put while the list scrolls. Everything else
-       comes from .upload-history-table. */
-    position: sticky;
-    top: 0;
-    z-index: 1;
-}
-
-/* A single row in the narrower FA box: fit the box instead of scrolling
-   sideways. The file name takes what is left and ends in "…"; the time wraps. */
-.cm-filetable--fit {
-    display: table;
-    table-layout: fixed;
-}
-
-.cm-filetable--fit .cm-col-date {
-    width: 28%;
-}
-
-.cm-filetable--fit .cm-col-when {
-    width: 32%;
-}
-
-.cm-filetable--fit .cm-cell-file {
-    max-width: none;
-}
-
-.cm-filetable--fit .cm-cell-dates {
-    white-space: normal;
-}
 
 .cm-cell-scheme {
     font-weight: 600;
@@ -119,20 +68,8 @@
     white-space: nowrap;
 }
 
-.cm-cell-dates {
-    white-space: nowrap;
-    color: #374151;
-}
-
 /* The file name is the only column that can be long, so it is the one that
    gives way — everything else keeps its natural width. */
-.cm-cell-file {
-    max-width: 220px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    color: #166534;
-}
 
 .cm-remove {
     width: 28px;
@@ -172,6 +109,13 @@
     align-items: center;
     gap: 10px;
     flex-wrap: wrap;
+}
+
+.cm-addfile-busy {
+    display: block;
+    margin-top: 8px;
+    font-size: 12px;
+    color: #6b7280;
 }
 
 .cm-card-head-title h3 {
@@ -420,15 +364,9 @@
 @media (prefers-reduced-motion: reduce) {
     .cm-bar-fill {
         transition: none;
-    }
-}
+    }}
 
 /* ── exception grid ───────────────────────────────────────────────────── */
-
-.upload-history-table .num.diff {
-    color: var(--txo-error);
-    font-weight: 700;
-}
 
 .cm-preview-note {
     margin: 12px 0 0;
@@ -436,17 +374,7 @@
     color: var(--txo-text-muted);
 }
 
-.cm-tag {
-    display: inline-block;
-    font-size: 11px;
-    font-weight: 600;
-    padding: 3px 8px;
-    border-radius: var(--txo-radius-sm);
-    white-space: nowrap;
-    background: var(--txo-neutral-bg);
-    color: var(--txo-neutral);
-}
-
+/* Exception-type colours for the shared .badge (size/shape come from it). */
 .cm-tag.quantity_mismatch {
     background: var(--txo-warning-bg);
     color: var(--txo-warning);
@@ -467,6 +395,138 @@
 .cm-tag.unmapped_code {
     background: #f3e8ff;
     color: #6b21a8;
+}
+
+/* ── Transaction Upload exception details (ExceptionGrid) ─────────────────
+   One accent colour per exception type, shared by the filter chip dot and the
+   row's left edge, so a type is recognisable at a glance in both places. */
+
+.cm-exc {
+    --exc-quantity: var(--txo-warning, #9a6400);
+    --exc-missing: var(--txo-error, #b3261e);
+    --exc-date: var(--txo-info, #2c5aa0);
+    --exc-unmapped: #6b21a8;
+}
+
+.cm-exc-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+    flex-wrap: wrap;
+    margin-bottom: 16px;
+}
+
+.cm-exc-sub {
+    margin: 6px 0 0;
+    font-size: 13px;
+    color: var(--txo-text-muted, #667085);
+    max-width: 62ch;
+}
+
+/* Filter chips */
+.cm-exc-filters {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 14px;
+}
+
+.cm-exc-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    padding: 5px 6px 5px 12px;
+    border: 1px solid var(--txo-border, #dde1e7);
+    border-radius: 999px;
+    background: var(--txo-surface, #fff);
+    color: var(--txo-text, #1a1d24);
+    font: inherit;
+    font-size: 12.5px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: border-color 0.12s ease, background-color 0.12s ease;
+}
+
+.cm-exc-chip:hover {
+    border-color: var(--txo-border-strong, #c2c8d1);
+    background: var(--txo-surface-sunken, #f8f9fb);
+}
+
+.cm-exc-chip:focus-visible {
+    outline: 2px solid var(--txo-primary, #8b1538);
+    outline-offset: 2px;
+}
+
+.cm-exc-chip.is-active {
+    border-color: var(--txo-primary, #8b1538);
+    background: var(--txo-primary-tint, #f8e8ec);
+    color: var(--txo-primary-hover, #6c0f2b);
+}
+
+.cm-exc-chip-count {
+    min-width: 22px;
+    padding: 1px 7px;
+    border-radius: 999px;
+    background: var(--txo-neutral-bg, #eef0f3);
+    color: var(--txo-text-muted, #667085);
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 11.5px;
+    font-weight: 600;
+    text-align: center;
+}
+
+.cm-exc-chip.is-active .cm-exc-chip-count {
+    background: var(--txo-primary, #8b1538);
+    color: #fff;
+}
+
+.cm-exc-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--txo-neutral, #667085);
+}
+
+.cm-exc-chip.quantity_mismatch .cm-exc-dot { background: var(--exc-quantity); }
+.cm-exc-chip.missing_in_custody .cm-exc-dot,
+.cm-exc-chip.missing_in_fa .cm-exc-dot { background: var(--exc-missing); }
+.cm-exc-chip.date_mismatch .cm-exc-dot,
+.cm-exc-chip.type_mismatch .cm-exc-dot { background: var(--exc-date); }
+.cm-exc-chip.unmapped_code .cm-exc-dot { background: var(--exc-unmapped); }
+
+/* Long exception lists scroll inside the card; the shared header stays sticky. */
+.cm-exc-wrap {
+    max-height: 520px;
+    overflow: auto;
+}
+
+.cm-exc-loading {
+    opacity: 0.55;
+    transition: opacity 0.15s ease;
+}
+
+/* Coloured left edge per exception type. */
+.cm-exc-row td:first-child {
+    box-shadow: inset 3px 0 0 var(--txo-neutral, #667085);
+}
+
+.cm-exc-row.quantity_mismatch td:first-child { box-shadow: inset 3px 0 0 var(--exc-quantity); }
+.cm-exc-row.missing_in_custody td:first-child,
+.cm-exc-row.missing_in_fa td:first-child { box-shadow: inset 3px 0 0 var(--exc-missing); }
+.cm-exc-row.date_mismatch td:first-child,
+.cm-exc-row.type_mismatch td:first-child { box-shadow: inset 3px 0 0 var(--exc-date); }
+.cm-exc-row.unmapped_code td:first-child { box-shadow: inset 3px 0 0 var(--exc-unmapped); }
+
+.cm-exc-scheme {
+    margin-top: 2px;
+    font-size: 11.5px;
+    color: var(--txo-text-faint, #98a2b3);
+}
+
+.cm-exc .cm-preview-note strong {
+    color: var(--txo-text, #1a1d24);
+    font-weight: 600;
 }
 
 /* ── two-column stage: Fund Accounting and Custodian, balanced ─────────── */
@@ -499,6 +559,63 @@
     min-height: 300px;
 }
 
+/* Holding Comparison file boxes, differences grid and FA holdings status. */
+.cm-fa {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    flex-wrap: wrap;
+}
+
+.cm-fa .cm-remove {
+    margin-left: auto;
+}
+
+.cm-staged {
+    font-size: 13px;
+    color: #166534;
+    font-weight: 500;
+}
+
+.cm-staged.muted {
+    color: #9ca3af;
+    font-weight: 400;
+}
+
+.cm-count {
+    color: #b91c1c;
+    font-weight: 700;
+}
+
+.cm-empty {
+    text-align: center;
+    padding: 28px 12px;
+    color: #9ca3af;
+}
+
+.cm-file-size {
+    margin-left: 8px;
+    color: #6b7280;
+}
+
+/* Column heading used by Holding Comparison. */
+.cm-col-head {
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 16px;
+    flex-wrap: wrap;
+    margin-bottom: 10px;
+    min-height: 42px;
+}
+
+.cm-col-head h3 {
+    margin: 0;
+    font-size: 17px;
+    font-weight: 600;
+    color: #111827;
+}
+
 /* Holding Comparison: both headings hold only a title, so the two boxes start
    level, and the shorter box stretches so their bottoms line up too. */
 .cm-split--even {
@@ -525,8 +642,7 @@
 @media (max-width: 1024px) {
     .cm-split {
         grid-template-columns: 1fr;
-    }
-}
+    }}
 
 /* ── one upload component, used identically by both panels ────────────── */
 
@@ -829,14 +945,14 @@
     border-radius: var(--txo-radius-md);
     box-shadow: 0 12px 32px rgba(16, 24, 40, 0.18);
     padding: 22px;
-    z-index: 60;
+    z-index: 401;
 }
 
 .cm-scrim {
     position: fixed;
     inset: 0;
     background: rgba(16, 20, 28, 0.4);
-    z-index: 59;
+    z-index: 400; /* above the fixed page header (300) */
 }
 
 .cm-dialog h3 {
@@ -981,23 +1097,6 @@
     overflow-y: auto;
     border-radius: var(--txo-radius-sm);
     border: 1px solid #f2c6c3;
-}
-
-.cm-error-table {
-    width: 100%;
-    border-collapse: collapse;
-    font-size: 12.5px;
-    background: var(--txo-surface);
-}
-
-.cm-error-table thead tr {
-    text-align: left;
-    background: #f6dcda;
-}
-
-.cm-error-table th,
-.cm-error-table td {
-    padding: 6px 8px;
 }
 
 .cm-error-fields {

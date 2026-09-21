@@ -715,10 +715,10 @@ function MergerPage() {
             <div className="bonus-preview-actions">
               <button
                 type="button"
-                className="bonus-submit"
+                className="btn-export"
                 onClick={handleExportMergerCsv}
               >
-                Export CSV
+                Export
               </button>
             </div>
           </div>
@@ -748,20 +748,20 @@ function MergerPage() {
             </div>
           ) : null}
 
-          <div className="bonus-preview-table-wrapper merger-preview-table-scroll">
-            <table className="bonus-preview-table merger-preview-detail-table">
+          <div className="data-table-wrap">
+            <table className="data-table">
               <thead>
                 <tr>
                   <th>Account code</th>
                   <th>Old ISIN</th>
-                  <th>Effective Date</th>
-                  <th>WAP</th>
-                  <th>QTY</th>
-                  <th>Ratio 1</th>
-                  <th>Ratio 2</th>
-                  <th>New WAP</th>
+                  <th className="date">Effective Date</th>
+                  <th className="num">WAP</th>
+                  <th className="num">QTY</th>
+                  <th className="num">Ratio 1</th>
+                  <th className="num">Ratio 2</th>
+                  <th className="num">New WAP</th>
                   <th>New ISIN</th>
-                  <th>New QTY</th>
+                  <th className="num">New QTY</th>
                 </tr>
               </thead>
               <tbody>
@@ -770,19 +770,19 @@ function MergerPage() {
                   return (
                     <tr
                       key={lotRowKey(row, (page - 1) * PAGE_SIZE + idx)}
-                      style={skipped ? { background: "#fff7f0", color: "#7a4a1a" } : undefined}
+                      className={skipped ? "is-warn" : undefined}
                       title={skipped ? "Lot rounds to 0 — will be skipped on apply." : undefined}
                     >
-                      <td className="merger-account-cell">{row.accountCode}</td>
+                      <td className="strong">{row.accountCode}</td>
                       <td>{row.oldIsin ?? (norm(oldIsin) || "—")}</td>
-                      <td>{effectiveDate || "—"}</td>
-                      <td>{fmtNum(row.lotCostPerShare)}</td>
-                      <td>{fmtNum(row.lotQty)}</td>
-                      <td>{row.ratio1 ?? ratio1}</td>
-                      <td>{row.ratio2 ?? ratio2}</td>
-                      <td>{fmtNum(row.newWAP)}</td>
+                      <td className="date">{effectiveDate || "—"}</td>
+                      <td className="num">{fmtNum(row.lotCostPerShare)}</td>
+                      <td className="num">{fmtNum(row.lotQty)}</td>
+                      <td className="num">{row.ratio1 ?? ratio1}</td>
+                      <td className="num">{row.ratio2 ?? ratio2}</td>
+                      <td className="num">{fmtNum(row.newWAP)}</td>
                       <td>{row.newIsin || newIsinTrimmed}</td>
-                      <td>{row.newQty}</td>
+                      <td className="num">{row.newQty}</td>
                     </tr>
                   );
                 })}
