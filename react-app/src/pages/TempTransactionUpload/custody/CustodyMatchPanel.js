@@ -286,7 +286,7 @@ const CustodyMatchPanel = ({
     const [removedKeys, setRemovedKeys] = useState(() => new Set());
     /* The file whose delete request is in flight, so its row can say so. */
     const [removingKey, setRemovingKey] = useState(null);
-    const { trackJob, reportJob } = useJobNotifications();
+    const { trackJob, reportJob, refresh: refreshNotifications } = useJobNotifications();
     const [day, setDay] = useState(null);
     const [dayLoading, setDayLoading] = useState(false);
 
@@ -508,7 +508,8 @@ const CustodyMatchPanel = ({
                 `Remove ${what} from this run?
 
 ` +
-                    "The file is deleted from storage. It may take 2–3 minutes before it is fully cleared.",
+                    "It may take 2–3 minutes to be deleted from storage. The notification bell " +
+                    "says when it is gone.",
             )
         ) {
             return;
@@ -518,24 +519,13 @@ const CustodyMatchPanel = ({
         try {
             await api.deleteUploadedFile(file.key);
             setRemovedKeys((prev) => new Set(prev).add(file.key));
-            reportJob({
-                id: `txn-remove-${file.key}`,
-                label: `File removed — ${file.originalFileName}`,
-                status: "completed",
-                message:
-                    "Removed from this run. Storage may take 2–3 minutes to fully clear it; " +
-                    "until then it can briefly reappear after a refresh.",
-            });
             await loadDay();
         } catch (err) {
             onError({ message: err.message, detail: err.detail });
-            reportJob({
-                id: `txn-remove-${file.key}`,
-                label: `File removal — ${file.originalFileName}`,
-                status: "failed",
-                message: err.message || "Could not remove the file.",
-            });
         } finally {
+            // The server writes the bell entry: "in progress" now, "removed" once
+            // Stratus stops listing the file. Show it straight away.
+            refreshNotifications();
             setRemovingKey(null);
         }
     };
@@ -1100,19 +1090,38 @@ const CustodyMatchPanel = ({
 
                 {run ? (
                     <div className={`cm-progress ${run.status.toLowerCase()}`}>
-                        <div className="cm-progress-head">
-                            <span className="cm-run-status">
-                                {run.isRunning ? (
-                                    <StatusBadge tone={STATUS.PROCESSING}>{run.stageDetail || run.status}</StatusBadge>
-                                ) : run.status === "COMPLETED_CLEAN" ? (
-                                    <StatusBadge tone={STATUS.OK}>Matched</StatusBadge>
-                                ) : run.status === "COMPLETED_WITH_EXCEPTIONS" ? null : run.status === "FAILED" ? (
-                                    <StatusBadge tone={STATUS.BAD}>Failed</StatusBadge>
-                                ) : (
-                                    <StatusBadge tone={STATUS.NEUTRAL}>{run.status}</StatusBadge>
-                                )}
-                            </span>
-                            <span className="cm-run-id mono">{run.runId}</span>
+                        {/* One row: status and counts on the left, the run ID badge on the right. */}
+                        <div className="cm-progress-head cm-run-head">
+                            <div className="cm-run-summary">
+                                <span className="cm-run-status">
+                                    {run.isRunning ? (
+                                        <StatusBadge tone={STATUS.PROCESSING}>{run.stageDetail || run.status}</StatusBadge>
+                                    ) : run.status === "COMPLETED_CLEAN" ? (
+                                        <StatusBadge tone={STATUS.OK}>Matched</StatusBadge>
+                                    ) : run.status === "COMPLETED_WITH_EXCEPTIONS" ? null : run.status === "FAILED" ? (
+                                        <StatusBadge tone={STATUS.BAD}>Failed</StatusBadge>
+                                    ) : (
+                                        <StatusBadge tone={STATUS.NEUTRAL}>{run.status}</StatusBadge>
+                                    )}
+                                </span>
+                                <div className="cm-stats">
+                                    <span><strong className="mono">{run.counts.faRows.toLocaleString()}</strong> FA rows</span>
+                                    <span><strong className="mono">{run.counts.custodyRows.toLocaleString()}</strong> custody rows</span>
+                                    <span><strong className="mono">{run.counts.resolved.toLocaleString()}</strong> resolved to actual codes</span>
+                                    {run.counts.unmapped > 0 ? (
+                                        <span className="warn"><strong className="mono">{run.counts.unmapped}</strong> unmapped</span>
+                                    ) : null}
+                                    {run.counts.totalKeys > 0 ? (
+                                        <span>
+                                            <strong className="mono">
+                                                {run.counts.comparedKeys.toLocaleString()} / {run.counts.totalKeys.toLocaleString()}
+                                            </strong>{" "}
+                                            keys compared
+                                        </span>
+                                    ) : null}
+                                </div>
+                            </div>
+                            <span className="cm-run-badge mono" title="Run ID">{run.runId}</span>
                         </div>
 
                         {run.isRunning ? (
@@ -1120,23 +1129,6 @@ const CustodyMatchPanel = ({
                                 <div className="cm-bar-fill" style={{ width: `${run.progressPercent}%` }} />
                             </div>
                         ) : null}
-
-                        <div className="cm-stats">
-                            <span><strong className="mono">{run.counts.faRows.toLocaleString()}</strong> FA rows</span>
-                            <span><strong className="mono">{run.counts.custodyRows.toLocaleString()}</strong> custody rows</span>
-                            <span><strong className="mono">{run.counts.resolved.toLocaleString()}</strong> resolved to actual codes</span>
-                            {run.counts.unmapped > 0 ? (
-                                <span className="warn"><strong className="mono">{run.counts.unmapped}</strong> unmapped</span>
-                            ) : null}
-                            {run.counts.totalKeys > 0 ? (
-                                <span>
-                                    <strong className="mono">
-                                        {run.counts.comparedKeys.toLocaleString()} / {run.counts.totalKeys.toLocaleString()}
-                                    </strong>{" "}
-                                    keys compared
-                                </span>
-                            ) : null}
-                        </div>
 
                         {run.status === "COMPLETED_CLEAN" ? (
                             <div className="cm-verdict ok">
