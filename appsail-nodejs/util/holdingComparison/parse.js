@@ -6,8 +6,6 @@ import { CUSTODY_COLUMNS, CUSTODY_REQUIRED_FIELDS, FA_HEADERS } from "./constant
 /** Row errors returned to the screen. The total is still reported. */
 const MAX_ROW_ERRORS = 50;
 
-const ISIN_PATTERN = /^[A-Z]{2}[A-Z0-9]{9}[0-9]$/;
-
 /** Same header normalisation the Field Mapping screen uses, so a saved name matches the same column. */
 export const normHeader = (h) =>
   String(h || "")
@@ -246,8 +244,9 @@ export const parseCustodyHoldings = async (buffer, profile = null) => {
       addError({ row: line, column: headers[index.accountCode], value: "", message: "Account code (UCC) is blank." });
       rowOk = false;
     }
-    if (!ISIN_PATTERN.test(isin)) {
-      addError({ row: line, column: headers[index.isin], value: cell("isin"), message: "Not a valid 12-character ISIN." });
+    // ISIN format is not validated — only a blank ISIN is rejected.
+    if (!isin) {
+      addError({ row: line, column: headers[index.isin], value: "", message: "ISIN is blank." });
       rowOk = false;
     }
     if (quantity === null) {

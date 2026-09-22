@@ -8,7 +8,6 @@
 
 import {
   CUSTODY_FILE_TYPE,
-  ISIN_PATTERN,
   MF_FA_EXCHANGE,
   MF_ISIN_PREFIX,
   SIDE,
@@ -64,42 +63,13 @@ export const normCode = (v) => text(v).toUpperCase();
 
 /**
  * ISIN: uppercase, trimmed, currency suffix removed (INE467B01029-INR -> INE467B01029).
- * Shape is validated separately by isValidIsinShape.
+ * The ISIN format itself is not validated — callers only reject a blank value.
  */
 export const normIsin = (v) => {
   const s = text(v).toUpperCase();
   if (!s) return "";
   const dash = s.indexOf("-");
   return dash > 0 ? s.slice(0, dash) : s;
-};
-
-export const isValidIsinShape = (isin) => ISIN_PATTERN.test(isin);
-
-/**
- * ISIN check digit (Luhn over the digit-expanded body).
- * Warning-level only: a valid-but-unusual identifier should not silently drop a
- * trade out of the reconciliation.
- */
-export const isValidIsinChecksum = (isin) => {
-  if (!isValidIsinShape(isin)) return false;
-  let expanded = "";
-  for (const ch of isin.slice(0, 11)) {
-    expanded +=
-      ch >= "0" && ch <= "9" ? ch : String(ch.charCodeAt(0) - 55);
-  }
-  let sum = 0;
-  let double = true; // rightmost body digit is doubled
-  for (let i = expanded.length - 1; i >= 0; i--) {
-    let d = expanded.charCodeAt(i) - 48;
-    if (double) {
-      d *= 2;
-      if (d > 9) d -= 9;
-    }
-    sum += d;
-    double = !double;
-  }
-  const check = (10 - (sum % 10)) % 10;
-  return check === Number(isin[11]);
 };
 
 const pad2 = (n) => String(n).padStart(2, "0");

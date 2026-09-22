@@ -264,7 +264,6 @@ export const FILE_ERROR = {
 export const ROW_ERROR = {
   COLUMN_COUNT_MISMATCH: "COLUMN_COUNT_MISMATCH",
   MISSING_ACCOUNT_CODE: "MISSING_ACCOUNT_CODE",
-  BAD_ISIN: "BAD_ISIN",
   MISSING_ISIN: "MISSING_ISIN",
   BAD_DATE: "BAD_DATE",
   BAD_DATE_FORMAT: "BAD_DATE_FORMAT",
@@ -282,7 +281,6 @@ export const ROW_ERROR = {
 /** Non-fatal observations. Surfaced to the user; never block. */
 export const WARNING = {
   DATE_NOT_BUSINESS_DATE: "DATE_NOT_BUSINESS_DATE",
-  BAD_ISIN_CHECKSUM: "BAD_ISIN_CHECKSUM",
   NON_NUMERIC_DISPLAY_FIELD: "NON_NUMERIC_DISPLAY_FIELD",
   CONTRACT_DATE_AMBIGUOUS: "CONTRACT_DATE_AMBIGUOUS",
   FORMAT_TYPE_MISMATCH: "FORMAT_TYPE_MISMATCH",
@@ -300,7 +298,6 @@ export const WARNING = {
  *                      DATE_MISMATCH / TYPE_MISMATCH. Off => two orphan rows.
  * unmappedAsException— report a code with no clientIds entry as UNMAPPED_CODE.
  *                      Off => resolveActualCodes throws and the run fails.
- * isinChecksum       — validate the ISIN check digit. Warning-level, never fatal.
  * clientCodeFallback — on a blank CLIENT_CODE, fall back to UCC_CODE. Default OFF:
  *                      the code is part of the match key, so a wrong fallback
  *                      produces a mismatch nobody can explain. The user states
@@ -311,10 +308,6 @@ export const WARNING = {
 export const DEFAULT_OPTIONS = {
   repairOrphans: true,
   unmappedAsException: true,
-  isinChecksum: true,
   clientCodeFallback: false,
   quantityEpsilon: 1e-6,
 };
-
-/** ISIN: 2-letter country code, 9 alphanumerics, 1 check digit. */
-export const ISIN_PATTERN = /^[A-Z]{2}[A-Z0-9]{9}[0-9]$/;

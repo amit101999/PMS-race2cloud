@@ -25,7 +25,6 @@ import { CUSTODY_FORMAT, FA_HEADERS, SIDE } from "./constants.js";
 import {
   detectSeparator,
   firstLineOf,
-  isValidIsinShape,
   normIsin,
   normMutualFundTranType,
   normTranType,
@@ -689,7 +688,8 @@ const KIND_TESTS = {
   [COLUMN_KIND.NUMBER]: (v) => num(v) !== null,
   [COLUMN_KIND.DATE]: (v) => parseDate(v) !== null,
   [COLUMN_KIND.ISO_DATE]: (v) => parseIsoDate(v) !== null,
-  [COLUMN_KIND.ISIN]: (v) => isValidIsinShape(normIsin(v)),
+  // ISIN format is not validated — any non-blank cell is accepted.
+  [COLUMN_KIND.ISIN]: (v) => normIsin(v) !== "",
   // Side matters: SQB and OPI are BUY codes on the FA side only, and
   // Subscription / Redemption appear only in custodian (Mutual Funds) files.
   [COLUMN_KIND.TYPE]: (v, side) =>
