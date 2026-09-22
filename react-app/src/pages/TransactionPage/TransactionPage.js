@@ -198,17 +198,9 @@ function TransactionPage({ stock, accountCode, asOnDate, onClose }) {
         <h3 className="hd-table-title">Transaction History</h3>
 
         {loading ? (
-          <div
-            style={{ padding: "40px", textAlign: "center", color: "#6b7280" }}
-          >
-            Loading...
-          </div>
+          <p className="cm-empty">Loading...</p>
         ) : error ? (
-          <div
-            style={{ padding: "40px", textAlign: "center", color: "#dc2626" }}
-          >
-            Error: {error}
-          </div>
+          <div className="cm-verdict bad">Error: {error}</div>
         ) : (
           <>
           <div className="data-table-wrap hd-table-wrap">

@@ -1,5 +1,4 @@
 import React, { useEffect, useState, useRef, useMemo, useCallback } from "react";
-import { Card } from "../../../../components/common/CommonComponents";
 import { BASE_URL } from "../../../../constant";
 import "./TransactionTab.css";
 
@@ -181,7 +180,7 @@ const TransactionTab = ({ accountCode, asOnDate }) => {
   };
 
   return (
-    <Card>
+    <div className="temp-transaction-card">
       <div className="transaction-tab-header">
         <h3>Transaction History</h3>
 
@@ -257,13 +256,13 @@ const TransactionTab = ({ accountCode, asOnDate }) => {
       </div>
 
       {!accountCode || !accountCode.trim() ? (
-        <div className="empty-cell" style={{ padding: 24, textAlign: "center", color: "#6b7280" }}>
+        <p className="cm-empty">
           Please select an account code to view transactions.
-        </div>
+        </p>
       ) : (
         <>
-      {loading && <div>Loading...</div>}
-      {error && <div className="error-text">{error}</div>}
+      {loading && <p className="cm-empty">Loading...</p>}
+      {error && <div className="cm-verdict bad">{error}</div>}
 
       {!loading && !error && (
         <div className="data-table-wrap">
@@ -430,7 +429,7 @@ const TransactionTab = ({ accountCode, asOnDate }) => {
       )}
         </>
       )}
-    </Card>
+    </div>
   );
 };
 

@@ -1,9 +1,13 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import MainLayout from "../../layouts/MainLayout";
-import { Card } from "../../components/common/CommonComponents";
+import StatusBadge, { STATUS } from "../TempTransactionUpload/custody/StatusBadge";
 import "../SplitPage/SplitPage.css";
 import "../BonusPage/BonusPage.css";
 import "./DemergerPage.css";
+import "../TempTransactionUpload/tokens.css";
+import "../TempTransactionUpload/TempTransaction.css";
+import "../TempTransactionUpload/custody/CustodyMatch.css";
+import "../../styles/ops-pages.css";
 import { BASE_URL } from "../../constant";
 import { useJobNotifications } from "../../notifications/JobNotificationContext";
 
@@ -428,24 +432,19 @@ function DemergerPage() {
 
   return (
     <MainLayout title="Demerger">
-      <Card style={{ marginTop: 4 }}>
+      <div className="temp-transaction-container txn-ops ops-page">
+      <div className="temp-transaction-card">
         <div className="demerger-page">
           {loadError && (
-            <div className="alert error" style={{ marginBottom: 12 }}>
+            <div className="cm-verdict bad">
               {loadError} (dropdown may be empty until the list loads.)
             </div>
           )}
-          {formError && <div className="alert error">{formError}</div>}
+          {formError && <div className="cm-verdict bad">{formError}</div>}
           {applySuccess && (
-            <div className="alert success">
+            <div className="cm-verdict ok">
               Demerger applied successfully. Holdings table has been rebuilt for affected
               accounts.
-            </div>
-          )}
-          {applying && applyStatus && !applySuccess && (
-            <div className="alert info">
-              Background job status: <strong>{applyStatus}</strong>
-              {" — "}DemergerFn is writing Demerger_Record and rebuilding Holdings.
             </div>
           )}
 
@@ -493,7 +492,7 @@ function DemergerPage() {
                           onClick={() => handleSelectOldISIN(sec)}
                         >
                           <strong>{sec.isin}</strong>
-                          <div style={{ fontSize: 12, color: "#6b7280" }}>
+                          <div className="ops-option-sub">
                             {sec.securityCode} – {sec.securityName}
                           </div>
                         </div>
@@ -647,27 +646,29 @@ function DemergerPage() {
               </div>
             </div>
 
+            <div className="ops-form-actions">
             <button
-              className="bonus-submit"
+              className="cm-primary"
               disabled={!isFormValid() || previewLoading}
               onClick={fetchPreview}
             >
               {previewLoading ? "Loading..." : "Fetch Affected Accounts"}
             </button>
+            </div>
           </div>
         </div>
-      </Card>
+      </div>
 
       {/* Preview table */}
       {step === "preview" && (
-        <div className="bonus-preview-wrapper full-width">
+        <div className="temp-transaction-card">
           {previewData.length === 0 ? (
             <>
-              <h3>Demerger Impact Preview</h3>
-              <div className="alert info">
+              <h3 className="ops-card-title">Demerger Impact Preview</h3>
+              <p className="cm-empty">
                 No accounts found in transactions for {oldIsin || "this security"}.
                 There is nothing to demerge.
-              </div>
+              </p>
             </>
           ) : (
             <>
@@ -684,10 +685,7 @@ function DemergerPage() {
                 </div>
               </div>
 
-              <div
-                className="alert info"
-                style={{ marginBottom: 8, fontSize: 13 }}
-              >
+              <div className="ops-summary">
                 <strong>{previewSummary.accounts}</strong> account
                 {previewSummary.accounts === 1 ? "" : "s"} affected ·{" "}
                 <strong>{previewSummary.lots}</strong> surviving lot
@@ -752,17 +750,31 @@ function DemergerPage() {
 
               <div className="bonus-preview-actions">
                 <button
-                  className="bonus-submit"
+                  className="cm-primary"
                   disabled={applying}
                   onClick={handleApply}
                 >
-                  {applying ? "Applying (background job)…" : "Confirm & Apply Demerger"}
+                  {applying ? "Applying…" : "Confirm & Apply Demerger"}
                 </button>
               </div>
+
+              {/* Same run status as Holding Comparison: a pill and a progress
+                  line while the background job runs. */}
+              {applying && applyStatus && !applySuccess && (
+                <div className="cm-progress">
+                  <StatusBadge tone={STATUS.PROCESSING}>
+                    {applyStatus === "RUNNING" ? "Running" : "Queued"}
+                  </StatusBadge>
+                  <div className="cm-bar">
+                    <div className="cm-bar-fill cm-bar-fill--busy" />
+                  </div>
+                </div>
+              )}
             </>
           )}
         </div>
       )}
+      </div>
     </MainLayout>
   );
 }

@@ -1,9 +1,13 @@
 import React, { useState, useEffect, useMemo, useRef } from "react";
 import MainLayout from "../../layouts/MainLayout";
-import { Card, Pagination } from "../../components/common/CommonComponents";
+import { Pagination } from "../../components/common/CommonComponents";
 import { BASE_URL } from "../../constant";
 import "../SplitPage/SplitPage.css";
 import "./ClientPage.css";
+import "../TempTransactionUpload/tokens.css";
+import "../TempTransactionUpload/TempTransaction.css";
+import "../TempTransactionUpload/custody/CustodyMatch.css";
+import "../../styles/ops-pages.css";
 
 const PAGE_SIZE = 10;
 
@@ -145,9 +149,9 @@ function ClientPage() {
 
   return (
     <MainLayout title="Master · Client">
-      <div className="client-page">
+      <div className="temp-transaction-container txn-ops ops-page client-page">
         {/* Filter */}
-        <Card>
+        <div className="temp-transaction-card">
           <div className="client-filter-card">
             <div className="cash-filter-field">
               <div className="account-code-search" ref={dropdownRef}>
@@ -194,26 +198,26 @@ function ClientPage() {
               </div>
             </div>
           </div>
-        </Card>
+        </div>
 
         {/* Table */}
-        {loading && <div className="client-state">Loading clients...</div>}
+        {loading && <p className="cm-empty">Loading clients...</p>}
         {!loading && error && (
-          <div className="client-state client-state-error">{error}</div>
+          <div className="cm-verdict bad">{error}</div>
         )}
 
         {!loading && !error && (
           <div className="client-details-section">
-            <Card>
+            <div className="temp-transaction-card">
               <div className="client-details-header">
                 <h3>Clients</h3>
-                <span className="client-row-count">
+                <span className="count-pill">
                   Showing {filtered.length} of {clients.length}
                 </span>
               </div>
 
               {filtered.length === 0 ? (
-                <div className="client-state">No clients match your filter.</div>
+                <p className="cm-empty">No clients match your filter.</p>
               ) : (
                 <>
                   <div className="data-table-wrap">
@@ -245,7 +249,7 @@ function ClientPage() {
                   />
                 </>
               )}
-            </Card>
+            </div>
           </div>
         )}
       </div>

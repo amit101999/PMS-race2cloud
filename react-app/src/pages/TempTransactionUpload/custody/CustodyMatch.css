@@ -307,6 +307,17 @@
     transition: width 0.3s ease;
 }
 
+/* For runs that don't report a percentage: a segment sliding across the track. */
+.cm-bar-fill--busy {
+    width: 30%;
+    animation: cm-bar-busy 1.4s ease-in-out infinite;
+}
+
+@keyframes cm-bar-busy {
+    from { transform: translateX(-100%); }
+    to { transform: translateX(340%); }
+}
+
 .cm-stats {
     display: flex;
     gap: 18px;
@@ -398,6 +409,12 @@
 @media (prefers-reduced-motion: reduce) {
     .cm-bar-fill {
         transition: none;
+    }
+
+    .cm-bar-fill--busy {
+        width: 100%;
+        animation: none;
+        opacity: 0.5;
     }}
 
 /* ── exception grid ───────────────────────────────────────────────────── */

@@ -1,9 +1,13 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import MainLayout from "../../layouts/MainLayout";
-import { Card } from "../../components/common/CommonComponents";
+import StatusBadge, { STATUS } from "../TempTransactionUpload/custody/StatusBadge";
 import "../SplitPage/SplitPage.css";
 import "../BonusPage/BonusPage.css";
 import "./MergerPage.css";
+import "../TempTransactionUpload/tokens.css";
+import "../TempTransactionUpload/TempTransaction.css";
+import "../TempTransactionUpload/custody/CustodyMatch.css";
+import "../../styles/ops-pages.css";
 import { BASE_URL } from "../../constant";
 import { useJobNotifications } from "../../notifications/JobNotificationContext";
 
@@ -510,17 +514,18 @@ function MergerPage() {
 
   return (
     <MainLayout title="Merger">
-      <Card style={{ marginTop: 4 }}>
+      <div className="temp-transaction-container txn-ops ops-page">
+      <div className="temp-transaction-card">
         <div className="merger-page">
           {loadError && (
-            <div className="alert error" style={{ marginBottom: 12 }}>
+            <div className="cm-verdict bad">
               {loadError} (old ISIN suggestions may be empty until the list loads.)
             </div>
           )}
-          {formError && <div className="alert error">{formError}</div>}
-          {apiError && <div className="alert error">{apiError}</div>}
-          {applySuccess && <div className="alert success">{applySuccess}</div>}
-          {previewNote && <div className="alert info">{previewNote}</div>}
+          {formError && <div className="cm-verdict bad">{formError}</div>}
+          {apiError && <div className="cm-verdict bad">{apiError}</div>}
+          {applySuccess && <div className="cm-verdict ok">{applySuccess}</div>}
+          {previewNote && <div className="cm-verdict warn">{previewNote}</div>}
 
           <div className="split-card merger-split-card">
             <div className="merger-top-row">
@@ -697,21 +702,24 @@ function MergerPage() {
               </div>
             </div>
 
+            <div className="ops-form-actions">
             <button
               type="button"
-              className="bonus-submit"
+              className="cm-primary"
               disabled={previewLoading || validateForm() !== null}
               onClick={handleFetchPreview}
             >
               {previewLoading ? "Loading..." : "Fetch Affected Account"}
             </button>
+            </div>
           </div>
         </div>
-      </Card>
+      </div>
 
       {previewRows.length > 0 && (
-        <div className="bonus-preview-wrapper full-width">
+        <div className="temp-transaction-card">
           <div className="merger-preview-header-row">
+            <h3>Merger Impact Preview</h3>
             <div className="bonus-preview-actions">
               <button
                 type="button"
@@ -724,21 +732,7 @@ function MergerPage() {
           </div>
 
           {previewMeta ? (
-            <div
-              className="merger-preview-summary"
-              style={{
-                margin: "8px 0 12px 0",
-                padding: "8px 12px",
-                background: "#f4f7fb",
-                border: "1px solid #d8dde5",
-                borderRadius: 6,
-                fontSize: 13,
-                lineHeight: 1.6,
-                display: "flex",
-                gap: 18,
-                flexWrap: "wrap",
-              }}
-            >
+            <div className="ops-summary ops-summary--row">
               <span><strong>Accounts affected:</strong> {previewMeta.accountsAffected ?? "—"}</span>
               <span><strong>Surviving lots:</strong> {previewMeta.survivingLots ?? "—"}</span>
               <span><strong>New shares total:</strong> {previewMeta.totalNewShares ?? "—"}</span>
@@ -815,22 +809,29 @@ function MergerPage() {
           <div className="bonus-preview-actions">
             <button
               type="button"
-              className="bonus-submit"
+              className="cm-primary"
               disabled={applyLoading}
               onClick={handleApply}
             >
-              {applyLoading
-                ? applyStatus === "RUNNING"
-                  ? "Running... (this may take a few minutes)"
-                  : "Queued..."
-                : "Confirm & Apply Merger"}
+              {applyLoading ? "Applying…" : "Confirm & Apply Merger"}
             </button>
-            {applyLoading && applyStatus ? (
-              <span className="merger-job-status">Status: {applyStatus}</span>
-            ) : null}
           </div>
+
+          {/* Same run status as Holding Comparison: a pill and a progress
+              line while the background job runs. */}
+          {applyLoading && applyStatus ? (
+            <div className="cm-progress">
+              <StatusBadge tone={STATUS.PROCESSING}>
+                {applyStatus === "RUNNING" ? "Running" : "Queued"}
+              </StatusBadge>
+              <div className="cm-bar">
+                <div className="cm-bar-fill cm-bar-fill--busy" />
+              </div>
+            </div>
+          ) : null}
         </div>
       )}
+      </div>
     </MainLayout>
   );
 }

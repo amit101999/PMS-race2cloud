@@ -3,8 +3,11 @@
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import MainLayout from "../../layouts/MainLayout";
 import DownloadButton from "../../components/common/DownloadButton";
-import { Card } from "../../components/common/CommonComponents";
 import "./SplitPage.css";
+import "../TempTransactionUpload/tokens.css";
+import "../TempTransactionUpload/TempTransaction.css";
+import "../TempTransactionUpload/custody/CustodyMatch.css";
+import "../../styles/ops-pages.css";
 import { BASE_URL } from "../../constant";
 import { useJobNotifications } from "../../notifications/JobNotificationContext";
 
@@ -287,11 +290,12 @@ function SplitPage() {
 
   return (
     <MainLayout title="Stock Split">
-      <Card style={{ marginTop: 4 }}>
+      <div className="temp-transaction-container txn-ops ops-page">
+      <div className="temp-transaction-card">
         {success && (
-          <div className="alert success">Split saved successfully!</div>
+          <div className="cm-verdict ok">Split saved successfully!</div>
         )}
-        {error && <div className="alert error">{error}</div>}
+        {error && <div className="cm-verdict bad">{error}</div>}
 
         <div className="split-card">
           {/* ISIN SEARCH */}
@@ -342,7 +346,7 @@ function SplitPage() {
                       onClick={() => handleSelectISIN(sec)}
                     >
                       <strong>{sec.isin}</strong>
-                      <div style={{ fontSize: 12, color: "#6b7280" }}>
+                      <div className="ops-option-sub">
                         {sec.securityCode} – {sec.securityName}
                       </div>
                     </div>
@@ -401,8 +405,9 @@ function SplitPage() {
           </div>
 
           {/* ACTION - same as Bonus: single "Fetch Affected Accounts" button */}
+          <div className="ops-form-actions">
           <button
-            className="bonus-submit"
+            className="cm-primary"
             disabled={
               !isin ||
               !ratio1 ||
@@ -416,14 +421,15 @@ function SplitPage() {
           >
             {previewLoading ? "Fetching…" : "Fetch Affected Accounts"}
           </button>
+          </div>
         </div>
-      </Card>
+      </div>
       {showPreview && (
-        <div className="bonus-preview-wrapper full-width">
-          <h3>Split Impact Preview</h3>
+        <div className="temp-transaction-card">
+          <h3 className="ops-card-title">Split Impact Preview</h3>
 
           {previewData.length === 0 ? (
-            <div className="alert info">No eligible holdings found before split date.</div>
+            <p className="cm-empty">No eligible holdings found before split date.</p>
           ) : (
             <>
               <div className="data-table-wrap">
@@ -555,7 +561,7 @@ function SplitPage() {
                   }}
                 />
                 <button
-                  className="bonus-submit"
+                  className="cm-primary"
                   disabled={loading}
                   onClick={handleSubmit}
                 >
@@ -566,7 +572,7 @@ function SplitPage() {
           )}
         </div>
       )}
-
+      </div>
     </MainLayout>
 
   );

@@ -2,9 +2,21 @@ import React, { useState, useCallback, useEffect, useMemo, useRef } from "react"
 import MainLayout from "../../layouts/MainLayout";
 import { BASE_URL } from "../../constant";
 import { useJobNotifications } from "../../notifications/JobNotificationContext";
+import StatusBadge, { STATUS } from "../TempTransactionUpload/custody/StatusBadge";
 import "./UpdateISINPage.css";
+import "../TempTransactionUpload/tokens.css";
+import "../TempTransactionUpload/TempTransaction.css";
+import "../TempTransactionUpload/custody/CustodyMatch.css";
+import "../../styles/ops-pages.css";
 
 /** @typedef {'idle' | 'in_progress' | 'completed' | 'failure'} UpdateStatus */
+
+/* Status pill colour for each UpdateStatus, same pills as Holding Comparison. */
+const STATUS_TONE = {
+  in_progress: STATUS.PROCESSING,
+  completed: STATUS.OK,
+  failure: STATUS.BAD,
+};
 /** @typedef {{ kind: 'success' | 'error', text: string } | null} BannerState */
 /** @typedef {{ isin: string; securityCode: string; securityName: string }} SecurityListIsinRow */
 
@@ -471,8 +483,8 @@ const UpdateISINPage = () => {
 
   return (
     <MainLayout title="Update ISIN">
-      <div className="update-isin-container">
-        <div className="update-isin-card">
+      <div className="temp-transaction-container txn-ops ops-page">
+        <div className="temp-transaction-card">
           <h3>Update Script</h3>
           <p className="update-isin-hint">
             Type the current ISIN (Security List). The security name appears when it matches.
@@ -480,7 +492,7 @@ const UpdateISINPage = () => {
           </p>
 
           {isinsLoadError && (
-            <p className="update-isin-message update-isin-message--error" role="alert">
+            <p className="cm-verdict bad" role="alert">
               {isinsLoadError} You can still type an ISIN; the server checks Security List.
             </p>
           )}
@@ -602,7 +614,7 @@ const UpdateISINPage = () => {
           <div className="update-isin-actions">
             <button
               type="button"
-              className="update-isin-button"
+              className="cm-primary"
               onClick={handleUpdate}
               disabled={scriptBusy}
             >
@@ -611,31 +623,24 @@ const UpdateISINPage = () => {
           </div>
 
           {showScriptStatus && (
-            <div className="update-isin-status-row" role="status" aria-live="polite">
-              <span className="update-isin-status-inner">
-                <span className="update-isin-status-label">Status</span>
-                <span
-                  className={`update-isin-status-value update-isin-status--${scriptStatus}`}
-                >
-                  {scriptStatusLabel}
-                </span>
-              </span>
+            <div className="cm-progress" role="status" aria-live="polite">
+              <StatusBadge tone={STATUS_TONE[scriptStatus]}>{scriptStatusLabel}</StatusBadge>
+              {scriptBusy ? (
+                <div className="cm-bar">
+                  <div className="cm-bar-fill cm-bar-fill--busy" />
+                </div>
+              ) : null}
             </div>
           )}
 
           {Boolean(scriptBanner?.text) && scriptBanner && (
-            <p
-              className={`update-isin-message ${scriptBanner.kind === "error"
-                ? "update-isin-message--error"
-                : "update-isin-message--success"
-                }`}
-            >
+            <p className={`cm-verdict ${scriptBanner.kind === "error" ? "bad" : "ok"}`}>
               {scriptBanner.text}
             </p>
           )}
         </div>
 
-        <div className="update-isin-card update-isin-card--stack">
+        <div className="temp-transaction-card">
           <h3>New ISIN</h3>
           <p className="update-isin-hint">
             Pick NEW ISIN from the Security List, enter NEW Security Code and/or NEW Security
@@ -747,7 +752,7 @@ const UpdateISINPage = () => {
             <div className="update-isin-apply-row__btn">
               <button
                 type="button"
-                className="update-isin-button"
+                className="cm-primary"
                 onClick={handleApply}
                 disabled={applyBusy}
               >
@@ -789,25 +794,18 @@ const UpdateISINPage = () => {
           </div>
 
           {showApplyStatus && (
-            <div className="update-isin-status-row" role="status" aria-live="polite">
-              <span className="update-isin-status-inner">
-                <span className="update-isin-status-label">Status</span>
-                <span
-                  className={`update-isin-status-value update-isin-status--${applyStatus}`}
-                >
-                  {applyStatusLabel}
-                </span>
-              </span>
+            <div className="cm-progress" role="status" aria-live="polite">
+              <StatusBadge tone={STATUS_TONE[applyStatus]}>{applyStatusLabel}</StatusBadge>
+              {applyBusy ? (
+                <div className="cm-bar">
+                  <div className="cm-bar-fill cm-bar-fill--busy" />
+                </div>
+              ) : null}
             </div>
           )}
 
           {Boolean(applyBanner?.text) && applyBanner && (
-            <p
-              className={`update-isin-message ${applyBanner.kind === "error"
-                ? "update-isin-message--error"
-                : "update-isin-message--success"
-                }`}
-            >
+            <p className={`cm-verdict ${applyBanner.kind === "error" ? "bad" : "ok"}`}>
               {applyBanner.text}
             </p>
           )}
