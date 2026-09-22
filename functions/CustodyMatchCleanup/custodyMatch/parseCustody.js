@@ -38,8 +38,6 @@ import {
   detectSeparator,
   displayNum,
   firstLineOf,
-  isValidIsinChecksum,
-  isValidIsinShape,
   isoDateErrorMessage,
   normCode,
   normIsin,
@@ -435,24 +433,6 @@ export const parseCustodyFile = (
         if (!isin) {
           fail(rowNumber, ROW_ERROR.MISSING_ISIN, `${columnOf.isin} is blank.`, columnOf.isin, "");
           rejected = true;
-        } else if (!isValidIsinShape(isin)) {
-          fail(
-            rowNumber,
-            ROW_ERROR.BAD_ISIN,
-            `"${isin}" is not a valid ISIN. Expected 12 characters: 2 letters, 9 alphanumerics, 1 digit.`,
-            columnOf.isin,
-            isin,
-          );
-          rejected = true;
-        } else if (cfg.isinChecksum && !isValidIsinChecksum(isin)) {
-          warnings.push({
-            row: rowNumber,
-            code: WARNING.BAD_ISIN_CHECKSUM,
-            message: `ISIN "${isin}" has the right shape but fails its check digit.`,
-            column: columnOf.isin,
-            value: isin,
-            fileName,
-          });
         }
 
         // ---- transaction date ---------------------------------------------
