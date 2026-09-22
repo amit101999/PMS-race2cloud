@@ -1005,12 +1005,6 @@ export default function FieldMappingPanel({
                             ) : null}
 
                             <table className={showHints ? "data-table" : "data-table fm-table--plain"}>
-                                <thead>
-                                    <tr>
-                                        <th>What we store</th>
-                                        <th>The column in your file</th>
-                                    </tr>
-                                </thead>
                                 <tbody>
                                     {entries.map((entry) => (
                                         <MappingRow
@@ -1027,12 +1021,6 @@ export default function FieldMappingPanel({
                                     ))}
                                 </tbody>
                             </table>
-
-                            <p className="fm-footnote">
-                                {chosen === "CUSTODY_HOLDINGS"
-                                    ? "Saving changes how every future custodian holdings file is read, so earlier holding comparisons have to be run again."
-                                    : "Saving changes how every future file of this type is read, so any date already matched has to be matched again before it can be imported."}
-                            </p>
                         </>
                     ) : null}
                 </div>

@@ -86,8 +86,6 @@ export const FA_IN_PROGRESS = ["PENDING", "RUNNING"];
 
 export const FA_STATUS_LABEL = {
   NOT_STARTED: "Not generated yet",
-  PENDING: "Queued…",
-  RUNNING: "Calculating holdings…",
   COMPLETED: "Generated",
   FAILED: "Failed",
 };

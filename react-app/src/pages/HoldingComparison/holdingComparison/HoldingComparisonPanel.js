@@ -6,6 +6,7 @@ import StatusBadge, { STATUS } from "../../TempTransactionUpload/custody/StatusB
 import UploadErrorDetails from "../../TempTransactionUpload/custody/UploadErrorDetails";
 import WorkflowTracker from "../../TempTransactionUpload/WorkflowTracker";
 import * as api from "./api";
+import { useJobNotifications } from "../../../notifications/JobNotificationContext";
 
 const RUN_POLL_MS = 3000;
 const FA_POLL_MS = 5000;
@@ -37,6 +38,7 @@ const HoldingComparisonPanel = ({
     onFileRemoved,
 }) => {
     const [custodyFile, setCustodyFile] = useState(null);
+    const { trackJob, reportJob } = useJobNotifications();
     const [fa, setFa] = useState(null);
     const [loading, setLoading] = useState(false);
 
@@ -151,6 +153,12 @@ const HoldingComparisonPanel = ({
             const res = await api.uploadCustodyFile(mappingFile, businessDate);
             setCustodyFile(res.file);
             setUploadNote(`${res.message} ${res.holdingCount.toLocaleString()} holding(s) read.`);
+            reportJob({
+                id: `hc-upload-${Date.now()}`,
+                label: `Custodian holdings uploaded — ${mappingFile.name}`,
+                status: "completed",
+                message: `${res.holdingCount.toLocaleString()} holding(s) read for ${businessDate}.`,
+            });
             onFilesChanged();
             // A new file supersedes earlier runs for the date.
             if (run) onRunChange(null);
@@ -198,6 +206,13 @@ const HoldingComparisonPanel = ({
         setFaError("");
         try {
             await api.generateFaHoldings(businessDate);
+            // HCFA_<date> is the Jobs row the generator updates; the "@<ms>" part
+            // makes each generation its own bell entry (see notifications.js).
+            trackJob({
+                id: `HCFA_${businessDate}@${Date.now()}`,
+                label: `FA holdings — ${businessDate}`,
+                message: "Generating FA holdings in the background.",
+            });
             setFa(await api.getFaStatus(businessDate));
             if (run) onRunChange(null);
         } catch (err) {
@@ -222,6 +237,21 @@ const HoldingComparisonPanel = ({
             const res = await api.startRun(businessDate, custodyFile?.key);
             onRunChange(res.run);
             setRunNote(res.reused ? res.message : "");
+            if (res.reused && !res.run?.isRunning) {
+                reportJob({
+                    id: `hc-run-reused-${Date.now()}`,
+                    label: `Holding comparison — ${businessDate}`,
+                    status: "completed",
+                    message: res.message || "These files were already compared; showing that result.",
+                });
+            } else if (res.run?.runId) {
+                // The runId (HC-<ms>) is the bell's key: the server settles it from the run row.
+                trackJob({
+                    id: res.run.runId,
+                    label: `Holding comparison — ${businessDate}`,
+                    message: "Comparing custodian and FA holdings in the background.",
+                });
+            }
         } catch (err) {
             setRunError({ message: err.message, detail: err.detail });
         } finally {
@@ -371,9 +401,12 @@ const HoldingComparisonPanel = ({
                                       ? "Regenerate FA Holdings"
                                       : "Generate FA Holdings"}
                             </button>
-                            <span className={faStatus === "COMPLETED" ? "cm-staged" : "cm-staged muted"}>
-                                {api.FA_STATUS_LABEL[faStatus] || faStatus}
-                            </span>
+                            {/* While generating, the button already says so. */}
+                            {api.FA_IN_PROGRESS.includes(faStatus) ? null : (
+                                <span className={faStatus === "COMPLETED" ? "cm-staged" : "cm-staged muted"}>
+                                    {api.FA_STATUS_LABEL[faStatus] || faStatus}
+                                </span>
+                            )}
                         </div>
 
                         {fa?.message || faError ? (
