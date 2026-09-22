@@ -434,20 +434,20 @@ function CorporateActionTab() {
       {/* ===================== INDIVIDUAL IMPACT REPORT ===================== */}
       {reportMode !== "all" && (
         <>
-          <p style={{ color: "#6b7280", fontSize: 13, marginTop: 4 }}>
+          <p className="ops-hint">
             Per-client impact of every {selectedType?.label.toLowerCase()} in the
             selected period (one row per affected account).
           </p>
 
           {selectedType && !selectedType.supported ? (
-            <div className={`export-status pending`} style={{ marginTop: 8 }}>
+            <p className="cm-empty">
               {selectedType.label} client-impact reports are coming soon.
-            </div>
+            </p>
           ) : (
             <>
               <div className="action-footer">
                 <button
-                  className="export-btn"
+                  className="cm-primary"
                   onClick={handleGenerateImpact}
                   disabled={anyImpactBusy}
                 >
@@ -456,12 +456,7 @@ function CorporateActionTab() {
               </div>
 
               {impactError && (
-                <div
-                  className="export-status failed"
-                  style={{ marginTop: 8 }}
-                >
-                  {impactError}
-                </div>
+                <div className="cm-verdict bad">{impactError}</div>
               )}
 
               {impactJobs.length > 0 && (

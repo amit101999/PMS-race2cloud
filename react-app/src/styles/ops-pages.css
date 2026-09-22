@@ -1,0 +1,819 @@
+/*
+ * Older pages (Corporate Actions, Bhav Copy, Master, Cash Balance, Update ISIN,
+ * Analytics, Reports) restyled in the
+ * Transaction Upload visual style. Page layout, cards, buttons and messages
+ * come from tokens.css, TempTransaction.css and CustodyMatch.css; this file
+ * only restyles the form pieces those pages don't have.
+ *
+ * Every rule is scoped to `.ops-page`: SplitPage.css and BonusPage.css define
+ * global classes (.search-input-wrapper, .pagination, ...) that other pages
+ * also use, so they are overridden here rather than edited.
+ */
+
+/* ── form ─────────────────────────────────────────────────────────────── */
+
+/* The page card already provides the white box and padding. */
+.ops-page .split-card,
+.ops-page .bonus-card,
+.ops-page .dividend-card {
+    background: none;
+    border-radius: 0;
+    padding: 0;
+}
+
+.ops-page .cm-verdict {
+    margin: 0 0 16px;
+}
+
+/* A message right under a status pill needs a little room. */
+.ops-page .cm-progress + .cm-verdict {
+    margin-top: 12px;
+}
+
+/* Bhav Copy shows its result under the form rather than above it. */
+.ops-page form + .cm-verdict {
+    margin-top: 16px;
+}
+
+.ops-page .temp-transaction-card > .cm-verdict:last-child {
+    margin-bottom: 0;
+}
+
+.ops-page .split-field label,
+.ops-page .bonus-field label,
+.ops-page .dividend-field label,
+.ops-page .ops-upload label,
+.ops-page .cash-filter-field > label,
+.ops-page .ops-field > label,
+.ops-page .form-field label,
+.ops-page .report-type-label,
+.ops-page .update-isin-field label,
+.ops-page .merger-new-company-fields .split-field label,
+.ops-page .search-label {
+    margin-bottom: 6px;
+    font-size: 12.5px;
+    font-weight: 600;
+    letter-spacing: normal;
+    color: var(--txo-text);
+}
+
+.ops-page .split-field input,
+.ops-page .bonus-field input,
+.ops-page .dividend-field input,
+.ops-page .dividend-select,
+.ops-page .cash-filter-field input:not(.search-input),
+.ops-page .update-isin-field input,
+.ops-page .ops-field input,
+.ops-page .form-field input,
+.ops-page .form-field select,
+.ops-page .report-type-select,
+.ops-page .merger-text-input {
+    height: 38px;
+    padding: 8px 12px;
+    border: 1px solid var(--txo-border-strong);
+    border-radius: var(--txo-radius-sm);
+    background-color: var(--txo-surface);
+    font-family: inherit;
+    font-size: 14px;
+    color: var(--txo-text);
+    box-sizing: border-box;
+}
+
+.ops-page .split-field input:focus,
+.ops-page .bonus-field input:focus,
+.ops-page .dividend-field input:focus,
+.ops-page .dividend-select:focus,
+.ops-page .cash-filter-field input:not(.search-input):focus,
+.ops-page .update-isin-field input:focus,
+.ops-page .ops-field input:focus,
+.ops-page .form-field input:focus,
+.ops-page .form-field select:focus,
+.ops-page .report-type-select:focus,
+.ops-page .merger-text-input:focus {
+    border-color: var(--txo-primary);
+    box-shadow: 0 0 0 3px var(--txo-primary-tint);
+}
+
+.ops-page .split-field input:disabled,
+.ops-page .bonus-field input:disabled,
+.ops-page .dividend-field input:disabled,
+.ops-page .update-isin-field input:disabled {
+    border-color: var(--txo-border);
+    background: var(--txo-surface-sunken);
+    color: var(--txo-text-muted);
+}
+
+.ops-page .ratio-hint {
+    border: 1px solid #efd3dc;
+    background: var(--txo-primary-tint);
+    color: var(--txo-primary-hover);
+}
+
+/* Demerger and Merger split the form into titled sections. */
+.ops-page .demerger-section,
+.ops-page .merger-section {
+    border-top-color: var(--txo-border);
+}
+
+.ops-page .demerger-section-title,
+.ops-page .merger-section-title {
+    font-size: 14px;
+    font-weight: 600;
+    letter-spacing: normal;
+    color: var(--txo-text);
+}
+
+.ops-page .demerger-cost-hint {
+    color: var(--txo-text-muted);
+}
+
+.ops-page .demerger-cost-hint.ok {
+    color: var(--txo-success);
+}
+
+.ops-page .demerger-cost-hint.warn {
+    color: var(--txo-warning);
+}
+
+.ops-page .dividend-field .required-asterisk {
+    color: var(--txo-primary);
+}
+
+/* Dividend / Bhav Copy file pickers: the Holding Comparison upload box. */
+.ops-page .ops-upload {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.ops-page .ops-upload + .ops-form-actions {
+    margin-top: 16px;
+}
+
+.ops-page .ops-upload label {
+    margin-bottom: 0;
+}
+
+.ops-page .ops-upload-hint {
+    margin: 0;
+    font-size: 12px;
+    color: var(--txo-text-faint);
+}
+
+.ops-page .ops-form-actions {
+    grid-column: 1 / -1;
+    display: flex;
+    justify-content: flex-end;
+}
+
+/* ── ISIN search ──────────────────────────────────────────────────────── */
+
+.ops-page .account-code-search {
+    margin-bottom: 0;
+}
+
+.ops-page .search-input-wrapper {
+    height: 38px;
+    padding: 0 12px;
+    border: 1px solid var(--txo-border-strong);
+    border-radius: var(--txo-radius-sm);
+    box-shadow: none;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.ops-page .search-input-wrapper:hover {
+    border-color: #efd3dc;
+    box-shadow: none;
+}
+
+.ops-page .search-input-wrapper:focus-within {
+    border-color: var(--txo-primary);
+    box-shadow: 0 0 0 3px var(--txo-primary-tint);
+}
+
+.ops-page .search-icon {
+    font-size: 13px;
+}
+
+.ops-page .search-input {
+    font-family: inherit;
+    color: var(--txo-text);
+}
+
+.ops-page .clear-icon {
+    background: var(--txo-primary-tint);
+    color: var(--txo-primary);
+}
+
+.ops-page .arrow-icon,
+.ops-page .search-input-wrapper:focus-within .arrow-icon {
+    color: var(--txo-primary);
+}
+
+.ops-page .search-dropdown {
+    top: calc(100% + 4px);
+    border: 1px solid var(--txo-border);
+    border-radius: var(--txo-radius-md);
+    box-shadow: 0 8px 24px rgba(16, 24, 40, 0.12);
+}
+
+.ops-page .dropdown-header,
+.ops-page .dropdown-footer {
+    border-color: #efd3dc;
+    background: var(--txo-primary-tint);
+    color: var(--txo-primary-hover);
+    font-weight: 600;
+}
+
+.ops-page .dropdown-option {
+    color: var(--txo-text);
+}
+
+.ops-page .dropdown-option:hover {
+    border-left-color: var(--txo-primary);
+    background: var(--txo-primary-tint);
+    color: var(--txo-primary);
+    font-weight: inherit;
+}
+
+.ops-page .ops-option-sub {
+    font-size: 12px;
+    color: var(--txo-text-muted);
+}
+
+/* Merger's old-ISIN suggestions list. */
+.ops-page .merger-old-isin-suggest {
+    border: 1px solid var(--txo-border);
+    border-radius: var(--txo-radius-md);
+    box-shadow: 0 8px 24px rgba(16, 24, 40, 0.12);
+}
+
+.ops-page .merger-old-isin-suggest-item:hover,
+.ops-page .merger-old-isin-suggest-item:focus {
+    background: var(--txo-primary-tint);
+}
+
+.ops-page .merger-old-isin-suggest-item:hover .merger-old-isin-suggest-code {
+    color: var(--txo-primary);
+}
+
+.ops-page .merger-old-isin-suggest-name {
+    color: var(--txo-text-muted);
+}
+
+/* ── impact preview ───────────────────────────────────────────────────── */
+
+.ops-page .ops-card-title {
+    margin: 0 0 14px;
+}
+
+.ops-page .split-expand-toggle,
+.ops-page .bonus-actual-chevron,
+.ops-page .dividend-expand-toggle {
+    color: var(--txo-primary);
+}
+
+.ops-page .bonus-preview-actions {
+    gap: 12px;
+}
+
+/* Export sits in the heading row, so it needs no gap above it. */
+.ops-page .demerger-preview-header-row .bonus-preview-actions,
+.ops-page .merger-preview-header-row .bonus-preview-actions {
+    margin-top: 0;
+}
+
+/* Counts above the Demerger / Merger preview tables. */
+.ops-page .ops-summary {
+    margin: 0 0 12px;
+    padding: 10px 14px;
+    border: 1px solid var(--txo-border);
+    border-radius: var(--txo-radius-md);
+    background: var(--txo-surface-sunken);
+    font-size: 13px;
+    line-height: 1.6;
+    color: var(--txo-text-muted);
+}
+
+.ops-page .ops-summary strong {
+    color: var(--txo-text);
+}
+
+.ops-page .ops-summary--row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 18px;
+}
+
+/* Dividend reconciliation: event tabs and status filter chips. */
+.ops-page .dividend-recon-header .ops-card-title {
+    margin: 0;
+}
+
+.ops-page .recon-tab,
+.ops-page .recon-chip {
+    border-color: var(--txo-border-strong);
+    font-family: inherit;
+    color: var(--txo-text);
+}
+
+.ops-page .recon-tab:hover,
+.ops-page .recon-chip:hover {
+    border-color: var(--txo-primary);
+}
+
+.ops-page .recon-tab-active {
+    border-color: var(--txo-primary);
+    background: var(--txo-primary);
+    color: #fff;
+}
+
+.ops-page .recon-chip-active {
+    border-color: var(--txo-primary);
+    background: var(--txo-primary-tint);
+    color: var(--txo-primary-hover);
+}
+
+.ops-page .recon-account-subtitle {
+    color: var(--txo-text-muted);
+}
+
+.ops-page .pagination button,
+.ops-page .dividend-pagination button {
+    border: 1px solid var(--txo-border-strong);
+    border-radius: var(--txo-radius-sm);
+    background: var(--txo-surface);
+    font-family: inherit;
+    color: var(--txo-text);
+}
+
+.ops-page .pagination button:hover:not(:disabled),
+.ops-page .dividend-pagination button:hover:not(:disabled) {
+    border-color: var(--txo-primary);
+    background: var(--txo-surface);
+    color: var(--txo-primary);
+}
+
+.ops-page .pagination span,
+.ops-page .dividend-pagination span {
+    color: var(--txo-text-muted);
+}
+
+/* ── Dividend confirm popup ───────────────────────────────────────────── */
+
+.ops-page .dividend-modal {
+    border: 1px solid var(--txo-border);
+    border-radius: var(--txo-radius-md);
+    box-shadow: 0 20px 50px rgba(16, 24, 40, 0.25);
+}
+
+.ops-page .ops-modal-text {
+    margin: 0 0 8px;
+    font-size: 13.5px;
+    color: var(--txo-text);
+}
+
+.ops-page .ops-modal-note {
+    margin: 0;
+    font-size: 12px;
+    color: var(--txo-text-muted);
+}
+
+.ops-page .ops-modal-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    margin-top: 16px;
+}
+
+.ops-page .ops-modal-actions .cm-secondary {
+    margin-top: 0;
+}
+
+/* ── Master (Client, Security) ────────────────────────────────────────── */
+
+.ops-page.client-page {
+    gap: 16px;
+}
+
+.ops-page .client-details-header h3 {
+    font-size: 15px;
+    color: var(--txo-text);
+}
+
+/* Inherit so the maroon hover colour of the option reaches the name. */
+.ops-page .isin-opt-name {
+    color: inherit;
+}
+
+.ops-page .isin-opt-code {
+    color: var(--txo-text-muted);
+}
+
+/* ── Cash Balance ─────────────────────────────────────────────────────── */
+
+.ops-page.cash-balance-page .filters-card {
+    background: none;
+    border-radius: 0;
+    padding: 0;
+}
+
+.ops-page .ops-field-end {
+    justify-content: flex-end;
+}
+
+/* Summary tiles in the maroon of the Transaction Upload field-mapping labels. */
+.ops-page .cash-summary-card {
+    border: 1px solid #efd3dc;
+    border-left: 3px solid var(--txo-primary);
+    border-radius: var(--txo-radius-md);
+    background: var(--txo-primary-tint);
+    box-shadow: none;
+    color: var(--txo-text);
+}
+
+.ops-page .cash-summary-card .label {
+    opacity: 1;
+    color: var(--txo-primary-hover);
+}
+
+.ops-page .cash-table-section {
+    margin-top: 16px;
+}
+
+.ops-page .cash-table-header h3 {
+    font-size: 15px;
+    color: var(--txo-text);
+}
+
+.ops-page .cash-page-btn,
+.ops-page .cash-page-num,
+.ops-page .transaction-page-btn,
+.ops-page .transaction-page-num {
+    border: 1px solid var(--txo-border-strong);
+    border-radius: var(--txo-radius-sm);
+    background: var(--txo-surface);
+    font-family: inherit;
+    color: var(--txo-text);
+}
+
+.ops-page .cash-page-btn:hover:not(:disabled),
+.ops-page .cash-page-num:hover:not(:disabled):not(.active),
+.ops-page .transaction-page-btn:hover:not(:disabled),
+.ops-page .transaction-page-num:hover:not(:disabled):not(.active) {
+    border-color: var(--txo-primary);
+    background: var(--txo-surface);
+    color: var(--txo-primary);
+}
+
+.ops-page .cash-page-num.active,
+.ops-page .transaction-page-num.active {
+    border-color: var(--txo-primary);
+    background: var(--txo-primary);
+    color: #fff;
+}
+
+.ops-page .cash-page-info,
+.ops-page .cash-export-status,
+.ops-page .transaction-page-info {
+    color: var(--txo-text-muted);
+}
+
+.ops-page .cash-export-error {
+    color: var(--txo-error);
+}
+
+/* ── Update ISIN ──────────────────────────────────────────────────────── */
+
+.ops-page .update-isin-hint {
+    margin: 0 0 16px;
+    font-size: 13px;
+    color: var(--txo-text-muted);
+}
+
+.ops-page .update-isin-grid {
+    gap: 16px 18px;
+    margin-bottom: 16px;
+}
+
+.ops-page .update-isin-actions {
+    justify-content: flex-end;
+    margin-bottom: 0;
+}
+
+.ops-page .update-isin-suggestions {
+    border: 1px solid var(--txo-border);
+    border-radius: var(--txo-radius-md);
+    box-shadow: 0 8px 24px rgba(16, 24, 40, 0.12);
+}
+
+.ops-page .update-isin-suggestion-btn:hover {
+    background: var(--txo-primary-tint);
+}
+
+.ops-page .update-isin-suggestion-btn:hover .update-isin-suggestion-isin {
+    color: var(--txo-primary);
+}
+
+.ops-page .update-isin-suggestion-name {
+    color: var(--txo-text-muted);
+}
+
+/* "Security name" match panel: green because the ISIN was found. */
+.ops-page .update-isin-resolution-match {
+    border-color: #bfe5cc;
+    border-radius: var(--txo-radius-md);
+    background: var(--txo-success-bg);
+}
+
+.ops-page .update-isin-resolution-label,
+.ops-page .update-isin-resolution-meta {
+    color: var(--txo-success);
+}
+
+.ops-page .update-isin-resolution-value {
+    color: var(--txo-text);
+}
+
+.ops-page .update-isin-resolution-muted {
+    color: var(--txo-text-faint);
+}
+
+.ops-page .update-isin-resolution-warn {
+    color: var(--txo-warning);
+}
+
+.ops-page .update-isin-resolution-info {
+    color: var(--txo-info);
+}
+
+/* ── Analytics ────────────────────────────────────────────────────────── */
+
+.ops-page .ops-field {
+    display: flex;
+    flex-direction: column;
+}
+
+.ops-page .filters-grid {
+    gap: 16px 18px;
+}
+
+/* Tabs: solid maroon when active, like the Dividend event tabs. */
+.ops-page .analytics-tabs {
+    margin: 16px 0;
+}
+
+.ops-page .analytics-tab {
+    padding: 7px 16px;
+    border-color: var(--txo-border-strong);
+    background: var(--txo-surface);
+    font-family: inherit;
+    font-size: 13px;
+    color: var(--txo-text);
+}
+
+.ops-page .analytics-tab:hover {
+    border-color: var(--txo-primary);
+    color: var(--txo-primary);
+}
+
+.ops-page .analytics-tab.active {
+    border-color: var(--txo-primary);
+    background: var(--txo-primary);
+    box-shadow: none;
+    color: #fff;
+}
+
+/* Holding sub-tabs (All / Equity / Cash): lighter, like the Dividend filter chips. */
+.ops-page .holding-tabs {
+    border-bottom-color: var(--txo-border);
+}
+
+.ops-page .holding-tab {
+    border: 1px solid transparent;
+    font-family: inherit;
+    color: var(--txo-text-muted);
+}
+
+.ops-page .holding-tab:hover {
+    color: var(--txo-primary);
+}
+
+.ops-page .holding-tab.active {
+    border-color: #efd3dc;
+    background: var(--txo-primary-tint);
+    color: var(--txo-primary-hover);
+}
+
+.ops-page .holding-summary-table {
+    border-color: var(--txo-border);
+    border-radius: var(--txo-radius-md);
+    box-shadow: none;
+}
+
+.ops-page .summary-table-header h3,
+.ops-page .holdings-title {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--txo-text);
+}
+
+.ops-page .holdings-title {
+    margin: 0 0 10px;
+}
+
+.ops-page .holdings-wrapper {
+    margin-top: 16px;
+}
+
+.ops-page .summary-sort-icon {
+    color: var(--txo-primary);
+}
+
+.ops-page .security-name-search .security-option-name {
+    color: inherit;
+}
+
+.ops-page .security-name-search .security-option-isin {
+    color: var(--txo-text-muted);
+}
+
+.ops-page .transaction-pagination {
+    border-top-color: var(--txo-border);
+    background: var(--txo-surface-sunken);
+}
+
+/* Transaction popup opened from a holding row. */
+.ops-page .hd-container {
+    border: 1px solid var(--txo-border);
+    border-radius: var(--txo-radius-md);
+}
+
+.ops-page .hd-header h2 {
+    margin: 0;
+    font-size: 17px;
+    font-weight: 600;
+    color: var(--txo-text);
+}
+
+.ops-page .hd-close {
+    padding: 6px 10px;
+    border-radius: var(--txo-radius-sm);
+    background: var(--txo-primary-tint);
+    font-size: 14px;
+    color: var(--txo-primary);
+}
+
+.ops-page .hd-close:hover {
+    background: var(--txo-primary);
+    color: #fff;
+}
+
+.ops-page .hd-card {
+    border: 1px solid var(--txo-border);
+    border-radius: var(--txo-radius-md);
+}
+
+.ops-page .hd-card p {
+    margin: 0;
+    font-size: 11.5px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    color: var(--txo-text-muted);
+}
+
+.ops-page .hd-card h3 {
+    margin: 6px 0 0;
+    font-size: 20px;
+}
+
+.ops-page .hd-card.purple,
+.ops-page .hd-card.blue {
+    border-color: #efd3dc;
+    background: var(--txo-primary-tint);
+    color: var(--txo-primary-hover);
+}
+
+/* Buy and profit/loss stay green, sell stays red: the colour carries meaning. */
+.ops-page .hd-card.green,
+.ops-page .hd-card.profit {
+    border-color: #bfe5cc;
+    background: var(--txo-success-bg);
+    color: var(--txo-success);
+}
+
+.ops-page .hd-card.red {
+    border-color: #f2c6c3;
+    background: var(--txo-error-bg);
+    color: var(--txo-error);
+}
+
+.ops-page .hd-table-title {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--txo-text);
+}
+
+.ops-page .hd-pagination {
+    border-color: var(--txo-border);
+    border-radius: var(--txo-radius-md);
+    background: var(--txo-surface-sunken);
+}
+
+/* ── Reports ──────────────────────────────────────────────────────────── */
+
+.ops-page .reports-card {
+    margin-top: 0;
+    padding: 22px 24px;
+    border-radius: var(--txo-radius-md);
+    box-shadow: none;
+}
+
+.ops-page .report-type-dropdown-wrap {
+    margin-bottom: 20px;
+}
+
+/* Keep the select's own arrow: the input rule above resets padding. */
+.ops-page .report-type-select {
+    padding-right: 36px;
+}
+
+.ops-page .form-field input:hover,
+.ops-page .form-field select:hover,
+.ops-page .report-type-select:hover {
+    border-color: #efd3dc;
+}
+
+.ops-page .form-grid {
+    gap: 16px 18px;
+}
+
+.ops-page .form-field {
+    gap: 0;
+}
+
+.ops-page .section-heading {
+    margin: 0 0 16px;
+    font-size: 15px;
+    font-weight: 600;
+    letter-spacing: normal;
+    color: var(--txo-text);
+}
+
+.ops-page .export-jobs-container {
+    margin-top: 24px;
+    padding-top: 20px;
+    border-top: 1px solid var(--txo-border);
+}
+
+.ops-page .export-jobs-container h4 {
+    margin: 0 0 12px;
+    font-size: 14px;
+    font-weight: 600;
+    letter-spacing: normal;
+    color: var(--txo-text);
+}
+
+/* Export type radio options. */
+.ops-page .export-type {
+    gap: 24px;
+    margin-bottom: 20px;
+    padding: 12px 0;
+    border-bottom-color: var(--txo-border);
+    font-size: 13.5px;
+}
+
+.ops-page .export-type label {
+    color: var(--txo-text);
+}
+
+.ops-page .export-type label:hover {
+    color: var(--txo-primary);
+}
+
+.ops-page .export-type input {
+    width: 16px;
+    height: 16px;
+    accent-color: var(--txo-primary);
+}
+
+.ops-page .action-footer {
+    margin-top: 20px;
+    padding-top: 16px;
+    border-top-color: var(--txo-border);
+}
+
+.ops-page .action-footer + .cm-verdict {
+    margin-top: 12px;
+}
+
+.ops-page .ops-hint {
+    margin: 4px 0 12px;
+    font-size: 13px;
+    color: var(--txo-text-muted);
+}
+
+.ops-page .empty-state,
+.ops-page .export-empty {
+    color: var(--txo-text-faint);
+}

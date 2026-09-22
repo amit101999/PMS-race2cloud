@@ -1,7 +1,10 @@
 import React, { useState } from "react";
 import MainLayout from "../../layouts/MainLayout";
-import { Card } from "../../components/common/CommonComponents";
 import "./ReportPage.css";
+import "../TempTransactionUpload/tokens.css";
+import "../TempTransactionUpload/TempTransaction.css";
+import "../TempTransactionUpload/custody/CustodyMatch.css";
+import "../../styles/ops-pages.css";
 import HoldingsTab from "./tabs/Holdings";
 import TransactionsTab from "./tabs/Transactionstab";
 import TopClientsTab from "./tabs/TopClientsTab";
@@ -38,7 +41,8 @@ function ReportsPage() {
 
   return (
     <MainLayout title="Reports">
-      <Card className="reports-card">
+      <div className="temp-transaction-container txn-ops ops-page">
+      <div className="temp-transaction-card reports-card">
         {/* Type of Report - Dropdown */}
         <div className="report-type-dropdown-wrap">
           <label className="report-type-label">Type of Report</label>
@@ -58,7 +62,8 @@ function ReportsPage() {
 
         {/* Tab Content */}
         <div className="reports-body">{renderTab()}</div>
-      </Card>
+      </div>
+      </div>
     </MainLayout>
   );
 }

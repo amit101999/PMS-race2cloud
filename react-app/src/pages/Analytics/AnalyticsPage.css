@@ -5,26 +5,6 @@
   margin-bottom: 16px;
 }
 
-/* Back Button */
-.back-btn {
-  background: linear-gradient(
-    90deg,
-    rgba(194, 24, 91, 0.1), /* Changed from rgba(79, 70, 229, 0.1) */
-    rgba(248, 187, 208, 0.15) /* Changed from rgba(129, 140, 248, 0.15) */
-  );
-  color: #c2185b; /* Changed from #4f46e5 */
-  border: none;
-  padding: 8px 16px;
-  border-radius: 9999px;
-  font-size: 13px;
-  font-weight: 500;
-  cursor: pointer;
-}
-
-.back-btn:hover {
-  background: rgba(194, 24, 91, 0.15); /* Changed from rgba(79, 70, 229, 0.15) */
-}
-
 /* Filters Card */
 .filters-card {
   margin-top: 8px;
@@ -440,25 +420,6 @@
 .analytics-action-cell {
   text-align: right;
   min-width: 140px;
-}
-
-.analytics-view-btn {
-  background: linear-gradient(90deg, #c2185b, #8b1538);
-  color: #ffffff;
-  border: none;
-  padding: 10px 14px;
-  border-radius: 10px;
-  font-size: 13px;
-  font-weight: 600;
-  cursor: pointer;
-  box-shadow: 0 4px 10px rgba(194, 24, 91, 0.25);
-  transition: transform 0.1s ease, box-shadow 0.1s ease, opacity 0.15s ease;
-}
-
-.analytics-view-btn:hover {
-  transform: translateY(-1px);
-  box-shadow: 0 6px 14px rgba(194, 24, 91, 0.28);
-  opacity: 0.95;
 }
 
 /* Holding Summary Table */

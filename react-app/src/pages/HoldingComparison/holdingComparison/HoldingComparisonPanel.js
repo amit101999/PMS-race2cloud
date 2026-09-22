@@ -450,16 +450,37 @@ const HoldingComparisonPanel = ({
 
                 {run ? (
                     <div className="cm-progress">
-                        <div className="cm-progress-head">
-                            <strong>{run.stageDetail || run.status}</strong>
-                            <span className="cm-run-id">{run.runId}</span>
+                        {/* Same layout as Transaction Upload's run card: status and counts
+                            on the left, the run ID badge on the right. */}
+                        <div className="cm-progress-head cm-run-head">
+                            <div className="cm-run-summary">
+                                <span className="cm-run-status">
+                                    {run.isRunning ? (
+                                        <StatusBadge tone={STATUS.PROCESSING}>{run.stageDetail || run.status}</StatusBadge>
+                                    ) : run.status === "COMPLETED_CLEAN" ? (
+                                        <StatusBadge tone={STATUS.OK}>Holdings agree</StatusBadge>
+                                    ) : run.status === "COMPLETED_WITH_EXCEPTIONS" ? null : run.status === "FAILED" ? (
+                                        <StatusBadge tone={STATUS.BAD}>Failed</StatusBadge>
+                                    ) : (
+                                        <StatusBadge tone={STATUS.NEUTRAL}>{run.stageDetail || run.status}</StatusBadge>
+                                    )}
+                                </span>
+                                {!run.isRunning && run.status !== "FAILED" ? (
+                                    <div className="cm-stats">
+                                        <span><strong className="mono">{run.counts.custodyRows.toLocaleString()}</strong> custody rows</span>
+                                        <span><strong className="mono">{run.counts.faRows.toLocaleString()}</strong> FA rows</span>
+                                        <span><strong className="mono">{run.counts.totalKeys.toLocaleString()}</strong> holdings compared</span>
+                                    </div>
+                                ) : null}
+                            </div>
+                            <span className="cm-run-badge mono" title="Run ID">{run.runId}</span>
                         </div>
 
-                        {!run.isRunning && run.status !== "FAILED" ? (
-                            <div className="cm-stats">
-                                <span>{run.counts.custodyRows.toLocaleString()} custody rows</span>
-                                <span>{run.counts.faRows.toLocaleString()} FA rows</span>
-                                <span>{run.counts.totalKeys.toLocaleString()} holdings compared</span>
+                        {/* The comparison doesn't report a percentage, so the bar just
+                            shows that work is in progress. */}
+                        {run.isRunning ? (
+                            <div className="cm-bar">
+                                <div className="cm-bar-fill cm-bar-fill--busy" />
                             </div>
                         ) : null}
 

@@ -1,7 +1,11 @@
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import MainLayout from "../../layouts/MainLayout";
-import { Card } from "../../components/common/CommonComponents";
+import { FileGlyph, UploadGlyph } from "../TempTransactionUpload/custody/CustodyMatchPanel";
 import "./DividendPage.css";
+import "../TempTransactionUpload/tokens.css";
+import "../TempTransactionUpload/TempTransaction.css";
+import "../TempTransactionUpload/custody/CustodyMatch.css";
+import "../../styles/ops-pages.css";
 import { BASE_URL } from "../../constant";
 import { useJobNotifications } from "../../notifications/JobNotificationContext";
 
@@ -120,6 +124,7 @@ function DividendPage() {
   const [applyStatus, setApplyStatus] = useState(null);
 
   const [custodianFile, setCustodianFile] = useState(null);
+  const [dragActive, setDragActive] = useState(false);
   const custodianInputRef = useRef(null);
 
   const dropdownRef = useRef(null);
@@ -623,17 +628,16 @@ function DividendPage() {
 
   return (
     <MainLayout title="Dividend">
-      <Card style={{ marginTop: 24 }}>
-        <h2 style={{ fontSize: 18, fontWeight: 600, marginBottom: 20 }}>
-          Add Dividend 
-        </h2>
+      <div className="temp-transaction-container txn-ops ops-page">
+      <div className="temp-transaction-card">
+        <h3 className="ops-card-title">Add Dividend</h3>
 
         {success && (
-          <div className="alert success">Dividend applied successfully.</div>
+          <div className="cm-verdict ok">Dividend applied successfully.</div>
         )}
-        {error && <div className="alert error">{error}</div>}
+        {error && <div className="cm-verdict bad">{error}</div>}
         {previewEmptyMessage && (
-          <div className="alert info">{previewEmptyMessage}</div>
+          <div className="cm-verdict warn">{previewEmptyMessage}</div>
         )}
 
         <form className="dividend-card" onSubmit={(e) => e.preventDefault()}>
@@ -683,7 +687,7 @@ function DividendPage() {
                       onClick={() => handleSelectSecurity(sec)}
                     >
                       <strong>{sec.securityCode || sec.isin}</strong>
-                      <div style={{ fontSize: 12, color: "#6b7280" }}>
+                      <div className="ops-option-sub">
                         {sec.securityName}
                       </div>
                     </div>
@@ -773,63 +777,70 @@ function DividendPage() {
             />
           </div>
 
-          <div className="dividend-actions">
-            <input
-              type="file"
-              accept=".csv,.xlsx,.xls"
-              ref={custodianInputRef}
-              style={{ display: "none" }}
-              onChange={(e) => {
-                setCustodianFile(e.target.files?.[0] || null);
-                if (e.target) e.target.value = "";
-              }}
-            />
-            <button
-              type="button"
-              className="dividend-preview-btn"
-              style={{ marginRight: 12 }}
-              onClick={() => custodianInputRef.current?.click()}
+          {/* Same upload box as Holding Comparison. The file input covers the
+              whole box, so both clicking and dropping a file go through onChange;
+              the drag handlers only toggle the highlight. */}
+          <div className="dividend-field dividend-field-full ops-upload">
+            <label>Custodian File <span className="required-asterisk">*</span></label>
+            <div
+              className={dragActive ? "up-zone is-drag" : "up-zone"}
+              onDragEnter={() => setDragActive(true)}
+              onDragLeave={() => setDragActive(false)}
+              onDrop={() => setDragActive(false)}
             >
-              Upload Custodian File <span className="required-asterisk">*</span>
-            </button>
+              <input
+                type="file"
+                accept=".csv,.xlsx,.xls"
+                ref={custodianInputRef}
+                className="up-zone-input"
+                aria-label="Upload custodian file"
+                onChange={(e) => {
+                  setCustodianFile(e.target.files?.[0] || null);
+                  if (e.target) e.target.value = "";
+                }}
+              />
+              <div className="up-zone-visual">
+                <UploadGlyph />
+                <span className="up-zone-title">
+                  {custodianFile ? "Replace custodian file" : "Upload custodian file"}
+                </span>
+                <span className="up-zone-sub">
+                  Drag &amp; drop or <span className="up-zone-browse">Browse</span>
+                </span>
+              </div>
+            </div>
 
             {custodianFile ? (
-              <span
-                style={{
-                  marginRight: 12,
-                  fontSize: 13,
-                  color: "#374151",
-                  display: "inline-flex",
-                  alignItems: "center",
-                  gap: 6,
-                }}
-              >
-                {custodianFile.name}
-                <span
-                  role="button"
-                  aria-label="Remove file"
-                  style={{ cursor: "pointer", color: "#dc2626", fontWeight: 700 }}
-                  onClick={() => setCustodianFile(null)}
-                >
-                  ✕
-                </span>
-              </span>
+              <div className="up-filelist">
+                <div className="up-file-row">
+                  <FileGlyph />
+                  <div className="up-file-main">
+                    <span className="up-file-name" title={custodianFile.name}>
+                      {custodianFile.name}
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    className="up-file-remove"
+                    aria-label={`Remove ${custodianFile.name}`}
+                    title="Remove this file"
+                    onClick={() => setCustodianFile(null)}
+                  >
+                    &times;
+                  </button>
+                </div>
+              </div>
             ) : (
-              <span
-                style={{
-                  marginRight: 12,
-                  fontSize: 12,
-                  color: "#9ca3af",
-                  fontStyle: "italic",
-                }}
-              >
+              <p className="ops-upload-hint">
                 No file selected — required to fetch accounts
-              </span>
+              </p>
             )}
+          </div>
 
+          <div className="dividend-actions">
             <button
               type="button"
-              className="dividend-preview-btn"
+              className="cm-primary"
               disabled={
                 !isin ||
                 !recordDate ||
@@ -850,7 +861,7 @@ function DividendPage() {
             </button>
           </div>
         </form>
-      </Card>
+      </div>
 
       {/* ============================================================
           RECONCILIATION GRID — the only preview path now. Always renders
@@ -859,15 +870,13 @@ function DividendPage() {
           without the custodian's confirmation.
           ============================================================ */}
       {reconEvents && (
-        <Card style={{ marginTop: 24 }} className="dividend-preview-card">
+        <div className="temp-transaction-card dividend-preview-card">
           <div className="dividend-recon-header">
-            <h3 style={{ fontSize: 16, fontWeight: 600, margin: 0 }}>
-              Custodian Reconciliation
-            </h3>
+            <h3 className="ops-card-title">Custodian Reconciliation</h3>
           </div>
 
           {warnings.length > 0 && (
-            <div className="alert info" style={{ marginBottom: 12 }}>
+            <div className="cm-verdict warn">
               {warnings.map((w, i) => (
                 <div key={i}>• {w}</div>
               ))}
@@ -1148,9 +1157,7 @@ function DividendPage() {
           )}
 
           {success && (
-            <div className="alert success" style={{ marginTop: 12 }}>
-              Dividend applied successfully.
-            </div>
+            <div className="cm-verdict ok">Dividend applied successfully.</div>
           )}
 
           <div className="dividend-preview-actions">
@@ -1195,7 +1202,7 @@ function DividendPage() {
                 <>
                   <button
                     type="button"
-                    className="dividend-submit dividend-submit-primary"
+                    className="cm-primary"
                     disabled={loading || matchedRows.length === 0}
                     onClick={() => requestApply("matched")}
                     title={
@@ -1210,7 +1217,7 @@ function DividendPage() {
                   </button>
                   <button
                     type="button"
-                    className="dividend-submit dividend-submit-secondary"
+                    className="cm-primary cm-primary--warn"
                     disabled={loading || safeAllRows.length === 0}
                     onClick={() => requestApply("all")}
                     title={
@@ -1227,7 +1234,7 @@ function DividendPage() {
               );
             })()}
           </div>
-        </Card>
+        </div>
       )}
 
       {/* Confirmation modal for Apply Matched Only / Apply All Reconciled */}
@@ -1237,49 +1244,41 @@ function DividendPage() {
             className="dividend-modal"
             onClick={(e) => e.stopPropagation()}
           >
-            <h3 style={{ marginTop: 0 }}>
+            <h3 className="ops-card-title">
               {confirmApply.mode === "matched"
                 ? "Apply Matched Only?"
                 : "Apply All Reconciled?"}
             </h3>
-            <p style={{ marginBottom: 8 }}>
+            <p className="ops-modal-text">
               You are about to credit dividend to{" "}
               <strong>{confirmApply.count}</strong> account(s) for{" "}
               <strong>{symbol}</strong> ({isin}).
             </p>
-            <p style={{ marginBottom: 8 }}>
+            <p className="ops-modal-text">
               Estimated system gross:{" "}
               <strong>₹{confirmApply.gross.toFixed(2)}</strong>
             </p>
             {confirmApply.mode === "all" && (
-              <div className="alert info" style={{ fontSize: 13 }}>
+              <div className="cm-verdict warn">
                 This includes <em>mismatch</em>, <em>partial</em>,{" "}
                 <em>over-paid</em> and <em>missing-in-file</em> accounts. Review
                 the grid before continuing.
               </div>
             )}
-            <p style={{ fontSize: 12, color: "#6b7280" }}>
+            <p className="ops-modal-note">
               Already-paid and missing-in-system accounts are always skipped.
             </p>
-            <div
-              style={{
-                display: "flex",
-                gap: 8,
-                justifyContent: "flex-end",
-                marginTop: 16,
-              }}
-            >
+            <div className="ops-modal-actions">
               <button
                 type="button"
-                className="dividend-submit"
-                style={{ background: "#e5e7eb", color: "#111" }}
+                className="cm-secondary"
                 onClick={closeConfirm}
               >
                 Cancel
               </button>
               <button
                 type="button"
-                className="dividend-submit dividend-submit-primary"
+                className="cm-primary"
                 onClick={confirmAndApply}
               >
                 Confirm Apply
@@ -1290,10 +1289,8 @@ function DividendPage() {
       )}
 
       {dividendList.length > 0 && (
-        <Card style={{ marginTop: 24 }}>
-          <h3 style={{ fontSize: 16, fontWeight: 600, marginBottom: 16 }}>
-            Previous Dividends
-          </h3>
+        <div className="temp-transaction-card">
+          <h3 className="ops-card-title">Previous Dividends</h3>
           <div className="data-table-wrap">
             <table className="data-table">
               <thead>
@@ -1324,8 +1321,9 @@ function DividendPage() {
               </tbody>
             </table>
           </div>
-        </Card>
+        </div>
       )}
+      </div>
     </MainLayout>
   );
 }

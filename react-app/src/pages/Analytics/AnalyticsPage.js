@@ -1,8 +1,11 @@
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import MainLayout from "../../layouts/MainLayout.js";
-import { Card, TextInput } from "../../components/common/CommonComponents.js";
 import TransactionPage from "../TransactionPage/TransactionPage.js";
 import "./AnalyticsPage.css";
+import "../TempTransactionUpload/tokens.css";
+import "../TempTransactionUpload/TempTransaction.css";
+import "../TempTransactionUpload/custody/CustodyMatch.css";
+import "../../styles/ops-pages.css";
 import { useAccountCodes } from "../../hooks/GetAllCodes.js";
 import { useHoldings } from "../../hooks/GetHolding.js";
 
@@ -356,8 +359,9 @@ function AnalyticsPage() {
   /* -------------------- JSX -------------------- */
   return (
     <MainLayout title="Analytics Filters">
+      <div className="temp-transaction-container txn-ops ops-page">
       {/* Filters */}
-      <Card className="filters-card">
+      <div className="temp-transaction-card filters-card">
         <div
           className={`filters-grid${
             showIsinDropdown && filteredIsinOptions.length > 0
@@ -468,14 +472,12 @@ function AnalyticsPage() {
             )}
           </div>
 
-          <TextInput
-            label="Filter by Date"
-            type="date"
-            value={asOnDate}
-            onChange={handleDateChange}
-          />
+          <div className="ops-field">
+            <label>Filter by Date</label>
+            <input type="date" value={asOnDate} onChange={handleDateChange} />
+          </div>
         </div>
-      </Card>
+      </div>
 
       {/* Tabs */}
       <div className="analytics-tabs">
@@ -538,7 +540,7 @@ function AnalyticsPage() {
       <div className="analytics-tab-content">{renderActiveTab()}</div>
 
       {loadingHoldings && !selectedIsin && (
-        <p className="loading-text">Loading holdings...</p>
+        <p className="cm-empty">Loading holdings...</p>
       )}
 
       {selectedStock && (
@@ -550,6 +552,7 @@ function AnalyticsPage() {
           onClose={() => setSelectedStock(null)}
         />
       )}
+      </div>
     </MainLayout>
   );
 }

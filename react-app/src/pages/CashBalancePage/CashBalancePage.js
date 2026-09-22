@@ -1,11 +1,14 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import MainLayout from "../../layouts/MainLayout";
-import { Card } from "../../components/common/CommonComponents";
 import DownloadButton from "../../components/common/DownloadButton";
 import { useAccountCodes } from "../../hooks/GetAllCodes";
 import { BASE_URL } from "../../constant";
 import "../SplitPage/SplitPage.css";
 import "./CashBalancePage.css";
+import "../TempTransactionUpload/tokens.css";
+import "../TempTransactionUpload/TempTransaction.css";
+import "../TempTransactionUpload/custody/CustodyMatch.css";
+import "../../styles/ops-pages.css";
 
 function formatINR(val) {
   if (val === null || val === undefined || val === "") return "–";
@@ -241,9 +244,9 @@ function CashBalancePage() {
 
   return (
     <MainLayout title="Cash Balance">
-      <div className="cash-balance-page">
+      <div className="temp-transaction-container txn-ops ops-page cash-balance-page">
         {/* Filters */}
-        <Card>
+        <div className="temp-transaction-card">
           <div className="filters-card">
             {/* Account Code Dropdown */}
             <div className="cash-filter-field">
@@ -400,9 +403,9 @@ function CashBalancePage() {
             </div>
 
             {/* Fetch Button */}
-            <div className="cash-filter-field" style={{ justifyContent: "flex-end" }}>
+            <div className="cash-filter-field ops-field-end">
               <button
-                className="cash-fetch-btn"
+                className="cm-primary"
                 onClick={handleFetch}
                 disabled={!accountCode || loading}
               >
@@ -410,7 +413,7 @@ function CashBalancePage() {
               </button>
             </div>
           </div>
-        </Card>
+        </div>
 
         {/* Summary Strip */}
         {fetched && closingBalance && (
@@ -433,18 +436,18 @@ function CashBalancePage() {
         {/* Table */}
         {fetched && (
           <div className="cash-table-section">
-            <Card>
+            <div className="temp-transaction-card">
               <div className="cash-table-header">
                 <h3>Cash Passbook</h3>
-                <span className="cash-row-count">
+                <span className="count-pill">
                   Showing {rows.length} of {totalCount} records
                 </span>
               </div>
 
               {loading ? (
-                <div className="cash-loading">Loading transactions...</div>
+                <p className="cm-empty">Loading transactions...</p>
               ) : rows.length === 0 ? (
-                <div className="cash-empty">No transactions found for the selected filters.</div>
+                <p className="cm-empty">No transactions found for the selected filters.</p>
               ) : (
                 <>
                   <div className="data-table-wrap">
@@ -620,15 +623,12 @@ function CashBalancePage() {
                         : "Export"}
                     </button>
                   )}
-                  {(exportStatus === "RUNNING" || exportStatus === "PENDING") && (
-                    <span className="cash-export-status">Background job running, please wait...</span>
-                  )}
                   {(exportStatus === "ERROR" || exportStatus === "FAILED") && (
                     <span className="cash-export-status cash-export-error">Export failed. Try again.</span>
                   )}
                 </div>
               )}
-            </Card>
+            </div>
           </div>
         )}
       </div>
