@@ -107,7 +107,7 @@ const DifferenceReports = ({ refreshToken }) => {
                                             describes what it compared. */}
                                         {r.superseded ? (
                                             <span className="cm-report-old">
-                                                <StatusBadge tone={STATUS.NEUTRAL}>Superseded</StatusBadge>
+                                                <StatusBadge tone={STATUS.NEUTRAL}>Outdated</StatusBadge>
                                             </span>
                                         ) : null}
                                     </td>
