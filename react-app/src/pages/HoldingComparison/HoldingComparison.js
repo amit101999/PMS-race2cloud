@@ -10,6 +10,21 @@ import "../TempTransactionUpload/tokens.css";
 import "../TempTransactionUpload/TempTransaction.css";
 import "../TempTransactionUpload/custody/CustodyMatch.css";
 
+/*
+ * The selected date is kept for the browser tab, so leaving the module while
+ * FA holdings generate and coming back reopens on that date instead of today.
+ */
+const DATE_KEY = "holdingComparison.businessDate";
+
+const readSavedDate = () => {
+    try {
+        const saved = sessionStorage.getItem(DATE_KEY);
+        return saved && /^\d{4}-\d{2}-\d{2}$/.test(saved) ? saved : todayIso();
+    } catch {
+        return todayIso();
+    }
+};
+
 /**
  * Holding Comparison — do our holdings and the custodian's agree on a date?
  *
@@ -17,7 +32,7 @@ import "../TempTransactionUpload/custody/CustodyMatch.css";
  * difference preview, the downloadable report and the three history lists.
  */
 const HoldingComparison = () => {
-    const [businessDate, setBusinessDate] = useState(todayIso());
+    const [businessDate, setBusinessDate] = useState(readSavedDate);
     const [run, setRun] = useState(null);
     /* Bumped whenever a file is added, so the history lists re-read. */
     const [filesVersion, setFilesVersion] = useState(0);
@@ -28,6 +43,15 @@ const HoldingComparison = () => {
      * alone would put the removed row straight back.
      */
     const [removedKeys, setRemovedKeys] = useState(() => new Set());
+
+    const handleBusinessDateChange = useCallback((date) => {
+        setBusinessDate(date);
+        try {
+            sessionStorage.setItem(DATE_KEY, date);
+        } catch {
+            // Storage blocked (private mode): the date just won't be remembered.
+        }
+    }, []);
 
     const handleFilesChanged = useCallback(() => setFilesVersion((v) => v + 1), []);
     const handleFileRemoved = useCallback((keys) => {
@@ -43,7 +67,7 @@ const HoldingComparison = () => {
             <div className="temp-transaction-container txn-ops">
                 <HoldingComparisonPanel
                     businessDate={businessDate}
-                    onBusinessDateChange={setBusinessDate}
+                    onBusinessDateChange={handleBusinessDateChange}
                     run={run}
                     onRunChange={setRun}
                     onFilesChanged={handleFilesChanged}

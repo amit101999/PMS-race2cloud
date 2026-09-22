@@ -401,9 +401,12 @@ const HoldingComparisonPanel = ({
                                       ? "Regenerate FA Holdings"
                                       : "Generate FA Holdings"}
                             </button>
-                            <span className={faStatus === "COMPLETED" ? "cm-staged" : "cm-staged muted"}>
-                                {api.FA_STATUS_LABEL[faStatus] || faStatus}
-                            </span>
+                            {/* While generating, the button already says so. */}
+                            {api.FA_IN_PROGRESS.includes(faStatus) ? null : (
+                                <span className={faStatus === "COMPLETED" ? "cm-staged" : "cm-staged muted"}>
+                                    {api.FA_STATUS_LABEL[faStatus] || faStatus}
+                                </span>
+                            )}
                         </div>
 
                         {fa?.message || faError ? (
