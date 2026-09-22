@@ -85,39 +85,50 @@ const isRealDate = (y, m, d) => {
   );
 };
 
+const MONTHS = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"];
+
 /**
  * Parse a date cell to ISO yyyy-mm-dd, or null.
  *
- * Accepts yyyy-mm-dd, yyyy/mm/dd, dd-mm-yyyy, dd/mm/yyyy and yyyymmdd.
+ * Accepts the same formats as Holding Comparison's custodian date, plus
+ * yyyy/mm/dd and 8-digit dates:
+ *   2026-08-20, 2026/08/20, 2026.08.20
+ *   20-Aug-2026, 20-Aug-26, 20 Aug 2026, 20-August-2026
+ *   20-08-2026, 20/08/2026, 20.08.2026, 20-08-26
+ *   20260820 / 20082026 (8 digits, see parseCompactDate)
+ * A time after the date is ignored. Numeric dates are read day first, as Indian
+ * custodians write them, and two-digit years are 20xx.
+ *
  * Deliberately does NOT fall back to `new Date(str)`: that quietly reads
  * "03/07/2026" as 3 July or 7 March depending on the host locale, which would
  * move trades between match keys in a way nobody could reproduce.
  */
 export const parseDate = (v) => {
-  const s = text(v);
-  if (!s) return null;
-
   // Trailing time component, if any, is not part of a trade date.
-  const head = s.split(/[T\s]/)[0];
+  const head = text(v).replace(/[ T]\d{1,2}:\d{2}.*$/, "");
+  if (!head) return null;
 
-  let m = head.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})$/);
+  let y;
+  let mo;
+  let d;
+
+  let m = head.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})$/);
   if (m) {
-    const [, y, mo, d] = m.map(Number);
-    return isRealDate(y, mo, d) ? `${y}-${pad2(mo)}-${pad2(d)}` : null;
+    [, y, mo, d] = m.map(Number);
+  } else if ((m = head.match(/^(\d{1,2})[-/ .]([A-Za-z]{3})[A-Za-z]*[-/ .](\d{2}|\d{4})$/))) {
+    d = Number(m[1]);
+    mo = MONTHS.indexOf(m[2].toUpperCase()) + 1;
+    y = Number(m[3]);
+  } else if ((m = head.match(/^(\d{1,2})[-/.](\d{1,2})[-/.](\d{2}|\d{4})$/))) {
+    [, d, mo, y] = m.map(Number);
+  } else if (/^\d{8}$/.test(head)) {
+    return parseCompactDate(head).date;
+  } else {
+    return null;
   }
 
-  m = head.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})$/);
-  if (m) {
-    const d = Number(m[1]);
-    const mo = Number(m[2]);
-    const y = Number(m[3]);
-    return isRealDate(y, mo, d) ? `${y}-${pad2(mo)}-${pad2(d)}` : null;
-  }
-
-  m = head.match(/^(\d{8})$/);
-  if (m) return parseCompactDate(m[1]).date;
-
-  return null;
+  if (y < 100) y += 2000;
+  return isRealDate(y, mo, d) ? `${y}-${pad2(mo)}-${pad2(d)}` : null;
 };
 
 const ISO_DATE_SHAPE = /^(\d{4})-(\d{2})-(\d{2})$/;

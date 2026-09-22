@@ -294,7 +294,7 @@ const HoldingComparisonPanel = ({
             {/* Same upload layout as Transaction Upload: a drop zone, then the staged file as a row. */}
             <div className="cm-split">
                 <div className="cm-col">
-                    <h3 className="cm-col-title">Custodian Consolidated Holdings</h3>
+                    <h3 className="cm-col-title">Custodian Holdings</h3>
 
                     <div className="temp-transaction-card cm-filecard up-card">
                         <div
