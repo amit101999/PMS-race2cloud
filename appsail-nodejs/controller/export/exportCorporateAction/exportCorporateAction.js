@@ -4,6 +4,40 @@ const BATCH_SIZE = 200;
 
 const esc = (s) => String(s ?? "").replace(/'/g, "''");
 
+/**
+ * Record date per merger event, keyed `OldISIN|ISIN`.
+ *
+ * The record date exists ONLY on the per-account `Merger` rows.
+ * `Merger_Record` has no record-date column — the apply job writes the
+ * EFFECTIVE date into both its TRANDATE and its SETDATE — so neither filtering
+ * nor reporting by record date is possible without this lookup. One grouped
+ * query covers every event.
+ */
+async function fetchRecordDateByEvent(zcql) {
+  const byEvent = new Map();
+  let offset = 0;
+  while (true) {
+    const rows = await zcql.executeZCQLQuery(`
+      SELECT OldISIN, ISIN, Record_Date
+      FROM Merger
+      WHERE Tran_Type = 'MERGER'
+      GROUP BY OldISIN, ISIN, Record_Date
+      LIMIT ${BATCH_SIZE} OFFSET ${offset}
+    `);
+    if (!rows || rows.length === 0) break;
+    for (const r of rows) {
+      const m = r.Merger || r;
+      const oldIsin = String(m.OldISIN ?? "").trim();
+      const newIsin = String(m.ISIN ?? "").trim();
+      const recordDate = String(m.Record_Date ?? "").slice(0, 10);
+      if (oldIsin && newIsin && recordDate) byEvent.set(`${oldIsin}|${newIsin}`, recordDate);
+    }
+    if (rows.length < BATCH_SIZE) break;
+    offset += BATCH_SIZE;
+  }
+  return byEvent;
+}
+
 const parseCatalystTime = (ct) => {
   if (!ct) return 0;
   // Catalyst CREATEDTIME is an IST (UTC+05:30) wall-clock string like
@@ -198,7 +232,7 @@ export const exportCorporateAction = async (req, res) => {
       offset += BATCH_SIZE;
     }
 
-    /* ---------- MERGER master row per apply (Merger_Record, TRANDATE in range) ---------- */
+    /* ---------- MERGER master rows (range filter applied on RECORD date below) ---------- */
     const mergerRecordRows = [];
     offset = 0;
 
@@ -206,7 +240,6 @@ export const exportCorporateAction = async (req, res) => {
       const rows = await zcql.executeZCQLQuery(`
         SELECT ISIN, Security_Code, Security_Name, OldISIN, Ratio1, Ratio2, TRANDATE, SETDATE
         FROM Merger_Record
-        WHERE TRANDATE >= '${fromISO}' AND TRANDATE <= '${toISO}'
         ORDER BY TRANDATE ASC, ROWID ASC
         LIMIT ${BATCH_SIZE} OFFSET ${offset}
       `);
@@ -216,6 +249,8 @@ export const exportCorporateAction = async (req, res) => {
       if (rows.length < BATCH_SIZE) break;
       offset += BATCH_SIZE;
     }
+
+    const mergerRecordDateByEvent = await fetchRecordDateByEvent(zcql);
 
     /* ---------- DEDUPE BONUS BY (ExDate, SecurityCode, SecurityName, ISIN) ---------- */
     const bonusByEvent = {};
@@ -367,14 +402,22 @@ export const exportCorporateAction = async (req, res) => {
     const mergerByEvent = {};
     for (const r of mergerRecordRows) {
       const m = r.Merger_Record || r;
-      const td = m.TRANDATE ?? "";
+      const td = String(m.TRANDATE ?? "").slice(0, 10);
       const newIsin = m.ISIN ?? "";
       const oldIsin = m.OldISIN ?? "";
-      const key = `${td}|${newIsin}|${oldIsin}|${m.Ratio1 ?? ""}|${m.Ratio2 ?? ""}`;
+      // A merger is dated by its RECORD date — the day holdings stop being
+      // reported under the old ISIN and start under the new one — so that is
+      // what both the range filter and the DATE column use. TRANDATE is the
+      // effective date and keeps its own column. Events with no per-account
+      // `Merger` rows have no record date and fall back to the effective date.
+      const recordDate =
+        mergerRecordDateByEvent.get(`${String(oldIsin).trim()}|${String(newIsin).trim()}`) || td;
+      if (!recordDate || recordDate < fromISO || recordDate > toISO) continue;
+      const key = `${recordDate}|${newIsin}|${oldIsin}|${m.Ratio1 ?? ""}|${m.Ratio2 ?? ""}`;
       if (!mergerByEvent[key]) {
         const secName = m.Security_Name ?? "";
         mergerByEvent[key] = {
-          date: td,
+          date: recordDate,
           ratio1: m.Ratio1 ?? "",
           ratio2: m.Ratio2 ?? "",
           type: "merger",
@@ -388,7 +431,7 @@ export const exportCorporateAction = async (req, res) => {
           oldIsin: oldIsin || "",
           newIsin: newIsin || "",
           effectiveDate: td,
-          recordDate: m.SETDATE ?? td,
+          recordDate,
           allocationToNewPct: "",
         };
       }

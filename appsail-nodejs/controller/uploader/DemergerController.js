@@ -198,6 +198,14 @@ function computeSurvivingLotsFromHoldingRows(rows) {
         queue = [];
         lastReplaceEventKey = eventKey;
       }
+      // Same rule as `recomputeHoldingsSnapshot`: a merger writes one row per
+      // lot RECEIVED on the surviving ISIN, and one row on the merged-away ISIN
+      // for the quantity that LEFT the account. Both are TYPE='MERGER' with a
+      // positive QUANTITY; only the stored HOLDING tells them apart (0 on the
+      // closing row). Without this, a demerger run against an ISIN that has
+      // already been merged away would seed the lot queue with a position that
+      // no longer exists. DEMERGER / SPLIT rows keep a non-zero HOLDING.
+      if ((Number(row.HOLDING) || 0) <= 0) continue;
       if (qty > 0) {
         queue.push({ qty, price, buyDate, sourceRowId, sourceType: type });
       }

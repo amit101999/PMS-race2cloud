@@ -527,8 +527,18 @@ function reconstructBuyQueueFromHoldings(rows) {
     if (upper === "SPLIT" || upper === "DEMERGER" || upper === "MERGER") {
       const key = `${upper}|${groupDate}`;
       if (key !== lastReplaceKey) queue.length = 0;
-      if (qty > 0) queue.push({ qty, price });
       lastReplaceKey = key;
+      // Same rule as `recomputeHoldingsSnapshot`: a merger writes one row per
+      // lot RECEIVED on the surviving ISIN, and one row on the merged-away ISIN
+      // for the quantity that LEFT the account. Both are TYPE='MERGER' with a
+      // positive QUANTITY; only the stored HOLDING tells them apart (0 on the
+      // closing row). Seeding the queue from a closing row would resurrect a
+      // position that no longer exists, and — unlike the read-side snapshot —
+      // every Holdings row appended after it would PERSIST that phantom
+      // balance. DEMERGER/SPLIT are unaffected: their rows keep a non-zero
+      // HOLDING.
+      if ((Number(r.HOLDING) || 0) <= 0) continue;
+      if (qty > 0) queue.push({ qty, price });
       continue;
     }
     lastReplaceKey = null;
