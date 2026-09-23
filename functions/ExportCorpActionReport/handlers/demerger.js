@@ -47,11 +47,14 @@ async function buildManifest(zcql, fromDate, toDate) {
   const from = esc(fromDate);
   const to = esc(toDate);
   const events = [];
+  // ZCQL's OFFSET is 1-based, so each page repeats the previous page's last
+  // row; skip it so the same row is not reported twice.
+  const seenRowIds = new Set();
   let offset = 0;
 
   while (true) {
     const rows = await zcql.executeZCQLQuery(`
-      SELECT Old_ISIN, New_ISIN, Ratio1, Ratio2, Effective_Date, Record_Date, Allocation_To_New_Pct
+      SELECT ROWID, Old_ISIN, New_ISIN, Ratio1, Ratio2, Effective_Date, Record_Date, Allocation_To_New_Pct
       FROM Demerger
       WHERE Record_Date >= '${from}' AND Record_Date <= '${to}'
       ORDER BY Record_Date ASC, ROWID ASC
@@ -62,6 +65,10 @@ async function buildManifest(zcql, fromDate, toDate) {
 
     for (const r of rows) {
       const d = r.Demerger || r;
+      if (d.ROWID != null) {
+        if (seenRowIds.has(d.ROWID)) continue;
+        seenRowIds.add(d.ROWID);
+      }
       events.push({
         oldIsin: String(d.Old_ISIN ?? "").trim(),
         newIsin: String(d.New_ISIN ?? "").trim(),
@@ -101,13 +108,16 @@ async function buildEventCsv({ zcql, event, generatedAt, fromDate, toDate, csvCe
      two demergers of the same ISIN pair don't bleed into each other. */
   const oldRows = []; // { acc, key, qty, wap, holdingValue }
   const newRows = [];
+  // ZCQL's OFFSET is 1-based, so each page repeats the previous page's last
+  // row; skip it so the same row is not reported twice.
+  const seenRowIds = new Set();
   let offset = 0;
   const oldEsc = esc(oldIsin);
   const newEsc = esc(newIsin);
 
   while (true) {
     const rows = await zcql.executeZCQLQuery(`
-      SELECT WS_Account_code, ISIN, QTY, WAP, HOLDING_VALUE, TRANDATE, Source_Tran_ROWID, Record_Date
+      SELECT ROWID, WS_Account_code, ISIN, QTY, WAP, HOLDING_VALUE, TRANDATE, Source_Tran_ROWID, Record_Date
       FROM Demerger_Record
       WHERE Tran_Type = 'DEMERGER'
         AND (ISIN = '${oldEsc}' OR ISIN = '${newEsc}')
@@ -119,6 +129,10 @@ async function buildEventCsv({ zcql, event, generatedAt, fromDate, toDate, csvCe
 
     for (const r of rows) {
       const d = r.Demerger_Record || r;
+      if (d.ROWID != null) {
+        if (seenRowIds.has(d.ROWID)) continue;
+        seenRowIds.add(d.ROWID);
+      }
       const acc = String(d.WS_Account_code || "").trim();
       if (!acc) continue;
 

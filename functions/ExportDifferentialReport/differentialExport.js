@@ -17,6 +17,9 @@ const esc = (s) => String(s).replace(/'/g, "''");
  */
 async function fetchAll(zcql, baseQuery, mapFn) {
   const out = [];
+  // ZCQL's OFFSET is 1-based, so each page repeats the previous page's last
+  // row; skip it by ROWID (callers must SELECT ROWID) so it isn't counted twice.
+  const seenRowIds = new Set();
   let offset = 0;
   while (true) {
     const rows = await zcql.executeZCQLQuery(
@@ -24,6 +27,12 @@ async function fetchAll(zcql, baseQuery, mapFn) {
     );
     if (!rows || rows.length === 0) break;
     for (const r of rows) {
+      // ZCQL wraps each row as { TableName: { ...columns } }.
+      const rowId = (r[Object.keys(r)[0]] || {}).ROWID;
+      if (rowId != null) {
+        if (seenRowIds.has(rowId)) continue;
+        seenRowIds.add(rowId);
+      }
       out.push(mapFn(r));
     }
     offset += rows.length;
@@ -81,7 +90,7 @@ async function fetchCustodian(zcql) {
   const map = new Map();
   const rows = await fetchAll(
     zcql,
-    `SELECT UCC, ISIN, NetBalance, ClientName, SecurityName, LTPDate, LTPPrice
+    `SELECT ROWID, UCC, ISIN, NetBalance, ClientName, SecurityName, LTPDate, LTPPrice
      FROM Temp_Custodian
      ORDER BY ROWID ASC`,
     (r) => r.Temp_Custodian || r
@@ -172,6 +181,7 @@ async function fetchTransactionsForAccounts(zcql, accountCodes) {
   if (!accountCodes.length) return [];
 
   const out = [];
+  const seenRowIds = new Set();
   let batchesDone = 0;
 
   for (let i = 0; i < accountCodes.length; i += ACCOUNT_CHUNK) {
@@ -191,7 +201,13 @@ async function fetchTransactionsForAccounts(zcql, accountCodes) {
       `);
       if (!rows || rows.length === 0) break;
       for (const r of rows) {
-        out.push(normalizeTxnRow(r.Transaction || r));
+        const t = r.Transaction || r;
+        // ZCQL's OFFSET is 1-based — skip the repeated page-boundary row.
+        if (t.ROWID != null) {
+          if (seenRowIds.has(t.ROWID)) continue;
+          seenRowIds.add(t.ROWID);
+        }
+        out.push(normalizeTxnRow(t));
       }
       offset += rows.length;
       if (rows.length < BATCH) break;

@@ -62,11 +62,20 @@ const unwrap = (result, tableName) =>
  */
 const selectAll = async (zcql, tableName, buildSql, { maxPages = 200 } = {}) => {
   const rows = [];
+  // ZCQL's OFFSET is 1-based, so each page repeats the previous page's last
+  // row; skip it by ROWID (every caller selects ROWID).
+  const seenRowIds = new Set();
   for (let page = 0; page < maxPages; page++) {
     const offset = page * ZCQL_PAGE;
     const result = await zcql.executeZCQLQuery(buildSql(ZCQL_PAGE, offset));
     const batch = unwrap(result, tableName);
-    rows.push(...batch);
+    for (const row of batch) {
+      if (row.ROWID != null) {
+        if (seenRowIds.has(row.ROWID)) continue;
+        seenRowIds.add(row.ROWID);
+      }
+      rows.push(row);
+    }
     if (batch.length < ZCQL_PAGE) break;
   }
   return rows;

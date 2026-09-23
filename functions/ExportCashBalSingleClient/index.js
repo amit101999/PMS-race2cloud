@@ -54,6 +54,9 @@ module.exports = async (jobRequest, context) => {
       "Tran Date,Set Date,Account Code,ISIN,Security Name,Tran Type,QTY,Rate,STT,Amount,Cash Balance\n"
     );
 
+    // ZCQL's OFFSET is 1-based, so each page repeats the previous page's last
+    // row; skip it by ROWID or that passbook line is exported twice.
+    const seenRowIds = new Set();
     let offset = 0;
     let totalRows = 0;
 
@@ -64,6 +67,10 @@ module.exports = async (jobRequest, context) => {
 
       for (const r of rows) {
         const row = r.Cash_Balance_Per_Transaction || r;
+        if (row.ROWID != null) {
+          if (seenRowIds.has(row.ROWID)) continue;
+          seenRowIds.add(row.ROWID);
+        }
         const tranType = (row.Transaction_Type || "").trim();
 
         const line = [

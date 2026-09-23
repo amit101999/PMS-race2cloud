@@ -176,6 +176,9 @@ function mapOutflow(t) {
 
 async function fetchBatched(zcql, baseQuery, mapper) {
   const rows = [];
+  // ZCQL's OFFSET is 1-based, so each page repeats the previous page's last
+  // row. Skip it, or that transaction is applied to the cash balance twice.
+  const seenRowIds = new Set();
   let offset = 0;
   while (true) {
     const query = baseQuery + ` LIMIT ${BATCH_SIZE} OFFSET ${offset}`;
@@ -183,6 +186,10 @@ async function fetchBatched(zcql, baseQuery, mapper) {
     if (!batch || batch.length === 0) break;
     for (const row of batch) {
       const t = row.Transaction || row;
+      if (t.ROWID != null) {
+        if (seenRowIds.has(t.ROWID)) continue;
+        seenRowIds.add(t.ROWID);
+      }
       rows.push(mapper(t));
     }
     if (batch.length < BATCH_SIZE) break;

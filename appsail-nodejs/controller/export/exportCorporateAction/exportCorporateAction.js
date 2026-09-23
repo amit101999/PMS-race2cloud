@@ -180,7 +180,7 @@ export const exportCorporateAction = async (req, res) => {
 
     while (true) {
       const rows = await zcql.executeZCQLQuery(`
-        SELECT ISIN, Issue_Date, Ratio1, Ratio2, Security_Code, Security_Name
+        SELECT ROWID, ISIN, Issue_Date, Ratio1, Ratio2, Security_Code, Security_Name
         FROM Split
         WHERE Issue_Date >= '${fromISO}' AND Issue_Date <= '${toISO}'
         ORDER BY Issue_Date ASC, ROWID ASC
@@ -198,7 +198,7 @@ export const exportCorporateAction = async (req, res) => {
  
      while (true) {
        const rows = await zcql.executeZCQLQuery(`
-         SELECT SecurityCode, Security_Name, ISIN, Rate, ExDate, RecordDate, PaymentDate, Dividend_Type
+         SELECT ROWID, SecurityCode, Security_Name, ISIN, Rate, ExDate, RecordDate, PaymentDate, Dividend_Type
          FROM Dividend
          WHERE RecordDate>= '${fromISO}' AND RecordDate <= '${toISO}'
          ORDER BY RecordDate ASC, ROWID ASC
@@ -281,9 +281,17 @@ export const exportCorporateAction = async (req, res) => {
     const bonusEvents = Object.values(bonusByEvent);
 
     /* ---------- NORMALIZE SPLIT ROWS ---------- */
+    // ZCQL's OFFSET is 1-based, so each page above repeats the previous page's
+    // last row. Split and dividend have no event-key dedupe (bonus / demerger /
+    // merger do), so skip repeated ROWIDs or the event is exported twice.
     const splitEvents = [];
+    const seenSplitRowIds = new Set();
     for (const r of splitRows) {
       const s = r.Split || r;
+      if (s.ROWID != null) {
+        if (seenSplitRowIds.has(s.ROWID)) continue;
+        seenSplitRowIds.add(s.ROWID);
+      }
       const securityCode = s.Security_Code ?? "";
       const securityName = s.Security_Name ?? "";
       const splitIsin = String(s.ISIN ?? "").trim();
@@ -303,8 +311,13 @@ export const exportCorporateAction = async (req, res) => {
     }
     /* ---------- NORMALIZE DIVIDEND ROWS ---------- */
     const dividendEvents = [];
+    const seenDividendRowIds = new Set();
     for (const r of dividendRows) {
       const d = r.Dividend || r;
+      if (d.ROWID != null) {
+        if (seenDividendRowIds.has(d.ROWID)) continue;
+        seenDividendRowIds.add(d.ROWID);
+      }
       const divIsin = String(d.ISIN ?? "").trim();
       dividendEvents.push({
         date: d.RecordDate ?? "",

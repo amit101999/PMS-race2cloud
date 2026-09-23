@@ -45,11 +45,14 @@ async function buildManifest(zcql, fromDate, toDate) {
   const from = esc(fromDate);
   const to = esc(toDate);
   const events = [];
+  // ZCQL's OFFSET is 1-based, so each page repeats the previous page's last
+  // row; skip it so the same row is not reported twice.
+  const seenRowIds = new Set();
   let offset = 0;
 
   while (true) {
     const rows = await zcql.executeZCQLQuery(`
-      SELECT Security_Code, Security_Name, Ratio1, Ratio2, Issue_Date, ISIN
+      SELECT ROWID, Security_Code, Security_Name, Ratio1, Ratio2, Issue_Date, ISIN
       FROM Split
       WHERE Issue_Date >= '${from}' AND Issue_Date <= '${to}'
       ORDER BY Issue_Date ASC, ROWID ASC
@@ -60,6 +63,10 @@ async function buildManifest(zcql, fromDate, toDate) {
 
     for (const r of rows) {
       const s = r.Split || r;
+      if (s.ROWID != null) {
+        if (seenRowIds.has(s.ROWID)) continue;
+        seenRowIds.add(s.ROWID);
+      }
       events.push({
         isin: String(s.ISIN ?? "").trim(),
         issueDate: String(s.Issue_Date ?? "").slice(0, 10),

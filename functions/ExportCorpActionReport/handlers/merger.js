@@ -82,11 +82,14 @@ async function buildManifest(zcql, fromDate, toDate) {
   const to = String(toDate ?? "").slice(0, 10);
   const recordDateByEvent = await fetchRecordDateByEvent(zcql);
   const events = [];
+  // ZCQL's OFFSET is 1-based, so each page repeats the previous page's last
+  // row; skip it so the same row is not reported twice.
+  const seenRowIds = new Set();
   let offset = 0;
 
   while (true) {
     const rows = await zcql.executeZCQLQuery(`
-      SELECT ISIN, OldISIN, Security_Code, Security_Name, Ratio1, Ratio2, TRANDATE, SETDATE
+      SELECT ROWID, ISIN, OldISIN, Security_Code, Security_Name, Ratio1, Ratio2, TRANDATE, SETDATE
       FROM Merger_Record
       ORDER BY TRANDATE ASC, ROWID ASC
       LIMIT ${MANIFEST_BATCH} OFFSET ${offset}
@@ -96,6 +99,10 @@ async function buildManifest(zcql, fromDate, toDate) {
 
     for (const r of rows) {
       const m = r.Merger_Record || r;
+      if (m.ROWID != null) {
+        if (seenRowIds.has(m.ROWID)) continue;
+        seenRowIds.add(m.ROWID);
+      }
       const oldIsin = String(m.OldISIN ?? "").trim();
       const newIsin = String(m.ISIN ?? "").trim();
       const effectiveDate = String(m.TRANDATE ?? "").slice(0, 10);
@@ -138,13 +145,16 @@ async function buildEventCsv({ zcql, event, generatedAt, fromDate, toDate, csvCe
      weighted-average price. Zero-quantity rows are markers that the old
      company no longer exists — skip them. */
   const lots = []; // { acc, quantity, wap, recordDate }
+  // ZCQL's OFFSET is 1-based, so each page repeats the previous page's last
+  // row; skip it so the same row is not reported twice.
+  const seenRowIds = new Set();
   let offset = 0;
   const oldEsc = esc(oldIsin);
   const newEsc = esc(newIsin);
 
   while (true) {
     const rows = await zcql.executeZCQLQuery(`
-      SELECT WS_Account_code, Quantity, WAP, Record_Date
+      SELECT ROWID, WS_Account_code, Quantity, WAP, Record_Date
       FROM Merger
       WHERE OldISIN = '${oldEsc}' AND ISIN = '${newEsc}' AND Tran_Type = 'MERGER'
       ORDER BY ROWID ASC
@@ -155,6 +165,10 @@ async function buildEventCsv({ zcql, event, generatedAt, fromDate, toDate, csvCe
 
     for (const r of rows) {
       const m = r.Merger || r;
+      if (m.ROWID != null) {
+        if (seenRowIds.has(m.ROWID)) continue;
+        seenRowIds.add(m.ROWID);
+      }
       const acc = String(m.WS_Account_code || "").trim();
       if (!acc) continue;
 
