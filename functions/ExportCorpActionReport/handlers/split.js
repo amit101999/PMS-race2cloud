@@ -96,13 +96,16 @@ async function buildEventCsv({ zcql, event, generatedAt, fromDate, toDate, csvCe
      TOTAL_AMOUNT = lot cost (falls back to QUANTITY * PRICE). Summing is
      order-independent, so we never depend on a running-balance/last row. */
   const byAccount = new Map(); // account -> { qty, cost }
+  // ZCQL's OFFSET is 1-based, so each page repeats the previous page's last
+  // row; skip it so that trade is not counted twice.
+  const seenRowIds = new Set();
   let offset = 0;
   const isinEsc = esc(isin);
   const dateEsc = esc(issueDate);
 
   while (true) {
     const rows = await zcql.executeZCQLQuery(`
-      SELECT WS_Account_code, QUANTITY, PRICE, TOTAL_AMOUNT
+      SELECT ROWID, WS_Account_code, QUANTITY, PRICE, TOTAL_AMOUNT
       FROM Holdings
       WHERE ISIN = '${isinEsc}' AND TYPE = 'SPLIT' AND TRANSACTION_DATE = '${dateEsc}'
       ORDER BY CREATEDTIME ASC, ROWID ASC
@@ -113,6 +116,10 @@ async function buildEventCsv({ zcql, event, generatedAt, fromDate, toDate, csvCe
 
     for (const r of rows) {
       const h = r.Holdings || r;
+      if (h.ROWID != null) {
+        if (seenRowIds.has(h.ROWID)) continue;
+        seenRowIds.add(h.ROWID);
+      }
       const acc = String(h.WS_Account_code || "").trim();
       if (!acc) continue;
       const qty = Number(h.QUANTITY) || 0;

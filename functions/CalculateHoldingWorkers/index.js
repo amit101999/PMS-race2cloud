@@ -453,6 +453,9 @@ async function fetchLastHoldingsRowForPair(zcql, accountCode, isin) {
 /** All Holdings rows for one pair, in canonical FIFO order (insert order). */
 async function fetchAllHoldingsRowsForPair(zcql, accountCode, isin) {
   const rows = [];
+  // ZCQL's OFFSET is 1-based, so each page repeats the previous page's last
+  // row; skip it so that trade is not counted twice.
+  const seenRowIds = new Set();
   let offset = 0;
   while (true) {
     try {
@@ -467,6 +470,10 @@ async function fetchAllHoldingsRowsForPair(zcql, accountCode, isin) {
       if (!batch || batch.length === 0) break;
       for (const row of batch) {
         const r = row.Holdings || row;
+        if (r.ROWID != null) {
+          if (seenRowIds.has(r.ROWID)) continue;
+          seenRowIds.add(r.ROWID);
+        }
         rows.push(r);
       }
       if (batch.length < BATCH) break;
