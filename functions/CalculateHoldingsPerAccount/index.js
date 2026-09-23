@@ -864,7 +864,10 @@ function runFifoEngine(
 
 /** Row count for append mode (same order as reads: CREATEDTIME ASC, ROWID ASC). */
 async function countHoldingsRowsForPair(zcql, accountCode, isin) {
-  let count = 0;
+  // Count distinct ROWIDs: ZCQL's OFFSET is 1-based, so each page repeats the
+  // previous page's last row. Over-counting here would make append mode start
+  // one row late and silently skip a new trade.
+  const seenRowIds = new Set();
   let offset = 0;
   while (true) {
     const batch = await zcql.executeZCQLQuery(`
@@ -874,11 +877,11 @@ async function countHoldingsRowsForPair(zcql, accountCode, isin) {
       LIMIT ${BATCH} OFFSET ${offset}
     `);
     if (!batch || batch.length === 0) break;
-    count += batch.length;
+    for (const row of batch) seenRowIds.add((row.Holdings || row).ROWID);
     if (batch.length < BATCH) break;
     offset += BATCH;
   }
-  return count;
+  return seenRowIds.size;
 }
 
 /**

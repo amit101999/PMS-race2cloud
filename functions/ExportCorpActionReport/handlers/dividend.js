@@ -53,11 +53,14 @@ async function buildManifest(zcql, fromDate, toDate) {
   const from = esc(fromDate);
   const to = esc(toDate);
   const events = [];
+  // ZCQL's OFFSET is 1-based, so each page repeats the previous page's last
+  // row; skip it so the same row is not reported twice.
+  const seenRowIds = new Set();
   let offset = 0;
 
   while (true) {
     const rows = await zcql.executeZCQLQuery(`
-      SELECT SecurityCode, Security_Name, ISIN, Rate, RecordDate, PaymentDate, Dividend_Type
+      SELECT ROWID, SecurityCode, Security_Name, ISIN, Rate, RecordDate, PaymentDate, Dividend_Type
       FROM Dividend
       WHERE RecordDate >= '${from}' AND RecordDate <= '${to}'
       ORDER BY RecordDate ASC, ROWID ASC
@@ -68,6 +71,10 @@ async function buildManifest(zcql, fromDate, toDate) {
 
     for (const r of rows) {
       const d = r.Dividend || r;
+      if (d.ROWID != null) {
+        if (seenRowIds.has(d.ROWID)) continue;
+        seenRowIds.add(d.ROWID);
+      }
       events.push({
         isin: String(d.ISIN ?? "").trim(),
         recordDate: String(d.RecordDate ?? "").slice(0, 10),
@@ -100,13 +107,16 @@ async function buildEventCsv({ zcql, event, generatedAt, fromDate, toDate, csvCe
      Dividend_Amount are all applied values. Summing defensively in case of any
      duplicate rows. */
   const byAccount = new Map(); // account -> { holding, cash, rate }
+  // ZCQL's OFFSET is 1-based, so each page repeats the previous page's last
+  // row; skip it so the same row is not reported twice.
+  const seenRowIds = new Set();
   let offset = 0;
   const isinEsc = esc(isin);
   const dateEsc = esc(recordDate);
 
   while (true) {
     const rows = await zcql.executeZCQLQuery(`
-      SELECT WS_Account_code, Holding, Rate, Dividend_Amount
+      SELECT ROWID, WS_Account_code, Holding, Rate, Dividend_Amount
       FROM Dividend_Record
       WHERE ISIN = '${isinEsc}' AND RecordDate = '${dateEsc}'
       ORDER BY ROWID ASC
@@ -117,6 +127,10 @@ async function buildEventCsv({ zcql, event, generatedAt, fromDate, toDate, csvCe
 
     for (const r of rows) {
       const d = r.Dividend_Record || r;
+      if (d.ROWID != null) {
+        if (seenRowIds.has(d.ROWID)) continue;
+        seenRowIds.add(d.ROWID);
+      }
       const acc = String(d.WS_Account_code || "").trim();
       if (!acc) continue;
 

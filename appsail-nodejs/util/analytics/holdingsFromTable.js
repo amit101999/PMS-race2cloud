@@ -490,6 +490,21 @@ export function recomputeHoldingsSnapshot(rows) {
         lots = [];
         lastReplaceEventKey = eventKey;
       }
+      /*
+       * A merger writes TWO kinds of row and they look identical here: the
+       * surviving ISIN gets one row per lot RECEIVED, and the merged-away ISIN
+       * gets one row for the quantity that LEFT the account. Both are
+       * TYPE='MERGER' with a positive QUANTITY, so restating the position to
+       * QUANTITY revives the dead security at its full pre-merger size — it
+       * then shows up next to the surviving one for the same quantity (a
+       * double count), and counts as eligible for bonus / split / dividend.
+       * The stored HOLDING is what tells them apart: 0 on the closing row, the
+       * running balance on a receiving one. The event has already cleared the
+       * lots above, so a closing row simply adds nothing back.
+       * DEMERGER is unaffected: its old-ISIN row keeps the unchanged quantity
+       * and a non-zero HOLDING (only the cost is reduced).
+       */
+      if ((Number(h.HOLDING) || 0) <= QTY_EPS) continue;
       if (qty > QTY_EPS) {
         let price = Number(h.PRICE) || 0;
         const total = Number(h.TOTAL_AMOUNT) || 0;

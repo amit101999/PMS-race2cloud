@@ -10,6 +10,20 @@ const esc = (s) => String(s).replace(/'/g, "''");
 /* ----------------- DB HELPERS ------------------- */
 /* ------------------------------------------------ */
 
+/**
+ * ZCQL's OFFSET is 1-based, so each page repeats the previous page's last row.
+ * Returns only the rows whose ROWID has not been seen yet (queries must SELECT
+ * ROWID). ZCQL wraps each row as { TableName: { ...columns } }.
+ */
+const dropSeenRows = (rows, seenRowIds) =>
+  rows.filter((r) => {
+    const rowId = (r[Object.keys(r)[0]] || {}).ROWID;
+    if (rowId == null) return true;
+    if (seenRowIds.has(rowId)) return false;
+    seenRowIds.add(rowId);
+    return true;
+  });
+
 const toFifoTxnRow = (r) => {
   const t = r.Transaction || r.Temp_Transaction || r;
   return {
@@ -26,6 +40,7 @@ const toFifoTxnRow = (r) => {
 
 const fetchTxnRows = async (zcql, tableName, isin, accountCode) => {
   const out = [];
+  const seenRowIds = new Set();
   let offset = 0;
 
   while (true) {
@@ -38,7 +53,7 @@ const fetchTxnRows = async (zcql, tableName, isin, accountCode) => {
     `);
 
     if (!rows?.length) break;
-    rows.forEach((r) => out.push(toFifoTxnRow(r)));
+    dropSeenRows(rows, seenRowIds).forEach((r) => out.push(toFifoTxnRow(r)));
     if (rows.length < BATCH) break;
     offset += BATCH;
   }
@@ -48,6 +63,7 @@ const fetchTxnRows = async (zcql, tableName, isin, accountCode) => {
 
 const fetchBonusRows = async (zcql, isin, accountCode) => {
   const out = [];
+  const seenRowIds = new Set();
   let offset = 0;
 
   while (true) {
@@ -61,7 +77,7 @@ const fetchBonusRows = async (zcql, isin, accountCode) => {
 
     if (!rows?.length) break;
 
-    rows.forEach((r) => {
+    dropSeenRows(rows, seenRowIds).forEach((r) => {
       const b = r.Bonus || r;
       out.push({
         ROWID: b.ROWID,
@@ -80,6 +96,7 @@ const fetchBonusRows = async (zcql, isin, accountCode) => {
 
 const fetchSplitRows = async (zcql, isin) => {
   const out = [];
+  const seenRowIds = new Set();
   let offset = 0;
 
   while (true) {
@@ -93,7 +110,7 @@ const fetchSplitRows = async (zcql, isin) => {
 
     if (!rows?.length) break;
 
-    rows.forEach((r) => {
+    dropSeenRows(rows, seenRowIds).forEach((r) => {
       const s = r.Split || r;
       out.push({
         issueDate: s.Issue_Date,
@@ -128,11 +145,12 @@ const fetchSplitRows = async (zcql, isin) => {
  */
 const getAllGroups = async (zcql) => {
   const groupCounts = new Map();
+  const seenRowIds = new Set();
   let offset = 0;
 
   while (true) {
     const rows = await zcql.executeZCQLQuery(`
-      SELECT WS_Account_code, ISIN
+      SELECT ROWID, WS_Account_code, ISIN
       FROM Temp_Transaction
       ORDER BY WS_Account_code, ISIN, ROWID
       LIMIT ${MAX_ZCQL_ROWS} OFFSET ${offset}
@@ -140,7 +158,7 @@ const getAllGroups = async (zcql) => {
 
     if (!rows?.length) break;
 
-    for (const r of rows) {
+    for (const r of dropSeenRows(rows, seenRowIds)) {
       const t = r.Temp_Transaction || r;
       const accountCode = (t.WS_Account_code ?? "").toString().trim();
       const isin = (t.ISIN ?? "").toString().trim();

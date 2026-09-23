@@ -32,20 +32,65 @@ const esc = (s) => String(s ?? "").replace(/'/g, "''");
 const isIsoDate = (s) => /^\d{4}-\d{2}-\d{2}$/.test(String(s || "").trim());
 
 /**
- * Frozen work list: every merger whose TRANDATE (effective date) falls in
- * [fromDate, toDate]. One manifest entry == one merger event.
+ * Record date per merger event, keyed `OldISIN|ISIN`.
+ *
+ * The record date exists ONLY on the per-account `Merger` rows.
+ * `Merger_Record` stores the effective date in both TRANDATE and SETDATE and
+ * has no record-date column at all, so the event list cannot be filtered by
+ * record date without this lookup. One grouped query covers every event.
+ */
+async function fetchRecordDateByEvent(zcql) {
+  const byEvent = new Map();
+  let offset = 0;
+  while (true) {
+    const rows = await zcql.executeZCQLQuery(`
+      SELECT OldISIN, ISIN, Record_Date
+      FROM Merger
+      WHERE Tran_Type = 'MERGER'
+      GROUP BY OldISIN, ISIN, Record_Date
+      LIMIT ${MANIFEST_BATCH} OFFSET ${offset}
+    `);
+    if (!rows || rows.length === 0) break;
+    for (const r of rows) {
+      const m = r.Merger || r;
+      const oldIsin = String(m.OldISIN ?? "").trim();
+      const newIsin = String(m.ISIN ?? "").trim();
+      const recordDate = String(m.Record_Date ?? "").slice(0, 10);
+      if (oldIsin && newIsin && recordDate) byEvent.set(`${oldIsin}|${newIsin}`, recordDate);
+    }
+    if (rows.length < MANIFEST_BATCH) break;
+    offset += MANIFEST_BATCH;
+  }
+  return byEvent;
+}
+
+/**
+ * Frozen work list: every merger whose RECORD date falls in [fromDate, toDate].
+ * One manifest entry == one merger event.
+ *
+ * Selected by record date, not by `Merger_Record.TRANDATE` (the effective
+ * date): the record date is the day a holding stops being reported under the
+ * old ISIN and starts being reported under the new one, so it is the date every
+ * other report keys the merger on. The two can differ by days — Piramal is
+ * effective 2025-09-16 but record-dated 2025-09-23 — and filtering on the
+ * effective date hid such a merger from a range that contained its record date.
+ * Events with no per-account `Merger` rows have no record date; they fall back
+ * to the effective date and produce no CSV rows anyway (see buildEventCsv).
  */
 async function buildManifest(zcql, fromDate, toDate) {
-  const from = esc(fromDate);
-  const to = esc(toDate);
+  const from = String(fromDate ?? "").slice(0, 10);
+  const to = String(toDate ?? "").slice(0, 10);
+  const recordDateByEvent = await fetchRecordDateByEvent(zcql);
   const events = [];
+  // ZCQL's OFFSET is 1-based, so each page repeats the previous page's last
+  // row; skip it so the same row is not reported twice.
+  const seenRowIds = new Set();
   let offset = 0;
 
   while (true) {
     const rows = await zcql.executeZCQLQuery(`
-      SELECT ISIN, OldISIN, Security_Code, Security_Name, Ratio1, Ratio2, TRANDATE, SETDATE
+      SELECT ROWID, ISIN, OldISIN, Security_Code, Security_Name, Ratio1, Ratio2, TRANDATE, SETDATE
       FROM Merger_Record
-      WHERE TRANDATE >= '${from}' AND TRANDATE <= '${to}'
       ORDER BY TRANDATE ASC, ROWID ASC
       LIMIT ${MANIFEST_BATCH} OFFSET ${offset}
     `);
@@ -54,10 +99,21 @@ async function buildManifest(zcql, fromDate, toDate) {
 
     for (const r of rows) {
       const m = r.Merger_Record || r;
+      if (m.ROWID != null) {
+        if (seenRowIds.has(m.ROWID)) continue;
+        seenRowIds.add(m.ROWID);
+      }
+      const oldIsin = String(m.OldISIN ?? "").trim();
+      const newIsin = String(m.ISIN ?? "").trim();
+      const effectiveDate = String(m.TRANDATE ?? "").slice(0, 10);
+      const recordDate = recordDateByEvent.get(`${oldIsin}|${newIsin}`) || effectiveDate;
+      if (!recordDate || recordDate < from || recordDate > to) continue;
+
       events.push({
-        oldIsin: String(m.OldISIN ?? "").trim(),
-        newIsin: String(m.ISIN ?? "").trim(),
-        effectiveDate: String(m.TRANDATE ?? "").slice(0, 10),
+        oldIsin,
+        newIsin,
+        effectiveDate,
+        recordDate,
         ratio1: Number(m.Ratio1),
         ratio2: Number(m.Ratio2),
         securityCode: m.Security_Code ?? "",
@@ -69,6 +125,7 @@ async function buildManifest(zcql, fromDate, toDate) {
     offset += MANIFEST_BATCH;
   }
 
+  events.sort((a, b) => a.recordDate.localeCompare(b.recordDate));
   return events;
 }
 
@@ -88,13 +145,16 @@ async function buildEventCsv({ zcql, event, generatedAt, fromDate, toDate, csvCe
      weighted-average price. Zero-quantity rows are markers that the old
      company no longer exists — skip them. */
   const lots = []; // { acc, quantity, wap, recordDate }
+  // ZCQL's OFFSET is 1-based, so each page repeats the previous page's last
+  // row; skip it so the same row is not reported twice.
+  const seenRowIds = new Set();
   let offset = 0;
   const oldEsc = esc(oldIsin);
   const newEsc = esc(newIsin);
 
   while (true) {
     const rows = await zcql.executeZCQLQuery(`
-      SELECT WS_Account_code, Quantity, WAP, Record_Date
+      SELECT ROWID, WS_Account_code, Quantity, WAP, Record_Date
       FROM Merger
       WHERE OldISIN = '${oldEsc}' AND ISIN = '${newEsc}' AND Tran_Type = 'MERGER'
       ORDER BY ROWID ASC
@@ -105,6 +165,10 @@ async function buildEventCsv({ zcql, event, generatedAt, fromDate, toDate, csvCe
 
     for (const r of rows) {
       const m = r.Merger || r;
+      if (m.ROWID != null) {
+        if (seenRowIds.has(m.ROWID)) continue;
+        seenRowIds.add(m.ROWID);
+      }
       const acc = String(m.WS_Account_code || "").trim();
       if (!acc) continue;
 

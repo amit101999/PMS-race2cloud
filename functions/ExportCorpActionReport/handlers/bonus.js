@@ -35,11 +35,14 @@ async function buildManifest(zcql, fromDate, toDate) {
   const from = esc(fromDate);
   const to = esc(toDate);
   const events = [];
+  // ZCQL's OFFSET is 1-based, so each page repeats the previous page's last
+  // row; skip it so the same row is not reported twice.
+  const seenRowIds = new Set();
   let offset = 0;
 
   while (true) {
     const rows = await zcql.executeZCQLQuery(`
-      SELECT SecurityCode, SecurityName, Ratio1, Ratio2, ExDate, ISIN
+      SELECT ROWID, SecurityCode, SecurityName, Ratio1, Ratio2, ExDate, ISIN
       FROM Bonus_Record
       WHERE ExDate >= '${from}' AND ExDate <= '${to}'
       ORDER BY ExDate ASC, ROWID ASC
@@ -50,6 +53,10 @@ async function buildManifest(zcql, fromDate, toDate) {
 
     for (const r of rows) {
       const b = r.Bonus_Record || r;
+      if (b.ROWID != null) {
+        if (seenRowIds.has(b.ROWID)) continue;
+        seenRowIds.add(b.ROWID);
+      }
       events.push({
         isin: String(b.ISIN ?? "").trim(),
         exDate: String(b.ExDate ?? "").slice(0, 10),
@@ -82,13 +89,16 @@ async function buildEventCsv({ zcql, event, generatedAt, fromDate, toDate, csvCe
      One `Bonus` row per affected account per event; BonusShare is the applied
      count. Summing defensively in case of any duplicate rows. */
   const byAccount = new Map(); // account -> shares allocated
+  // ZCQL's OFFSET is 1-based, so each page repeats the previous page's last
+  // row; skip it so the same row is not reported twice.
+  const seenRowIds = new Set();
   let offset = 0;
   const isinEsc = esc(isin);
   const dateEsc = esc(exDate);
 
   while (true) {
     const rows = await zcql.executeZCQLQuery(`
-      SELECT WS_Account_code, BonusShare
+      SELECT ROWID, WS_Account_code, BonusShare
       FROM Bonus
       WHERE ISIN = '${isinEsc}' AND ExDate = '${dateEsc}'
       ORDER BY ROWID ASC
@@ -99,6 +109,10 @@ async function buildEventCsv({ zcql, event, generatedAt, fromDate, toDate, csvCe
 
     for (const r of rows) {
       const b = r.Bonus || r;
+      if (b.ROWID != null) {
+        if (seenRowIds.has(b.ROWID)) continue;
+        seenRowIds.add(b.ROWID);
+      }
       const acc = String(b.WS_Account_code || "").trim();
       if (!acc) continue;
       const shares = Number(b.BonusShare) || 0;

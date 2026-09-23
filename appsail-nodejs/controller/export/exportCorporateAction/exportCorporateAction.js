@@ -4,6 +4,40 @@ const BATCH_SIZE = 200;
 
 const esc = (s) => String(s ?? "").replace(/'/g, "''");
 
+/**
+ * Record date per merger event, keyed `OldISIN|ISIN`.
+ *
+ * The record date exists ONLY on the per-account `Merger` rows.
+ * `Merger_Record` has no record-date column — the apply job writes the
+ * EFFECTIVE date into both its TRANDATE and its SETDATE — so neither filtering
+ * nor reporting by record date is possible without this lookup. One grouped
+ * query covers every event.
+ */
+async function fetchRecordDateByEvent(zcql) {
+  const byEvent = new Map();
+  let offset = 0;
+  while (true) {
+    const rows = await zcql.executeZCQLQuery(`
+      SELECT OldISIN, ISIN, Record_Date
+      FROM Merger
+      WHERE Tran_Type = 'MERGER'
+      GROUP BY OldISIN, ISIN, Record_Date
+      LIMIT ${BATCH_SIZE} OFFSET ${offset}
+    `);
+    if (!rows || rows.length === 0) break;
+    for (const r of rows) {
+      const m = r.Merger || r;
+      const oldIsin = String(m.OldISIN ?? "").trim();
+      const newIsin = String(m.ISIN ?? "").trim();
+      const recordDate = String(m.Record_Date ?? "").slice(0, 10);
+      if (oldIsin && newIsin && recordDate) byEvent.set(`${oldIsin}|${newIsin}`, recordDate);
+    }
+    if (rows.length < BATCH_SIZE) break;
+    offset += BATCH_SIZE;
+  }
+  return byEvent;
+}
+
 const parseCatalystTime = (ct) => {
   if (!ct) return 0;
   // Catalyst CREATEDTIME is an IST (UTC+05:30) wall-clock string like
@@ -146,7 +180,7 @@ export const exportCorporateAction = async (req, res) => {
 
     while (true) {
       const rows = await zcql.executeZCQLQuery(`
-        SELECT ISIN, Issue_Date, Ratio1, Ratio2, Security_Code, Security_Name
+        SELECT ROWID, ISIN, Issue_Date, Ratio1, Ratio2, Security_Code, Security_Name
         FROM Split
         WHERE Issue_Date >= '${fromISO}' AND Issue_Date <= '${toISO}'
         ORDER BY Issue_Date ASC, ROWID ASC
@@ -164,7 +198,7 @@ export const exportCorporateAction = async (req, res) => {
  
      while (true) {
        const rows = await zcql.executeZCQLQuery(`
-         SELECT SecurityCode, Security_Name, ISIN, Rate, ExDate, RecordDate, PaymentDate, Dividend_Type
+         SELECT ROWID, SecurityCode, Security_Name, ISIN, Rate, ExDate, RecordDate, PaymentDate, Dividend_Type
          FROM Dividend
          WHERE RecordDate>= '${fromISO}' AND RecordDate <= '${toISO}'
          ORDER BY RecordDate ASC, ROWID ASC
@@ -198,7 +232,7 @@ export const exportCorporateAction = async (req, res) => {
       offset += BATCH_SIZE;
     }
 
-    /* ---------- MERGER master row per apply (Merger_Record, TRANDATE in range) ---------- */
+    /* ---------- MERGER master rows (range filter applied on RECORD date below) ---------- */
     const mergerRecordRows = [];
     offset = 0;
 
@@ -206,7 +240,6 @@ export const exportCorporateAction = async (req, res) => {
       const rows = await zcql.executeZCQLQuery(`
         SELECT ISIN, Security_Code, Security_Name, OldISIN, Ratio1, Ratio2, TRANDATE, SETDATE
         FROM Merger_Record
-        WHERE TRANDATE >= '${fromISO}' AND TRANDATE <= '${toISO}'
         ORDER BY TRANDATE ASC, ROWID ASC
         LIMIT ${BATCH_SIZE} OFFSET ${offset}
       `);
@@ -216,6 +249,8 @@ export const exportCorporateAction = async (req, res) => {
       if (rows.length < BATCH_SIZE) break;
       offset += BATCH_SIZE;
     }
+
+    const mergerRecordDateByEvent = await fetchRecordDateByEvent(zcql);
 
     /* ---------- DEDUPE BONUS BY (ExDate, SecurityCode, SecurityName, ISIN) ---------- */
     const bonusByEvent = {};
@@ -246,9 +281,17 @@ export const exportCorporateAction = async (req, res) => {
     const bonusEvents = Object.values(bonusByEvent);
 
     /* ---------- NORMALIZE SPLIT ROWS ---------- */
+    // ZCQL's OFFSET is 1-based, so each page above repeats the previous page's
+    // last row. Split and dividend have no event-key dedupe (bonus / demerger /
+    // merger do), so skip repeated ROWIDs or the event is exported twice.
     const splitEvents = [];
+    const seenSplitRowIds = new Set();
     for (const r of splitRows) {
       const s = r.Split || r;
+      if (s.ROWID != null) {
+        if (seenSplitRowIds.has(s.ROWID)) continue;
+        seenSplitRowIds.add(s.ROWID);
+      }
       const securityCode = s.Security_Code ?? "";
       const securityName = s.Security_Name ?? "";
       const splitIsin = String(s.ISIN ?? "").trim();
@@ -268,8 +311,13 @@ export const exportCorporateAction = async (req, res) => {
     }
     /* ---------- NORMALIZE DIVIDEND ROWS ---------- */
     const dividendEvents = [];
+    const seenDividendRowIds = new Set();
     for (const r of dividendRows) {
       const d = r.Dividend || r;
+      if (d.ROWID != null) {
+        if (seenDividendRowIds.has(d.ROWID)) continue;
+        seenDividendRowIds.add(d.ROWID);
+      }
       const divIsin = String(d.ISIN ?? "").trim();
       dividendEvents.push({
         date: d.RecordDate ?? "",
@@ -367,14 +415,22 @@ export const exportCorporateAction = async (req, res) => {
     const mergerByEvent = {};
     for (const r of mergerRecordRows) {
       const m = r.Merger_Record || r;
-      const td = m.TRANDATE ?? "";
+      const td = String(m.TRANDATE ?? "").slice(0, 10);
       const newIsin = m.ISIN ?? "";
       const oldIsin = m.OldISIN ?? "";
-      const key = `${td}|${newIsin}|${oldIsin}|${m.Ratio1 ?? ""}|${m.Ratio2 ?? ""}`;
+      // A merger is dated by its RECORD date — the day holdings stop being
+      // reported under the old ISIN and start under the new one — so that is
+      // what both the range filter and the DATE column use. TRANDATE is the
+      // effective date and keeps its own column. Events with no per-account
+      // `Merger` rows have no record date and fall back to the effective date.
+      const recordDate =
+        mergerRecordDateByEvent.get(`${String(oldIsin).trim()}|${String(newIsin).trim()}`) || td;
+      if (!recordDate || recordDate < fromISO || recordDate > toISO) continue;
+      const key = `${recordDate}|${newIsin}|${oldIsin}|${m.Ratio1 ?? ""}|${m.Ratio2 ?? ""}`;
       if (!mergerByEvent[key]) {
         const secName = m.Security_Name ?? "";
         mergerByEvent[key] = {
-          date: td,
+          date: recordDate,
           ratio1: m.Ratio1 ?? "",
           ratio2: m.Ratio2 ?? "",
           type: "merger",
@@ -388,7 +444,7 @@ export const exportCorporateAction = async (req, res) => {
           oldIsin: oldIsin || "",
           newIsin: newIsin || "",
           effectiveDate: td,
-          recordDate: m.SETDATE ?? td,
+          recordDate,
           allocationToNewPct: "",
         };
       }
