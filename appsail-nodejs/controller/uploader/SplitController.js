@@ -156,11 +156,14 @@ export const previewStockSplit = async (req, res) => {
        ====================================================== */
     const latestByAccount = new Map(); // accountCode → last Holdings row
     const rowsByAccount = new Map(); // accountCode → every effective row, for re-derivation
+    // ZCQL's OFFSET is 1-based, so each page repeats the previous page's last
+    // row; skip it or recomputeHoldingsSnapshot counts that trade twice.
+    const seenRowIds = new Set();
     let offset = 0;
 
     while (true) {
       const batch = await zcql.executeZCQLQuery(`
-        SELECT WS_Account_code, HOLDING, WAP, HOLDING_VALUE,
+        SELECT ROWID, WS_Account_code, HOLDING, WAP, HOLDING_VALUE,
                QUANTITY, PRICE, TOTAL_AMOUNT,
                TYPE, SETTLEMENT_DATE, TRANSACTION_DATE, CA_DATE
         FROM Holdings
@@ -174,6 +177,10 @@ export const previewStockSplit = async (req, res) => {
 
       for (const row of batch) {
         const h = row.Holdings || row;
+        if (h.ROWID != null) {
+          if (seenRowIds.has(h.ROWID)) continue;
+          seenRowIds.add(h.ROWID);
+        }
         const acc = String(h.WS_Account_code || "").trim();
         if (!acc) continue;
         // The SQL clause above deliberately ORs both dates — it cannot express

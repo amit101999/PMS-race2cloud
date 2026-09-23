@@ -184,6 +184,9 @@ const holdingsEligibilityDate = (row) => {
 async function fetchHoldingRowsForPair(zcql, accountCode, isin, recordDateISO) {
   const rows = [];
   const cut = String(recordDateISO || "").slice(0, 10);
+  // ZCQL's OFFSET is 1-based, so each page repeats the previous page's last
+  // row; skip it so that trade is not counted twice.
+  const seenRowIds = new Set();
   let offset = 0;
   while (true) {
     const batch = await zcql.executeZCQLQuery(`
@@ -200,6 +203,10 @@ async function fetchHoldingRowsForPair(zcql, accountCode, isin, recordDateISO) {
     if (!batch || batch.length === 0) break;
     for (const r of batch) {
       const h = r.Holdings || r;
+      if (h.ROWID != null) {
+        if (seenRowIds.has(h.ROWID)) continue;
+        seenRowIds.add(h.ROWID);
+      }
       if (!cut || holdingsEligibilityDate(h) <= cut) rows.push(h);
     }
     if (batch.length < ZCQL_ROW_LIMIT) break;

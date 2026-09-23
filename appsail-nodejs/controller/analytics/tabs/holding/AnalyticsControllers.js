@@ -1,10 +1,9 @@
 import { getAllAccountCodesFromDatabase } from "../../../../util/allAccountCodes.js";
 import {
   escHoldingsSql,
+  fetchHoldingsRowsByAccountForIsin,
   fetchHoldingsRowsPaged,
   fetchSecurityListByIsins,
-  holdingsDateFilterClause,
-  holdingsEffectiveDate,
   rollupLastSnapshotByIsin,
   rollupRecomputedSnapshotByIsin,
   recomputeHoldingsSnapshot,
@@ -160,8 +159,6 @@ export const calculateHoldingsSummary = async ({
   );
 };
 
-const HOLDINGS_BATCH = 250;
-
 export const calculateHoldingsByIsin = async ({
   catalystApp,
   isin,
@@ -171,61 +168,16 @@ export const calculateHoldingsByIsin = async ({
   const isinTrim = String(isin ?? "").trim();
   if (!isinTrim) return [];
 
-  const clause = holdingsDateFilterClause(asOnDate);
+  const cutoff = /^\d{4}-\d{2}-\d{2}$/.test(String(asOnDate ?? "").trim());
 
-  // Precompute the exclusive next-day cutoff so we can refine the loose SQL OR
-  // clause per row (buys settle on SETTLEMENT_DATE, others on TRANSACTION_DATE).
-  const trimmedAsOn = String(asOnDate ?? "").trim();
-  let cutoff = "";
-  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmedAsOn)) {
-    const nextDay = new Date(trimmedAsOn);
-    nextDay.setDate(nextDay.getDate() + 1);
-    cutoff = nextDay.toISOString().split("T")[0];
-  }
+  // Already effective-date filtered and in FIFO order per account. Uses keyset
+  // paging — ZCQL's 1-based OFFSET repeated a row at every page boundary, which
+  // the recompute below counted as an extra trade.
+  const rowsByAccount = await fetchHoldingsRowsByAccountForIsin(zcql, isinTrim, asOnDate);
 
   const latestByAccount = new Map();
-  // Kept only for the as-on-date path, where the stored running balance is not
-  // trustworthy and the totals have to be re-derived from the rows themselves.
-  const rowsByAccount = new Map();
-  let offset = 0;
-
-  while (true) {
-    const batch = await zcql.executeZCQLQuery(`
-      SELECT ROWID, CREATEDTIME, WS_Account_code, HOLDING, WAP, HOLDING_VALUE,
-             QUANTITY, PRICE, TOTAL_AMOUNT,
-             TYPE, TRANSACTION_DATE, SETTLEMENT_DATE, CA_DATE
-      FROM Holdings
-      WHERE ISIN = '${escHoldingsSql(isinTrim)}'
-      ${clause}
-      ORDER BY CREATEDTIME ASC, ROWID ASC
-      LIMIT ${HOLDINGS_BATCH} OFFSET ${offset}
-    `);
-
-    if (!batch?.length) break;
-
-    for (const r of batch) {
-      const row = r.Holdings || r;
-      const accountCode = String(row.WS_Account_code ?? "").trim();
-      if (!accountCode) continue;
-
-      // Filter each row by effective date BEFORE it can become the account's
-      // "latest" snapshot. Without this, a not-yet-settled buy (or a post-date
-      // sell) that leaks through the loose SQL clause would overwrite — and then
-      // wrongly drop — the account's real earlier holding. Mirrors the row-first
-      // filter in fetchHoldingsRowsPaged so this matches the per-account summary.
-      if (cutoff) {
-        const d = holdingsEffectiveDate(row);
-        if (d && d >= cutoff) continue;
-
-        if (!rowsByAccount.has(accountCode)) rowsByAccount.set(accountCode, []);
-        rowsByAccount.get(accountCode).push(row);
-      }
-
-      latestByAccount.set(accountCode, row);
-    }
-
-    if (batch.length < HOLDINGS_BATCH) break;
-    offset += HOLDINGS_BATCH;
+  for (const [accountCode, accRows] of rowsByAccount) {
+    latestByAccount.set(accountCode, accRows[accRows.length - 1]);
   }
 
   if (latestByAccount.size === 0) return [];

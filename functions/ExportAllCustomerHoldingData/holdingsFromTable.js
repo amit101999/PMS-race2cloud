@@ -91,16 +91,38 @@ function holdingsTypePriority(type) {
   return 0;
 }
 
+/** Numeric compare of ROWID strings (they exceed Number precision). */
+function compareRowIds(a, b) {
+  const ra = String(a ?? "0");
+  const rb = String(b ?? "0");
+  if (ra.length !== rb.length) return ra.length - rb.length;
+  return ra < rb ? -1 : ra > rb ? 1 : 0;
+}
+
+/** In-memory equivalent of `HOLDINGS_FIFO_ORDER_BY_SQL`. */
+function compareFifoOrder(a, b) {
+  const ta = String(a.CREATEDTIME ?? "");
+  const tb = String(b.CREATEDTIME ?? "");
+  if (ta !== tb) return ta < tb ? -1 : 1;
+  return compareRowIds(a.ROWID, b.ROWID);
+}
+
 /**
- * All Holdings rows for an account — same ORDER BY as fifo materialisation.
+ * All Holdings rows for an account, returned in fifo materialisation order
+ * (`HOLDINGS_FIFO_ORDER_BY_SQL`).
  * Sequential page-by-page: the Catalyst ZCQL client does not tolerate
  * concurrent calls (concurrent reads were observed to hang rather than
  * error), so pages are read one at a time as before.
+ *
+ * Paged by keyset (`ROWID > cursor`), NOT LIMIT/OFFSET: ZCQL's OFFSET is 1-based
+ * (`OFFSET 250` skips only 249 rows), so OFFSET paging returned every page
+ * boundary row twice and `recomputeHoldingsSnapshot` counted that trade twice.
+ * Keep in sync with appsail-nodejs/util/analytics/holdingsFromTable.js.
  */
 async function fetchHoldingsRowsPaged(zcql, accountCode, asOnDate, extraSql = "") {
   const clause = holdingsDateFilterClause(asOnDate);
   const rows = [];
-  let offset = 0;
+  let lastRowId = "0";
   const acc = escHoldingsSql(accountCode);
   while (true) {
     const batch = await queryWithTimeout(
@@ -111,17 +133,26 @@ async function fetchHoldingsRowsPaged(zcql, accountCode, asOnDate, extraSql = ""
              CA_DATE, CREATEDTIME
       FROM Holdings
       WHERE WS_Account_code = '${acc}'
+        AND ROWID > ${lastRowId}
       ${clause}
       ${extraSql}
-      ORDER BY ${HOLDINGS_FIFO_ORDER_BY_SQL}
-      LIMIT ${BATCH} OFFSET ${offset}
+      ORDER BY ROWID ASC
+      LIMIT ${BATCH}
     `
     );
     if (!batch || batch.length === 0) break;
-    for (const r of batch) rows.push(r.Holdings || r);
+    let maxRowId = lastRowId;
+    for (const r of batch) {
+      const h = r.Holdings || r;
+      rows.push(h);
+      if (compareRowIds(h.ROWID, maxRowId) > 0) maxRowId = String(h.ROWID);
+    }
+    // Guard against a non-advancing cursor so a bad ROWID can't loop forever.
+    if (maxRowId === lastRowId) break;
+    lastRowId = maxRowId;
     if (batch.length < BATCH) break;
-    offset += BATCH;
   }
+  rows.sort(compareFifoOrder);
 
   // Refine the loose SQL date clause (which ORs both dates): buy rows must
   // respect SETTLEMENT_DATE, others TRANSACTION_DATE — same as the rebuild job.
