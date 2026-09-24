@@ -103,10 +103,8 @@ const ExceptionGrid = ({ run }) => {
                                     <td className="date">{r.asOfDate || "—"}</td>
                                     <td className="num">{qty(r.faQuantity)}</td>
                                     <td className="num">{qty(r.custodyQuantity)}</td>
-                                    <td className="num">
-                                        {Number(r.difference) > 0 ? "+" : ""}
-                                        {qty(r.difference)}
-                                    </td>
+                                    {/* abs: reports written before the difference became unsigned still hold negatives */}
+                                    <td className="num">{qty(r.difference === null ? null : Math.abs(r.difference))}</td>
                                     <td className="status">
                                         <span className={`badge cm-tag ${r.exceptionType.toLowerCase()}`}>
                                             {api.EXCEPTION_LABEL[r.exceptionType] || r.exceptionType}
