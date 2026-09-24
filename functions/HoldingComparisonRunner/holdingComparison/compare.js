@@ -40,7 +40,8 @@ export const compareHoldings = (faHoldings, custodyHoldings) => {
       asOfDate: custody?.asOfDate || fa?.asOfDate || "",
       faQuantity: fa ? faQty : null,
       custodyQuantity: custody ? custodyQty : null,
-      difference: round4(faQty - custodyQty),
+      // The size of the break only; EXCEPTION_TYPE and the two quantities show its direction.
+      difference: round4(Math.abs(faQty - custodyQty)),
       exceptionType,
     });
   }
