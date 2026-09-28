@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import MainLayout from "../../layouts/MainLayout";
 import DownloadButton from "../../components/common/DownloadButton";
+import CustodianComparePanel from "../CustodianUploadPage/CustodianComparePanel";
 import "./BonusPage.css";
 import "../TempTransactionUpload/tokens.css";
 import "../TempTransactionUpload/TempTransaction.css";
@@ -8,6 +9,8 @@ import "../TempTransactionUpload/custody/CustodyMatch.css";
 import "../../styles/ops-pages.css";
 import { BASE_URL } from "../../constant";
 import { useJobNotifications } from "../../notifications/JobNotificationContext";
+
+const numberFormat = new Intl.NumberFormat(undefined, { maximumFractionDigits: 4 });
 
 /** Maps GET /bonus/apply-progress → the notification system's vocabulary. */
 function parseBonusStatus(d) {
@@ -36,7 +39,11 @@ function BonusPage() {
   const [securityName, setSecurityName] = useState("");
   const [ratio1, setRatio1] = useState("");
   const [ratio2, setRatio2] = useState("");
-  const [date, setDate] = useState("");
+  const [recordDate, setRecordDate] = useState("");
+  const [effectiveDate, setEffectiveDate] = useState("");
+
+  // yyyy-mm-dd strings compare correctly as text.
+  const datesOutOfOrder = Boolean(recordDate && effectiveDate && effectiveDate < recordDate);
 
   const [securities, setSecurities] = useState([]);
   const [searchQuery, setSearchQuery] = useState("");
@@ -56,6 +63,7 @@ function BonusPage() {
   const [expandedActuals, setExpandedActuals] = useState(() => new Set());
 
   const [exportDownloadUrl, setExportDownloadUrl] = useState("");
+  const [exportError, setExportError] = useState("");
   const [exportLoading, setExportLoading] = useState(false);
 
   /* ===========================
@@ -179,10 +187,12 @@ function BonusPage() {
             setSecurityName("");
             setRatio1("");
             setRatio2("");
-            setDate("");
+            setRecordDate("");
+            setEffectiveDate("");
             setPreviewData([]);
             setStep("form");
             setExportDownloadUrl("");
+            setExportError("");
             setApplying(false);
             setApplySuccess(false);
             setApplyJobName(null);
@@ -234,7 +244,7 @@ function BonusPage() {
         isin,
         ratio1: Number(ratio1),
         ratio2: Number(ratio2),
-        exDate: date, // ✅ REQUIRED FOR FIFO
+        recordDate, // holdings are counted as on this date
       }),
     });
 
@@ -250,14 +260,14 @@ function BonusPage() {
     setLoading(false);
   };
   const downloadBonusExport = () => {
-    if (!isin || !ratio1 || !ratio2 || !date) return;
+    if (!isin || !ratio1 || !ratio2 || !recordDate) return;
 
     const url =
       `${BASE_URL}/export/bonus-preview` +
       `?isin=${encodeURIComponent(isin)}` +
       `&ratio1=${encodeURIComponent(ratio1)}` +
       `&ratio2=${encodeURIComponent(ratio2)}` +
-      `&exDate=${encodeURIComponent(date)}`;
+      `&recordDate=${encodeURIComponent(recordDate)}`;
 
     window.open(url, "_blank");
   };
@@ -267,20 +277,27 @@ function BonusPage() {
       <div className="temp-transaction-container txn-ops ops-page">
       <div className="temp-transaction-card">
 
-        {success && (
-          <div className="cm-verdict ok">Bonus applied successfully</div>
-        )}
-        {error && <div className="cm-verdict bad">{error}</div>}
+        <div aria-live="polite">
+          {success && (
+            <div className="cm-verdict ok">Bonus applied successfully.</div>
+          )}
+          {error && <div className="cm-verdict bad">{error}</div>}
+        </div>
 
         <div className="bonus-card">
           {/* ISIN SEARCH */}
           <div className="account-code-search" ref={dropdownRef}>
-            <label className="search-label">ISIN</label>
+            <label className="search-label" htmlFor="bonus-isin">ISIN</label>
             <div className="search-input-wrapper">
-              <span className="search-icon">🔍</span>
+              <span className="search-icon" aria-hidden="true">🔍</span>
               <input
+                id="bonus-isin"
+                name="isin"
+                type="text"
                 className="search-input"
-                placeholder="Search ISIN..."
+                placeholder="Search ISIN, code or name…"
+                autoComplete="off"
+                spellCheck={false}
                 value={searchQuery}
                 onChange={(e) => {
                   setSearchQuery(e.target.value);
@@ -288,8 +305,10 @@ function BonusPage() {
                 }}
               />
               {searchQuery && (
-                <span
+                <button
+                  type="button"
                   className="clear-icon"
+                  aria-label="Clear ISIN"
                   onClick={() => {
                     setSearchQuery("");
                     setIsin("");
@@ -298,7 +317,7 @@ function BonusPage() {
                   }}
                 >
                   ✕
-                </span>
+                </button>
               )}
             </div>
 
@@ -307,16 +326,17 @@ function BonusPage() {
                 <div className="dropdown-header">Search ISIN</div>
                 <div className="dropdown-options">
                   {filteredSecurities.map((sec, idx) => (
-                    <div
+                    <button
+                      type="button"
                       key={`${sec.isin || "no-isin"}-${idx}`}
                       className="dropdown-option"
                       onClick={() => handleSelectISIN(sec)}
                     >
-                      <strong>{sec.isin}</strong>
+                      <strong translate="no">{sec.isin}</strong>
                       <div className="ops-option-sub">
                         {sec.securityCode} – {sec.securityName}
                       </div>
-                    </div>
+                    </button>
                   ))}
                 </div>
                 <div className="dropdown-footer">
@@ -327,53 +347,96 @@ function BonusPage() {
           </div>
 
           <div className="bonus-field">
-            <label>Security Code</label>
-            <input value={securityCode} disabled />
+            <label htmlFor="bonus-security-code">Security Code</label>
+            <input id="bonus-security-code" value={securityCode} disabled />
           </div>
 
           <div className="bonus-field">
-            <label>Security Name</label>
-            <input value={securityName} disabled />
+            <label htmlFor="bonus-security-name">Security Name</label>
+            <input id="bonus-security-name" value={securityName} disabled />
           </div>
 
           <div className="bonus-field">
-            <label>
+            <label htmlFor="bonus-ratio-held">
               Ratio <span className="ratio-hint">(For every held)</span>
             </label>
             <input
+              id="bonus-ratio-held"
+              name="ratio2"
               type="number"
+              inputMode="decimal"
+              min="0"
+              step="any"
               value={ratio2}
               onChange={(e) => setRatio2(e.target.value)}
             />
           </div>
 
           <div className="bonus-field">
-            <label>
+            <label htmlFor="bonus-ratio-shares">
               Ratio <span className="ratio-hint">(Bonus shares)</span>
             </label>
             <input
+              id="bonus-ratio-shares"
+              name="ratio1"
               type="number"
+              inputMode="decimal"
+              min="0"
+              step="any"
               value={ratio1}
               onChange={(e) => setRatio1(e.target.value)}
             />
           </div>
 
+          {/* DATES — Record Date drives every calculation; Effective Date is stored for reference. */}
           <div className="bonus-field">
-            <label>Effective Date</label>
+            <label htmlFor="bonus-record-date">Record Date</label>
             <input
+              id="bonus-record-date"
+              name="recordDate"
               type="date"
-              value={date}
-              onChange={(e) => setDate(e.target.value)}
+              value={recordDate}
+              onChange={(e) => setRecordDate(e.target.value)}
             />
           </div>
 
+          <div className="bonus-field">
+            <label htmlFor="bonus-effective-date">
+              Effective Date <span className="ratio-hint">(Optional)</span>
+            </label>
+            <input
+              id="bonus-effective-date"
+              name="effectiveDate"
+              type="date"
+              value={effectiveDate}
+              min={recordDate || undefined}
+              aria-invalid={datesOutOfOrder || undefined}
+              aria-describedby={datesOutOfOrder ? "bonus-date-error" : undefined}
+              onChange={(e) => setEffectiveDate(e.target.value)}
+            />
+          </div>
+
+          {datesOutOfOrder && (
+            <div id="bonus-date-error" className="cm-verdict bad ops-form-message" role="alert">
+              Effective Date cannot be before the Record Date. Pick a date on or after {recordDate}.
+            </div>
+          )}
+
           <div className="ops-form-actions">
           <button
+            type="button"
             className="cm-primary"
-            disabled={!isin || ratio1 <= 0 || !ratio2 || !date || loading}
+            disabled={
+              !isin ||
+              !(Number(ratio1) > 0) ||
+              !(Number(ratio2) > 0) ||
+              !recordDate ||
+              datesOutOfOrder ||
+              loading
+            }
             onClick={fetchPreview}
           >
-            Fetch Affected Accounts
+            {loading ? "Fetching…" : "Fetch Affected Accounts"}
           </button>
           </div>
         </div>
@@ -387,7 +450,7 @@ function BonusPage() {
           <h3 className="ops-card-title">Bonus Impact Preview</h3>
 
           {previewData.length === 0 ? (
-            <p className="cm-empty">No accounts affected</p>
+            <p className="cm-empty">No accounts hold this security on the record date.</p>
           ) : (
             <>
               <div className="data-table-wrap">
@@ -430,23 +493,25 @@ function BonusPage() {
                                 >
                                   {expanded ? "▾" : "▸"}
                                 </span>
-                                {group.actualCode}
+                                <span translate="no">{group.actualCode}</span>
                                 <span className="badge badge--neutral">
                                   {group.virtuals.length} virtual
                                   {group.virtuals.length === 1 ? "" : "s"}
                                 </span>
                               </button>
                             </td>
-                            <td>{group.isin}</td>
+                            <td translate="no">{group.isin}</td>
                             <td className="num">
-                              {Math.floor(Number(group.currentHolding) || 0)}
+                              {numberFormat.format(Math.floor(Number(group.currentHolding) || 0))}
                             </td>
-                            <td className="num">{Math.floor(Number(group.bonusShares) || 0)}</td>
                             <td className="num">
-                              {Math.floor(Number(group.newHolding) || 0)}
+                              {numberFormat.format(Math.floor(Number(group.bonusShares) || 0))}
+                            </td>
+                            <td className="num">
+                              {numberFormat.format(Math.floor(Number(group.newHolding) || 0))}
                             </td>
                             <td className="num positive">
-                              +{Math.floor(Number(group.delta) || 0)}
+                              +{numberFormat.format(Math.floor(Number(group.delta) || 0))}
                             </td>
                           </tr>
 
@@ -460,18 +525,18 @@ function BonusPage() {
                                   <span className="badge badge--brand bonus-virtual-label">
                                     Virtual
                                   </span>
-                                  {row.accountCode}
+                                  <span translate="no">{row.accountCode}</span>
                                 </td>
-                                <td>{row.isin}</td>
+                                <td translate="no">{row.isin}</td>
                                 <td className="num">
-                                  {Math.floor(Number(row.currentHolding) || 0)}
+                                  {numberFormat.format(Math.floor(Number(row.currentHolding) || 0))}
                                 </td>
-                                <td className="num">{row.bonusShares}</td>
+                                <td className="num">{numberFormat.format(Number(row.bonusShares) || 0)}</td>
                                 <td className="num">
-                                  {Math.floor(Number(row.newHolding) || 0)}
+                                  {numberFormat.format(Math.floor(Number(row.newHolding) || 0))}
                                 </td>
                                 <td className="num positive">
-                                  +{row.delta}
+                                  +{numberFormat.format(Number(row.delta) || 0)}
                                 </td>
                               </tr>
                             ))}
@@ -502,6 +567,10 @@ function BonusPage() {
                 </div>
               )}
 
+              {exportError && (
+                <div className="cm-verdict bad" role="alert">{exportError}</div>
+              )}
+
               <div className="bonus-preview-actions">
                 {/* EXPORT - generates report */}
                 <button
@@ -512,13 +581,14 @@ function BonusPage() {
                   onClick={async () => {
                     try {
                       setExportLoading(true);
+                      setExportError("");
                       setExportDownloadUrl("");
 
                       const params = new URLSearchParams({
                         isin,
                         ratio1,
                         ratio2,
-                        exDate: date,
+                        recordDate,
                       });
 
                       const res = await fetch(
@@ -545,13 +615,13 @@ function BonusPage() {
                       setExportDownloadUrl(signedUrl);
                     } catch (err) {
                       console.error(err);
-                      alert("Failed to export bonus preview CSV");
+                      setExportError("Could not export the bonus preview. Try Export again.");
                     } finally {
                       setExportLoading(false);
                     }
                   }}
                 >
-                  {exportLoading ? "Generating..." : "Export"}
+                  {exportLoading ? "Generating…" : "Export"}
                 </button>
 
                 {/* DOWNLOAD - opens generated report */}
@@ -567,7 +637,7 @@ function BonusPage() {
                 {/* APPLY BONUS */}
                 <button
                   className="cm-primary"
-                  disabled={applying}
+                  disabled={applying || datesOutOfOrder}
                   onClick={async () => {
                     setApplying(true);
                     setError(null);
@@ -581,7 +651,8 @@ function BonusPage() {
                           isin,
                           ratio1: Number(ratio1),
                           ratio2: Number(ratio2),
-                          exDate: date,
+                          recordDate,
+                          effectiveDate,
                           securityCode,
                           securityName,
                         }),
@@ -631,13 +702,23 @@ function BonusPage() {
                   {applying
                     ? applyStatus === "COMPLETED"
                       ? "Bonus Applied!"
-                      : "Applying Bonus..."
+                      : "Applying Bonus…"
                     : "Confirm & Apply Bonus"}
                 </button>
               </div>
             </>
           )}
         </div>
+      )}
+      {step === "preview" && (
+        <CustodianComparePanel
+          caType="bonus"
+          isin={isin}
+          securityName={securityName}
+          ratio1={ratio1}
+          ratio2={ratio2}
+          recordDate={recordDate}
+        />
       )}
       </div>
     </MainLayout>

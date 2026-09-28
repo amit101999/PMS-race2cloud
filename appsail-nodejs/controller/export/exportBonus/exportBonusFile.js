@@ -6,15 +6,16 @@ export const exportBonusPreviewFile = async (req, res) => {
       return res.status(500).json({ success: false, message: "Catalyst not initialized" });
     }
 
-    const { isin, ratio1, ratio2, exDate } = req.query;
+    const { isin, ratio1, ratio2, recordDate } = req.query;
     const r1 = Number(ratio1);
     const r2 = Number(ratio2);
 
-    if (!isin || !exDate || r1 <= 0 || r2 <= 0) {
+    // The date input sends yyyy-mm-dd; anything else is rejected rather than
+    // parsed, so a timezone can never shift it to a different day.
+    const recordDateISO = String(recordDate || "").slice(0, 10);
+    if (!isin || !/^\d{4}-\d{2}-\d{2}$/.test(recordDateISO) || r1 <= 0 || r2 <= 0) {
       return res.status(400).json({ success: false, message: "Invalid input" });
     }
-
-    const exDateISO = new Date(exDate).toISOString().split("T")[0];
 
     const catalystApp = req.catalystApp;
     const zcql = catalystApp.zcql();
@@ -30,7 +31,7 @@ export const exportBonusPreviewFile = async (req, res) => {
       isin,
       r1,
       r2,
-      exDateISO,
+      recordDateISO,
     });
 
     if (!preview.length) {

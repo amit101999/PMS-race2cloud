@@ -99,7 +99,8 @@ async function fetchBonusRowsForIsinAsOnDate(zcql, isin, asOnDateISO) {
     const r = await zcql.executeZCQLQuery(`
       SELECT *
       FROM Bonus
-      WHERE ISIN='${escSql(isin)}' AND ExDate < '${escSql(nextDayStr)}'
+      WHERE ISIN='${escSql(isin)}'
+        AND (Record_Date < '${escSql(nextDayStr)}' OR ExDate < '${escSql(nextDayStr)}')
       ORDER BY ROWID ASC
       LIMIT ${ZCQL_ROW_LIMIT} OFFSET ${off}
     `);
@@ -126,7 +127,8 @@ async function fetchSplitRowsForIsinAsOnDate(zcql, isin, asOnDateISO) {
     const r = await zcql.executeZCQLQuery(`
       SELECT *
       FROM Split
-      WHERE ISIN='${escSql(isin)}' AND Issue_Date < '${escSql(nextDayStr)}'
+      WHERE ISIN='${escSql(isin)}'
+        AND (Record_Date < '${escSql(nextDayStr)}' OR Issue_Date < '${escSql(nextDayStr)}')
       ORDER BY ROWID ASC
       LIMIT ${ZCQL_ROW_LIMIT} OFFSET ${off}
     `);
@@ -258,7 +260,8 @@ export async function fifoLotsForIsinOnRecordDate(zcql, isin, recordDateISO) {
   const splits = splitRows.map((row) => {
     const s = row.Split || row;
     return {
-      issueDate: s.Issue_Date,
+      // Split timing is its record date; older rows only have Issue_Date.
+      issueDate: s.Record_Date || s.Issue_Date,
       ratio1: Number(s.Ratio1) || 0,
       ratio2: Number(s.Ratio2) || 0,
       isin: s.ISIN,

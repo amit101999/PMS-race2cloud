@@ -1,7 +1,12 @@
 import express from "express";
 import fileUpload from "express-fileupload";
 
-import { deleteCustodianFile, getDay, uploadCustodianFile } from "../controller/corporateAction/CustodianUploadController.js";
+import {
+  deleteCustodianFile,
+  getDay,
+  getLatestForCorpAction,
+  uploadCustodianFile,
+} from "../controller/corporateAction/CustodianUploadController.js";
 
 const router = express.Router();
 
@@ -23,6 +28,9 @@ router.use(
 
 // GET /api/custodian-upload/day/:date — the newest file uploaded for the date
 router.get("/day/:date", getDay);
+
+// GET /api/custodian-upload/latest?caType=split|bonus&isin= — newest file + its matching row count
+router.get("/latest", getLatestForCorpAction);
 
 // POST /api/custodian-upload/file — check against the saved mapping and store
 router.post("/file", uploadCustodianFile);

@@ -68,7 +68,7 @@ const fetchBonusRows = async (zcql, isin, accountCode) => {
 
   while (true) {
     const rows = await zcql.executeZCQLQuery(`
-      SELECT ROWID, BonusShare, ExDate, ISIN
+      SELECT ROWID, BonusShare, Record_Date, ExDate, ISIN
       FROM Bonus
       WHERE ISIN='${esc(isin)}' AND WS_Account_code='${esc(accountCode)}'
       ORDER BY ROWID ASC
@@ -82,7 +82,8 @@ const fetchBonusRows = async (zcql, isin, accountCode) => {
       out.push({
         ROWID: b.ROWID,
         BonusShare: b.BonusShare,
-        ExDate: b.ExDate,
+        // Bonus timing is its record date; older rows only have ExDate.
+        ExDate: b.Record_Date || b.ExDate,
         ISIN: b.ISIN,
       });
     });
@@ -101,7 +102,7 @@ const fetchSplitRows = async (zcql, isin) => {
 
   while (true) {
     const rows = await zcql.executeZCQLQuery(`
-      SELECT ROWID, Issue_Date, Ratio1, Ratio2, ISIN
+      SELECT ROWID, Record_Date, Issue_Date, Ratio1, Ratio2, ISIN
       FROM Split
       WHERE ISIN='${esc(isin)}'
       ORDER BY ROWID ASC
@@ -113,7 +114,8 @@ const fetchSplitRows = async (zcql, isin) => {
     dropSeenRows(rows, seenRowIds).forEach((r) => {
       const s = r.Split || r;
       out.push({
-        issueDate: s.Issue_Date,
+        // Split timing is its record date; older rows only have Issue_Date.
+        issueDate: s.Record_Date || s.Issue_Date,
         ratio1: s.Ratio1,
         ratio2: s.Ratio2,
         isin: s.ISIN,

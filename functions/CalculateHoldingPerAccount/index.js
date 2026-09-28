@@ -350,7 +350,11 @@ async function fetchAccountTransactions(zcql, accountCode, asOnDate) {
 
 async function fetchAccountBonuses(zcql, accountCode, asOnDate) {
   const cutoff = nextDayCutoff(asOnDate);
-  const dateClause = cutoff ? ` AND ExDate < '${cutoff}'` : "";
+  // Record_Date <= ExDate, so this is "record date < cutoff"; the ExDate half
+  // covers bonuses saved before Record_Date existed.
+  const dateClause = cutoff
+    ? ` AND (Record_Date < '${cutoff}' OR ExDate < '${cutoff}')`
+    : "";
 
   const rows = [];
   const seen = new Set();
@@ -358,7 +362,7 @@ async function fetchAccountBonuses(zcql, accountCode, asOnDate) {
   while (true) {
     try {
       const batch = await zcql.executeZCQLQuery(`
-        SELECT SecurityCode, SecurityName, ExDate, BonusShare, ISIN, ROWID
+        SELECT SecurityCode, SecurityName, Record_Date, ExDate, BonusShare, ISIN, ROWID
         FROM Bonus
         WHERE WS_Account_code = '${esc(accountCode)}'
         ${dateClause}
@@ -461,7 +465,11 @@ async function fetchAccountMergers(zcql, accountCode, asOnDate) {
 async function fetchSplitsForIsins(zcql, isins, asOnDate) {
   if (!isins || !isins.length) return [];
   const cutoff = nextDayCutoff(asOnDate);
-  const dateClause = cutoff ? ` AND Issue_Date < '${cutoff}'` : "";
+  // Record_Date <= Issue_Date, so this is "record date < cutoff"; the
+  // Issue_Date half covers splits saved before Record_Date existed.
+  const dateClause = cutoff
+    ? ` AND (Record_Date < '${cutoff}' OR Issue_Date < '${cutoff}')`
+    : "";
   const inClause = isins.map((i) => `'${esc(i)}'`).join(",");
 
   const rows = [];
@@ -470,7 +478,7 @@ async function fetchSplitsForIsins(zcql, isins, asOnDate) {
   while (true) {
     try {
       const batch = await zcql.executeZCQLQuery(`
-        SELECT Security_Code, Security_Name, Issue_Date, Ratio1, Ratio2, ISIN, ROWID
+        SELECT Security_Code, Security_Name, Record_Date, Issue_Date, Ratio1, Ratio2, ISIN, ROWID
         FROM Split
         WHERE ISIN IN (${inClause})
         ${dateClause}
@@ -495,7 +503,9 @@ async function fetchSplitsForIsins(zcql, isins, asOnDate) {
   return rows.map((s) => ({
     ratio1: Number(s.Ratio1) || 0,
     ratio2: Number(s.Ratio2) || 0,
-    issueDate: s.Issue_Date,
+    // The split takes effect in holdings on its record date. Splits saved
+    // before Record_Date existed only have Issue_Date, which served that role.
+    issueDate: s.Record_Date || s.Issue_Date,
     isin: s.ISIN || "",
   }));
 }
@@ -592,10 +602,12 @@ function runFifoEngine(
       .filter((b) => (b.ISIN || b.isin) === activeIsin)
       .map((b) => ({
         type: "BONUS",
-        date: normalizeDate(b.ExDate || b.exDate),
+        // A bonus lands in holdings on its record date; bonuses saved before
+        // Record_Date existed only have ExDate, which served that role.
+        date: normalizeDate(b.Record_Date || b.ExDate || b.exDate),
         data: {
           bonusShare: b.BonusShare || b.bonusShare,
-          exDate: b.ExDate || b.exDate,
+          exDate: b.Record_Date || b.ExDate || b.exDate,
           isin: b.ISIN || b.isin,
         },
       })),

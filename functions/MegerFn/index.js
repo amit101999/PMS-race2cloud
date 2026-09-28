@@ -341,8 +341,16 @@ function nextDayIso(asOnDateISO) {
   return d.toISOString().split("T")[0];
 }
 
+/**
+ * `dateColumn` may be one column or a list; with a list a row qualifies when
+ * any of them is before the cutoff (used for Split and Bonus: Record_Date,
+ * falling back to Issue_Date / ExDate on rows saved before Record_Date existed).
+ */
 async function fetchAllForIsinAsOnDate({ zcql, table, isin, dateColumn, asOnDateISO }) {
   const cutoff = nextDayIso(asOnDateISO);
+  const dateCondition = [].concat(dateColumn)
+    .map((column) => `${column} < '${esc(cutoff)}'`)
+    .join(" OR ");
   const out = [];
   const seen = new Set();
   let offset = 0;
@@ -350,7 +358,7 @@ async function fetchAllForIsinAsOnDate({ zcql, table, isin, dateColumn, asOnDate
     const batch = await zcql.executeZCQLQuery(`
       SELECT *
       FROM ${table}
-      WHERE ISIN = '${esc(isin)}' AND ${dateColumn} < '${esc(cutoff)}'
+      WHERE ISIN = '${esc(isin)}' AND (${dateCondition})
       ORDER BY ROWID ASC
       LIMIT ${ZCQL_ROW_LIMIT} OFFSET ${offset}
     `);
@@ -550,14 +558,14 @@ module.exports = async (jobRequest, context) => {
       zcql,
       table: "Bonus",
       isin: oldIsin,
-      dateColumn: "ExDate",
+      dateColumn: ["Record_Date", "ExDate"],
       asOnDateISO: recordDateIso,
     });
     const splitRows = await fetchAllForIsinAsOnDate({
       zcql,
       table: "Split",
       isin: oldIsin,
-      dateColumn: "Issue_Date",
+      dateColumn: ["Record_Date", "Issue_Date"],
       asOnDateISO: recordDateIso,
     });
     const demergerRowsAll = await fetchAllForIsinAsOnDate({
@@ -609,7 +617,8 @@ module.exports = async (jobRequest, context) => {
     }
 
     const splits = splitRows.map((s) => ({
-      issueDate: s.Issue_Date,
+      // Split timing is its record date; older rows only have Issue_Date.
+      issueDate: s.Record_Date || s.Issue_Date,
       ratio1: Number(s.Ratio1) || 0,
       ratio2: Number(s.Ratio2) || 0,
       isin: s.ISIN,

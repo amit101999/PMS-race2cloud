@@ -150,9 +150,11 @@ export const exportTransactionPerAccount = async (req, res) => {
         "ISIN IN (" + quotedIsins + ")"
       ];
       if (asOnDate) {
-        bonusParts.push("ExDate <= '" + asOnDate + "'");
+        // Record_Date <= ExDate, so this is "record date <= asOnDate"; the
+        // ExDate half covers bonuses saved before Record_Date existed.
+        bonusParts.push("(Record_Date <= '" + asOnDate + "' OR ExDate <= '" + asOnDate + "')");
       }
-      const bonusQuery = "SELECT ROWID, SecurityName, ISIN, ExDate, BonusShare FROM Bonus WHERE " + bonusParts.join(" AND ") + " ORDER BY ExDate ASC, ROWID ASC";
+      const bonusQuery = "SELECT ROWID, SecurityName, ISIN, Record_Date, ExDate, BonusShare FROM Bonus WHERE " + bonusParts.join(" AND ") + " ORDER BY ExDate ASC, ROWID ASC";
       console.log("[EXPORT DEBUG] Bonus query:", bonusQuery);
 
       try {
@@ -162,7 +164,7 @@ export const exportTransactionPerAccount = async (req, res) => {
           const b = row.Bonus || row;
           return {
             rowId: "BON-" + b.ROWID,
-            date: b.ExDate,
+            date: b.Record_Date || b.ExDate,
             executionPriority: -2,
             type: "BONUS",
             securityName: b.SecurityName,
@@ -185,9 +187,11 @@ export const exportTransactionPerAccount = async (req, res) => {
       const quotedIsins = isinsForCorpActions.map(i => "'" + escSql(i) + "'").join(", ");
       const splitParts = ["ISIN IN (" + quotedIsins + ")"];
       if (asOnDate) {
-        splitParts.push("Issue_Date <= '" + asOnDate + "'");
+        // Record_Date <= Issue_Date, so this is "record date <= asOnDate"; the
+        // Issue_Date half covers splits saved before Record_Date existed.
+        splitParts.push("(Record_Date <= '" + asOnDate + "' OR Issue_Date <= '" + asOnDate + "')");
       }
-      const splitQuery = "SELECT ROWID, Security_Name, ISIN, Issue_Date, Ratio1, Ratio2 FROM Split WHERE " + splitParts.join(" AND ") + " ORDER BY Issue_Date ASC, ROWID ASC";
+      const splitQuery = "SELECT ROWID, Security_Name, ISIN, Record_Date, Issue_Date, Ratio1, Ratio2 FROM Split WHERE " + splitParts.join(" AND ") + " ORDER BY Issue_Date ASC, ROWID ASC";
       console.log("[EXPORT DEBUG] Split query:", splitQuery);
 
       try {
@@ -197,7 +201,7 @@ export const exportTransactionPerAccount = async (req, res) => {
           const s = row.Split || row;
           return {
             rowId: "SPL-" + s.ROWID,
-            date: s.Issue_Date,
+            date: s.Record_Date || s.Issue_Date,
             executionPriority: -3,
             type: "SPLIT",
             securityName: s.Security_Name,

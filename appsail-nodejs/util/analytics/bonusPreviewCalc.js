@@ -37,12 +37,12 @@ const nextISODate = (isoDate) => {
  *   newHolding  = currentHolding + bonusShares
  *   delta       = newHolding - currentHolding
  */
-export async function computeBonusPreviewRows(zcql, { isin, r1, r2, exDateISO }) {
-  // cutoff = day AFTER exDate for the date filter (exclusive upper bound)
-  const cutoff = nextISODate(exDateISO);
+export async function computeBonusPreviewRows(zcql, { isin, r1, r2, recordDateISO }) {
+  // cutoff = day AFTER the record date for the date filter (exclusive upper bound)
+  const cutoff = nextISODate(recordDateISO);
 
-  /* STEP 1: READ Holdings AS OF exDate — walk in FIFO order and keep
-     updating per account; last row per account = state on exDate. */
+  /* STEP 1: READ Holdings AS OF the record date — walk in FIFO order and keep
+     updating per account; last row per account = state on the record date. */
   const latestByAccount = new Map(); // accountCode → last Holdings row
   const rowsByAccount = new Map(); // accountCode → every effective row, for re-derivation
   // ZCQL's OFFSET is 1-based, so each page repeats the previous page's last
@@ -114,7 +114,7 @@ export async function computeBonusPreviewRows(zcql, { isin, r1, r2, exDateISO })
   const preview = [];
   for (const [accountCode, h] of latestByAccount) {
     const currentHolding = Number(h.HOLDING) || 0;
-    if (currentHolding <= 1e-6) continue; // fully sold before exDate
+    if (currentHolding <= 1e-6) continue; // fully sold by the record date
 
     const bonusShares = Math.floor((currentHolding * r1) / r2);
     if (bonusShares <= 0) continue;

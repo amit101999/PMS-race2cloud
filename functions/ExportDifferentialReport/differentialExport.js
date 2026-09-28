@@ -116,7 +116,7 @@ async function fetchCustodian(zcql) {
 async function fetchAllBonuses(zcql) {
   return fetchAll(
     zcql,
-    `SELECT ROWID, WS_Account_code, ISIN, BonusShare, ExDate
+    `SELECT ROWID, WS_Account_code, ISIN, BonusShare, Record_Date, ExDate
      FROM Bonus
      ORDER BY ROWID ASC`,
     (r) => {
@@ -125,7 +125,8 @@ async function fetchAllBonuses(zcql) {
         WS_Account_code: (b.WS_Account_code ?? "").toString().trim(),
         ISIN: (b.ISIN ?? "").toString().trim(),
         BonusShare: b.BonusShare,
-        ExDate: b.ExDate ?? "",
+        // Bonus timing is its record date; older rows only have ExDate.
+        ExDate: b.Record_Date || b.ExDate || "",
       };
     }
   );
@@ -135,14 +136,15 @@ async function fetchAllBonuses(zcql) {
 async function fetchAllSplits(zcql) {
   return fetchAll(
     zcql,
-    `SELECT ROWID, ISIN, Issue_Date, Ratio1, Ratio2
+    `SELECT ROWID, ISIN, Record_Date, Issue_Date, Ratio1, Ratio2
      FROM Split
      ORDER BY ROWID ASC`,
     (r) => {
       const s = r.Split || r;
       return {
         isin: (s.ISIN ?? "").toString().trim(),
-        issueDate: s.Issue_Date ?? "",
+        // Split timing is its record date; older rows only have Issue_Date.
+        issueDate: s.Record_Date || s.Issue_Date || "",
         ratio1: s.Ratio1,
         ratio2: s.Ratio2,
       };

@@ -13,7 +13,9 @@ export const fetchBonusesForStock = async ({
 
     const nextDayStr = nextDay.toISOString().split("T")[0];
 
-    dateCondition = ` AND ExDate < '${nextDayStr}'`;
+    // Record_Date <= ExDate, so this is "record date < cutoff"; the ExDate
+    // half covers bonuses saved before Record_Date existed.
+    dateCondition = ` AND (Record_Date < '${nextDayStr}' OR ExDate < '${nextDayStr}')`;
   }
   const rows = [];
   const seenRowIds = new Set();
@@ -23,7 +25,7 @@ export const fetchBonusesForStock = async ({
   while (true) {
     try {
       const query = `
-        SELECT SecurityCode, SecurityName, ExDate, BonusShare, ISIN, ROWID
+        SELECT SecurityCode, SecurityName, Record_Date, ExDate, BonusShare, ISIN, ROWID
         FROM Bonus
         WHERE WS_Account_code = '${accountCode.replace(/'/g, "''")}'
         AND ISIN = '${isin.replace(/'/g, "''")}'
@@ -53,7 +55,9 @@ export const fetchBonusesForStock = async ({
   return rows.map((b) => ({
     securityCode: b.SecurityCode,
     securityName: b.SecurityName,
-    exDate: b.ExDate,
+    // The bonus lands in holdings on its record date. Bonuses saved before
+    // Record_Date existed only have ExDate, which served that role.
+    exDate: b.Record_Date || b.ExDate,
     bonusShare: Number(b.BonusShare) || 0,
     isin: b.ISIN || "",
   }));

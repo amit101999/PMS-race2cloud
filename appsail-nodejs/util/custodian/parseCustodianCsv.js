@@ -65,7 +65,7 @@ const buildHeaderMap = (rawHeaders) => {
   return map;
 };
 
-const stripIsinSuffix = (s) => {
+export const stripIsinSuffix = (s) => {
   const str = String(s || "").trim();
   if (!str) return "";
   // Most depositories suffix ISIN with currency e.g. INE467B01029-INR
@@ -73,7 +73,7 @@ const stripIsinSuffix = (s) => {
   return dashIdx > 0 ? str.slice(0, dashIdx) : str;
 };
 
-const parseDate = (s) => {
+export const parseDate = (s) => {
   if (s == null) return null;
   const str = String(s).trim();
   if (!str) return null;
@@ -97,7 +97,7 @@ const parseDate = (s) => {
   return null;
 };
 
-const num = (s) => {
+export const num = (s) => {
   if (s == null || s === "") return 0;
   const n = Number(String(s).replace(/[, ]/g, ""));
   return Number.isFinite(n) ? n : 0;
