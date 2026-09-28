@@ -81,7 +81,7 @@ const listEntry = (entry) => {
 };
 
 /** Every object under a prefix, following continuation tokens. */
-const listAll = async (bucket, prefix, maxPages = 50) => {
+export const listAll = async (bucket, prefix, maxPages = 50) => {
   const items = [];
   let continuationToken = null;
   for (let page = 0; page < maxPages; page++) {

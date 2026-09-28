@@ -12,6 +12,7 @@ import BonusPage from "./pages/BonusPage/BonusPage";
 import DividendPage from "./pages/Dividend/DividendPage";
 import DemergerPage from "./pages/DemergerPage/DemergerPage";
 import MergerPage from "./pages/MergerPage/MergerPage";
+import CustodianUploadPage from "./pages/CustodianUploadPage/CustodianUploadPage";
 import TempTransaction from "./pages/TempTransactionUpload/TempTransaction";
 import HoldingComparison from "./pages/HoldingComparison/HoldingComparison";
 import UpdateISINPage from "./pages/update-isin/UpdateISINPage";
@@ -32,6 +33,7 @@ function App() {
           <Route path="/dividend" element={<DividendPage />} />
           <Route path="/demerger" element={<DemergerPage />} />
           <Route path="/merger" element={<MergerPage />} />
+          <Route path="/custodian-upload" element={<CustodianUploadPage />} />
           <Route path="/bhav-copy" element={<BhavCopyUploadPage />} />
           {/* <Route path="/transaction-upload" element={<TransactionUploadPage />} /> */}
           <Route path="/temp-transaction" element={<TempTransaction />} />

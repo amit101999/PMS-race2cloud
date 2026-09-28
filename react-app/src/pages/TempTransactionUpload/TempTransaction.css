@@ -16,13 +16,27 @@
 /* Compact — sized to its own content, not stretched across the page — with
    the business date sharing the same row so the two don't cost two lines. */
 
+/* Stays in view while the page scrolls, just under the fixed 80px page header,
+   so the operator can always see which step they are on. The negative side
+   margins take the band edge to edge; the background hides content scrolling
+   under it. z-index sits below the header (300) and pop-ups (400+). */
 .txo-tracker-bar {
+  position: sticky;
+  top: 80px;
+  z-index: 200;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 24px;
-  margin: 2px 0 20px;
+  margin: 2px -28px 14px;
+  padding: 8px 28px;
   flex-wrap: wrap;
+  background-color: var(--txo-bg);
+}
+
+/* Same bar without the pinning, for pages with no workflow steps (Custodian Upload). */
+.txo-tracker-bar--static {
+  position: static;
 }
 
 .txo-tracker {

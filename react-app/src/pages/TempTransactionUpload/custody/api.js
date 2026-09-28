@@ -166,6 +166,7 @@ export const PROFILE_TYPE = {
   CUSTODY_NDPMS: "CUSTODY_NDPMS",
   CUSTODY_MUTUAL_FUND: "CUSTODY_MUTUAL_FUND",
   CUSTODY_HOLDINGS: "CUSTODY_HOLDINGS",
+  CUSTODY_CORP_ACTION: "CUSTODY_CORP_ACTION",
 };
 
 export const PROFILE_LABEL = {
@@ -175,6 +176,7 @@ export const PROFILE_LABEL = {
   CUSTODY_NDPMS: "Custodian — NRE/NRO/NDPMS",
   CUSTODY_MUTUAL_FUND: "Custodian — Mutual Funds",
   CUSTODY_HOLDINGS: "Custodian — Consolidated Holdings",
+  CUSTODY_CORP_ACTION: "Custodian — Corporate Actions",
 };
 
 export const PROFILE_HELP = {
@@ -187,6 +189,8 @@ export const PROFILE_HELP = {
     "The Mutual Funds transaction file (UCC, SourceMFISIN, TradeDate, TransactionType Subscription / Redemption, Units). Matched against the rows from the mutual fund fund-accounting file.",
   CUSTODY_HOLDINGS:
     "The custodian's consolidated holdings file. Its column names differ from the standard 29-column template, so tell us which column holds each field.",
+  CUSTODY_CORP_ACTION:
+    "The custodian's corporate actions file. Tell us which column holds each field; every field is optional.",
 };
 
 /** Which transaction file is being uploaded. A day may hold one of each. */
