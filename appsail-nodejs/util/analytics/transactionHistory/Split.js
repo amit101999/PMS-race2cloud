@@ -9,7 +9,9 @@ export const fetchSplitForStock = async ({
     const nextDay = new Date(asOnDate);
     nextDay.setDate(nextDay.getDate() + 1);
     const nextDayStr = nextDay.toISOString().split("T")[0];
-    dateCondition = ` AND Issue_Date < '${nextDayStr}'`;
+    // Record_Date <= Issue_Date, so this is "record date < cutoff"; the
+    // Issue_Date half covers splits saved before Record_Date existed.
+    dateCondition = ` AND (Record_Date < '${nextDayStr}' OR Issue_Date < '${nextDayStr}')`;
   }
 
   const rows = [];
@@ -20,7 +22,7 @@ export const fetchSplitForStock = async ({
   while (true) {
     try {
       const query = `
-        SELECT Security_Code, Security_Name, Issue_Date, Ratio1, Ratio2, ISIN, ROWID
+        SELECT Security_Code, Security_Name, Record_Date, Issue_Date, Ratio1, Ratio2, ISIN, ROWID
         FROM ${tableName}
         WHERE ISIN = '${isin.replace(/'/g, "''")}'
         ${dateCondition}
@@ -46,13 +48,18 @@ export const fetchSplitForStock = async ({
     }
   }
 
-  return rows.map((b) => ({
-    securityCode: b.Security_Code,
-    securityName: b.Security_Name,
-    date: b.Issue_Date,
-    ratio1: Number(b.Ratio1) || 0,
-    ratio2: Number(b.Ratio2) || 0,
-    issueDate: b.Issue_Date,
-    isin: b.ISIN || "",
-  }));
+  return rows.map((b) => {
+    // The split takes effect in holdings on its record date. Splits saved
+    // before Record_Date existed only have Issue_Date, which served that role.
+    const splitDate = b.Record_Date || b.Issue_Date;
+    return {
+      securityCode: b.Security_Code,
+      securityName: b.Security_Name,
+      date: splitDate,
+      ratio1: Number(b.Ratio1) || 0,
+      ratio2: Number(b.Ratio2) || 0,
+      issueDate: splitDate,
+      isin: b.ISIN || "",
+    };
+  });
 };

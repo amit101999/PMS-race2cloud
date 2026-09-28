@@ -134,30 +134,45 @@ async function settleCaTrackPiece(zcql, trackKey, subId, outcome) {
   }
 }
 
-/** Skip INSERT on retry if row already exists for this corporate-action key. */
-async function bonusRowExists(zcql, isin, accountCode, exDateISO) {
+/**
+ * A bonus event is identified by its record date. Bonuses saved before
+ * Record_Date existed only have ExDate, which served as their record date.
+ */
+const bonusRecordDateOf = (row) => String(row.Record_Date || row.ExDate || "").slice(0, 10);
+
+/**
+ * ROWID of this account's Bonus row for this bonus event, or null.
+ * Used to skip the INSERT on retry, and to find the row a split recompute overwrites.
+ */
+async function findBonusRowId(zcql, isin, accountCode, recordDateISO) {
   try {
     const rows = await zcql.executeZCQLQuery(`
-      SELECT ROWID FROM Bonus
+      SELECT ROWID, Record_Date, ExDate FROM Bonus
       WHERE ISIN = '${esc(isin)}'
         AND WS_Account_code = '${esc(accountCode)}'
-        AND ExDate = '${esc(exDateISO)}'
-      LIMIT 1
     `);
-    return Boolean(rows?.length);
+    const match = (rows || [])
+      .map((r) => r.Bonus || r)
+      .find((b) => bonusRecordDateOf(b) === recordDateISO);
+    return match ? match.ROWID : null;
   } catch (e) {
-    console.warn(`[UpdateBonusTable] bonusRowExists check failed:`, e.message);
-    return false;
+    console.warn(`[UpdateBonusTable] findBonusRowId check failed:`, e.message);
+    return null;
   }
 }
 
-async function ensureBonusRecord(zcql, { secCode, secName, isin, r1, r2, exDateISO }) {
+async function ensureBonusRecord(
+  zcql,
+  { secCode, secName, isin, r1, r2, recordDateISO, effectiveDateISO },
+) {
   const existing = await zcql.executeZCQLQuery(`
-    SELECT ROWID FROM Bonus_Record
-    WHERE ISIN = '${esc(isin)}' AND ExDate = '${esc(exDateISO)}'
-    LIMIT 1
+    SELECT ROWID, Record_Date, ExDate FROM Bonus_Record
+    WHERE ISIN = '${esc(isin)}'
   `);
-  if (existing?.length) {
+  const alreadyThere = (existing || [])
+    .map((r) => r.Bonus_Record || r)
+    .some((b) => bonusRecordDateOf(b) === recordDateISO);
+  if (alreadyThere) {
     console.log("[UpdateBonusTable] Bonus_Record already exists — skip INSERT (retry)");
     return;
   }
@@ -169,6 +184,7 @@ async function ensureBonusRecord(zcql, { secCode, secName, isin, r1, r2, exDateI
         ISIN,
         Ratio1,
         Ratio2,
+        Record_Date,
         ExDate
       )
       VALUES
@@ -178,7 +194,8 @@ async function ensureBonusRecord(zcql, { secCode, secName, isin, r1, r2, exDateI
         '${esc(isin)}',
         ${r1},
         ${r2},
-        '${esc(exDateISO)}'
+        '${esc(recordDateISO)}',
+        '${esc(effectiveDateISO)}'
       )
     `);
 }
@@ -260,7 +277,7 @@ module.exports = async (jobRequest, context) => {
     console.log("Bonus apply job started");
 
     const params = jobRequest.getAllJobParams();
-    const { isin, exDate, secCode, secName } = params;
+    const { isin, secCode, secName } = params;
     const r1 = Number(params.ratio1);
     const r2 = Number(params.ratio2);
     jobName = params.jobName;
@@ -269,7 +286,7 @@ module.exports = async (jobRequest, context) => {
     const bonusJobType =
       String(params.jobType || "").trim() || BONUS_JOB_TYPE_DEFAULT;
     const trackingOn = Boolean(String(jobName || "").trim());
-    // Recompute mode: a split was uploaded on/after this bonus's ex-date, so the
+    // Recompute mode: a split was uploaded on/before this bonus's record date, so the
     // previously stored BonusShare was sized on the pre-split holding and is now
     // stale. In this mode an existing Bonus row is OVERWRITTEN (not skipped) with
     // a freshly sized count. The split row already exists in the DB by the time
@@ -287,17 +304,24 @@ module.exports = async (jobRequest, context) => {
       );
     }
 
-    const exDateISO = exDate;
+    // Record date decides who is eligible and when the bonus shares land in
+    // holdings. `exDate` carries the effective date, stored for reference only.
+    // A job queued before Record_Date existed sends only exDate, which then
+    // served as the record date.
+    const recordDateISO = String(params.recordDate || params.exDate || "").slice(0, 10);
+    const effectiveDateISO = String(params.exDate || recordDateISO).slice(0, 10);
 
     console.log("[UpdateBonusTable]", {
       jobName,
       bonusJobType,
       jobStatusTracking: trackingOn,
       isin,
+      recordDateISO,
+      effectiveDateISO,
     });
 
     /* ======================================================
-       STEP 1+2: READ THE HOLDINGS LEDGER AS AT THE EX-DATE
+       STEP 1+2: READ THE HOLDINGS LEDGER AS AT THE RECORD DATE
 
        Same source, same date rule and same position maths as the Bonus PREVIEW
        (appsail-nodejs/util/analytics/bonusPreviewCalc.js) — one read gives both
@@ -317,7 +341,7 @@ module.exports = async (jobRequest, context) => {
        account was not even in `eligibleAccounts` and silently got nothing.
        ===== END OLD LOGIC =====
        ====================================================== */
-    const cutoff = nextISODate(exDateISO);
+    const cutoff = nextISODate(recordDateISO);
 
     const rowsByAccount = new Map(); // WS_Account_code → effective Holdings rows
     const seenRowIds = new Set();
@@ -348,18 +372,18 @@ module.exports = async (jobRequest, context) => {
 
         // The SQL above deliberately ORs both dates — it cannot express the OPI
         // exception or the merger/demerger CA_DATE rule on its own. Apply the
-        // per-type rule here so a row that is not yet effective on the ex-date
-        // cannot count towards the entitlement.
+        // per-type rule here so a row that is not yet effective on the record
+        // date cannot count towards the entitlement.
         const eff = holdingsEffectiveDate(h);
         if (eff && eff >= cutoff) continue;
 
         // Size this bonus on the holding BEFORE this bonus is added. On a
-        // recompute the stale BONUS row for this same ex-date is already in the
-        // ledger; dropping it keeps the basis post-split, not post-split +
-        // stale-bonus. Replaces the old `b.ExDate !== exDateISO` Bonus filter.
+        // recompute the stale BONUS row for this same bonus is already in the
+        // ledger (the rebuild dates it by the record date); dropping it keeps
+        // the basis post-split, not post-split + stale-bonus.
         if (
           String(h.TYPE || "").trim().toUpperCase() === "BONUS" &&
-          eff === exDateISO
+          eff === recordDateISO
         ) {
           continue;
         }
@@ -422,7 +446,7 @@ module.exports = async (jobRequest, context) => {
         // identical call and identical helper to the preview's.
         const snap = recomputeHoldingsSnapshot(accRows);
         if (snap.HOLDING <= QTY_EPS) {
-          // Fully sold (or restated away) as at the ex-date.
+          // Fully sold (or restated away) as at the record date.
           if (trackingOn) await markAccountSuccess(zcql, jobName, accountCode);
           continue;
         }
@@ -433,15 +457,14 @@ module.exports = async (jobRequest, context) => {
           continue;
         }
 
-        if (await bonusRowExists(zcql, isin, accountCode, exDateISO)) {
+        const existingBonusRowId = await findBonusRowId(zcql, isin, accountCode, recordDateISO);
+        if (existingBonusRowId) {
           if (recompute) {
             // Split-driven re-size: overwrite the stale (pre-split) BonusShare.
             await zcql.executeZCQLQuery(`
               UPDATE Bonus
               SET BonusShare = ${bonusShares}
-              WHERE ISIN = '${esc(isin)}'
-                AND WS_Account_code = '${esc(accountCode)}'
-                AND ExDate = '${esc(exDateISO)}'
+              WHERE ROWID = ${existingBonusRowId}
             `);
             console.log(
               `[UpdateBonusTable] Bonus recomputed for ${accountCode}: ${bonusShares} shares (post-split)`,
@@ -465,6 +488,7 @@ module.exports = async (jobRequest, context) => {
             SecurityName,
             WS_Account_code,
             BonusShare,
+            Record_Date,
             ExDate
           )
           VALUES
@@ -474,7 +498,8 @@ module.exports = async (jobRequest, context) => {
             '${(secName || "").replace(/'/g, "''")}',
             '${esc(accountCode)}',
             ${bonusShares},
-            '${esc(exDateISO)}'
+            '${esc(recordDateISO)}',
+            '${esc(effectiveDateISO)}'
           )
         `);
 
@@ -508,7 +533,8 @@ module.exports = async (jobRequest, context) => {
           isin,
           r1,
           r2,
-          exDateISO,
+          recordDateISO,
+          effectiveDateISO,
         });
       } catch (recordErr) {
         console.error("Error inserting Bonus_Record:", recordErr);

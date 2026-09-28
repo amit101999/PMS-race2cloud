@@ -126,33 +126,34 @@ export const previewStockSplit = async (req, res) => {
       });
     }
 
-    const { isin, ratio1, ratio2, issueDate } = req.body;
+    // Eligibility is decided by the holding at the end of the record date.
+    const { isin, ratio1, ratio2, recordDate } = req.body;
 
     const r1 = Number(ratio1);
     const r2 = Number(ratio2);
 
-    if (!isin || !issueDate || !Number.isFinite(r1) || !Number.isFinite(r2) || r1 <= 0) {
+    if (!isin || !recordDate || !Number.isFinite(r1) || !Number.isFinite(r2) || r1 <= 0) {
       return res.status(400).json({
         success: false,
-        message: "Invalid ISIN, ratio or date",
+        message: "Invalid ISIN, ratio or record date",
       });
     }
 
-    const issueDateISO = toISODateOnly(issueDate);
-    if (!issueDateISO) {
-      return res.status(400).json({ success: false, message: "Invalid date" });
+    const recordDateISO = toISODateOnly(recordDate);
+    if (!recordDateISO) {
+      return res.status(400).json({ success: false, message: "Invalid record date" });
     }
 
-    // cutoff = day AFTER issueDate for the date filter (exclusive upper bound)
-    const cutoff = nextISODate(issueDateISO);
+    // cutoff = day AFTER the record date for the date filter (exclusive upper bound)
+    const cutoff = nextISODate(recordDateISO);
 
     const zcql = req.catalystApp.zcql();
 
     /* ======================================================
-       STEP 1: READ Holdings AS OF issueDate
+       STEP 1: READ Holdings AS OF the record date
        Fetch all Holdings rows for this ISIN with date filter.
        Walk in FIFO order (CREATEDTIME ASC, ROWID ASC) and keep
-       updating per account — last row per account = state on issueDate.
+       updating per account — last row per account = state on the record date.
        ====================================================== */
     const latestByAccount = new Map(); // accountCode → last Holdings row
     const rowsByAccount = new Map(); // accountCode → every effective row, for re-derivation
@@ -204,13 +205,13 @@ export const previewStockSplit = async (req, res) => {
 
     /* The stored HOLDING is a running balance frozen in settlement order at
        rebuild time, so it can contradict the rows the trade-date rule selected
-       above — it may include a buy that is not yet effective on the issue date.
+       above — it may include a buy that is not yet effective on the record date.
        Re-derive the position from the rows themselves. Once the Holdings table
        has been rebuilt on the new basis this becomes a no-op. */
     for (const [acc, accRows] of rowsByAccount) {
       const snap = recomputeHoldingsSnapshot(accRows);
       if (snap.HOLDING <= 0) {
-        latestByAccount.delete(acc); // fully sold as at the issue date
+        latestByAccount.delete(acc); // fully sold as at the record date
         continue;
       }
       latestByAccount.set(acc, { ...latestByAccount.get(acc), ...snap });
@@ -239,7 +240,7 @@ export const previewStockSplit = async (req, res) => {
 
     for (const [accountCode, h] of latestByAccount) {
       const currentHolding = Number(h.HOLDING) || 0;
-      if (currentHolding <= 0) continue; // fully sold before issueDate
+      if (currentHolding <= 0) continue; // fully sold by the record date
 
       const holdingValue = Number(h.HOLDING_VALUE) || 0;
       const currentWAP   = Number(h.WAP) || 0;
@@ -305,40 +306,58 @@ export const addStockSplit = async (req, res) => {
     }
     const zcql = app.zcql();
 
-    const { securityCode, securityName, ratio1, ratio2, issueDate, isin } =
+    const { securityCode, securityName, ratio1, ratio2, recordDate, effectiveDate, isin } =
       req.body;
 
-    if (!securityCode || !securityName || !ratio1 || !ratio2 || !issueDate || !isin) {
+    if (!securityCode || !securityName || !ratio1 || !ratio2 || !recordDate || !effectiveDate || !isin) {
       return res.status(400).json({
-        message: "Missing required fields (ISIN is required to scope the holdings rebuild)",
+        message: "Missing required fields (ISIN, ratio, record date and effective date are required)",
       });
     }
 
-    const isinEsc = String(isin ?? "").replace(/'/g, "''");
-    const issueDateEsc = String(issueDate ?? "").replace(/'/g, "''");
+    /*
+     * Record Date drives every holdings calculation (who is eligible, when the
+     * split lands in FIFO, the duplicate check, the bonus recompute below).
+     * Effective Date is stored in Issue_Date for reference only — Issue_Date is
+     * kept as the column name so splits saved before Record_Date existed still
+     * read correctly (their Issue_Date doubles as their record date).
+     */
+    const recordDateISO = toISODateOnly(recordDate);
+    const effectiveDateISO = toISODateOnly(effectiveDate);
+    if (!recordDateISO || !effectiveDateISO) {
+      return res.status(400).json({ message: "Invalid record date or effective date" });
+    }
+    if (effectiveDateISO < recordDateISO) {
+      return res.status(400).json({ message: "Effective date cannot be before the record date" });
+    }
+
+    const isinEsc = escSql(isin);
 
     // Idempotency guard (mirrors bonus's bonusRowExists): a split event is
-    // uniquely identified by ISIN + Issue_Date + ratios. If it already exists,
+    // uniquely identified by ISIN + record date + ratios. If it already exists,
     // skip the insert AND the rebuild — re-applying would otherwise insert a
-    // duplicate Split row and apply the split ratio twice.
-    const existingSplit = await zcql.executeZCQLQuery(`
-      SELECT ROWID FROM Split
+    // duplicate Split row and apply the split ratio twice. Older rows have no
+    // Record_Date, so their Issue_Date stands in for it.
+    const sameRatioSplits = await zcql.executeZCQLQuery(`
+      SELECT ROWID, Record_Date, Issue_Date FROM Split
       WHERE ISIN = '${isinEsc}'
-        AND Issue_Date = '${issueDateEsc}'
         AND Ratio1 = ${Number(ratio1)}
         AND Ratio2 = ${Number(ratio2)}
-      LIMIT 1
     `);
-    if (existingSplit && existingSplit.length > 0) {
+    const alreadyApplied = (sameRatioSplits || []).some((row) => {
+      const s = row.Split || row;
+      return String(s.Record_Date || s.Issue_Date || "").slice(0, 10) === recordDateISO;
+    });
+    if (alreadyApplied) {
       console.log(
-        `[SplitController] Split already applied for ${isin} on ${issueDate} ` +
+        `[SplitController] Split already applied for ${isin} with record date ${recordDateISO} ` +
           `(${ratio1}:${ratio2}) — idempotent skip, no rebuild.`,
       );
       return res.status(200).json({
         success: true,
         alreadyApplied: true,
         message:
-          "Split already applied for this ISIN, date and ratio — skipped (no duplicate inserted).",
+          "Split already applied for this ISIN, record date and ratio — skipped (no duplicate inserted).",
       });
     }
 
@@ -349,17 +368,19 @@ export const addStockSplit = async (req, res) => {
         Security_Name,
         Ratio1,
         Ratio2,
+        Record_Date,
         Issue_Date,
         ISIN
       )
       VALUES
       (
-        '${securityCode}',
-        '${securityName}',
+        '${escSql(securityCode)}',
+        '${escSql(securityName)}',
         ${Number(ratio1)},
         ${Number(ratio2)},
-        '${issueDate}',
-        '${isin}'
+        '${recordDateISO}',
+        '${effectiveDateISO}',
+        '${isinEsc}'
       )
     `);
 
@@ -422,17 +443,19 @@ export const addStockSplit = async (req, res) => {
       }
     }
 
-    // A bonus already applied on/after this split's date had its BonusShare
+    // A bonus already applied on/after this split's record date had its BonusShare
     // sized on the PRE-split holding — it is now stale. Re-run the bonus apply
     // in recompute mode (the Split row above is now in the DB, so the bonus
     // FIFO will re-size on the post-split holding and overwrite BonusShare).
     // The recompute job re-queues its own RebuildHoldingtable afterward.
     let bonusPiecesRegistered = 0;
     try {
+      // Compared on each bonus's record date (ExDate for bonuses saved before
+      // Record_Date existed), so the filter is applied here rather than in SQL.
       const bonusRecords = await zcql.executeZCQLQuery(`
-        SELECT SecurityCode, SecurityName, ISIN, Ratio1, Ratio2, ExDate
+        SELECT SecurityCode, SecurityName, ISIN, Ratio1, Ratio2, Record_Date, ExDate
         FROM Bonus_Record
-        WHERE ISIN = '${isinEsc}' AND ExDate >= '${issueDateEsc}'
+        WHERE ISIN = '${isinEsc}'
         ORDER BY ExDate ASC
       `);
 
@@ -440,12 +463,13 @@ export const addStockSplit = async (req, res) => {
       let bonusIdx = 0;
       for (const row of bonusRecords || []) {
         const b = row.Bonus_Record || row;
-        const exDateISO = String(b.ExDate || "").slice(0, 10);
-        if (!exDateISO) continue;
+        const bonusEffectiveDateISO = String(b.ExDate || "").slice(0, 10);
+        const bonusRecordDateISO = String(b.Record_Date || "").slice(0, 10) || bonusEffectiveDateISO;
+        if (!bonusRecordDateISO || bonusRecordDateISO < recordDateISO) continue;
 
         // Unique tracking name so UpdateBonusTable's per-account SUCCESS guard
-        // (scoped by jobName) does not skip a prior bonus run for this ex-date.
-        const bonusJobName = `BONRC_${isin.slice(-6)}_${exDateISO}_${Date.now()}`;
+        // (scoped by jobName) does not skip a prior bonus run for this bonus.
+        const bonusJobName = `BONRC_${isin.slice(-6)}_${bonusRecordDateISO}_${Date.now()}`;
         // A "bonus phase" piece for the split notification. It stays RUNNING
         // until UpdateBonusTable has re-sized this bonus AND handed off to the
         // rebuild jobs it spawns (which register their own pieces) — so the
@@ -468,7 +492,8 @@ export const addStockSplit = async (req, res) => {
             isin,
             ratio1: String(Number(b.Ratio1) || 0),
             ratio2: String(Number(b.Ratio2) || 0),
-            exDate: exDateISO,
+            recordDate: bonusRecordDateISO,
+            exDate: bonusEffectiveDateISO || bonusRecordDateISO,
             secCode: b.SecurityCode || securityCode || "",
             secName: b.SecurityName || securityName || "",
             recompute: "true",
@@ -478,7 +503,7 @@ export const addStockSplit = async (req, res) => {
           },
         });
         console.log(
-          `[SplitController] Queued bonus recompute for ${isin} ex-date ${exDateISO}`,
+          `[SplitController] Queued bonus recompute for ${isin} record date ${bonusRecordDateISO}`,
         );
       }
     } catch (recomputeErr) {

@@ -36,7 +36,11 @@ function BonusPage() {
   const [securityName, setSecurityName] = useState("");
   const [ratio1, setRatio1] = useState("");
   const [ratio2, setRatio2] = useState("");
-  const [date, setDate] = useState("");
+  const [recordDate, setRecordDate] = useState("");
+  const [effectiveDate, setEffectiveDate] = useState("");
+
+  // yyyy-mm-dd strings compare correctly as text.
+  const datesOutOfOrder = Boolean(recordDate && effectiveDate && effectiveDate < recordDate);
 
   const [securities, setSecurities] = useState([]);
   const [searchQuery, setSearchQuery] = useState("");
@@ -179,7 +183,8 @@ function BonusPage() {
             setSecurityName("");
             setRatio1("");
             setRatio2("");
-            setDate("");
+            setRecordDate("");
+            setEffectiveDate("");
             setPreviewData([]);
             setStep("form");
             setExportDownloadUrl("");
@@ -234,7 +239,7 @@ function BonusPage() {
         isin,
         ratio1: Number(ratio1),
         ratio2: Number(ratio2),
-        exDate: date, // ✅ REQUIRED FOR FIFO
+        recordDate, // holdings are counted as on this date
       }),
     });
 
@@ -250,14 +255,14 @@ function BonusPage() {
     setLoading(false);
   };
   const downloadBonusExport = () => {
-    if (!isin || !ratio1 || !ratio2 || !date) return;
+    if (!isin || !ratio1 || !ratio2 || !recordDate) return;
 
     const url =
       `${BASE_URL}/export/bonus-preview` +
       `?isin=${encodeURIComponent(isin)}` +
       `&ratio1=${encodeURIComponent(ratio1)}` +
       `&ratio2=${encodeURIComponent(ratio2)}` +
-      `&exDate=${encodeURIComponent(date)}`;
+      `&recordDate=${encodeURIComponent(recordDate)}`;
 
     window.open(url, "_blank");
   };
@@ -358,19 +363,42 @@ function BonusPage() {
             />
           </div>
 
+          {/* DATES — Record Date drives every calculation; Effective Date is stored for reference. */}
+          <div className="bonus-field">
+            <label>Record Date</label>
+            <input
+              type="date"
+              value={recordDate}
+              onChange={(e) => setRecordDate(e.target.value)}
+            />
+          </div>
+
           <div className="bonus-field">
             <label>Effective Date</label>
             <input
               type="date"
-              value={date}
-              onChange={(e) => setDate(e.target.value)}
+              value={effectiveDate}
+              min={recordDate || undefined}
+              onChange={(e) => setEffectiveDate(e.target.value)}
             />
           </div>
+
+          {datesOutOfOrder && (
+            <div className="cm-verdict bad">Effective Date cannot be before the Record Date.</div>
+          )}
 
           <div className="ops-form-actions">
           <button
             className="cm-primary"
-            disabled={!isin || ratio1 <= 0 || !ratio2 || !date || loading}
+            disabled={
+              !isin ||
+              ratio1 <= 0 ||
+              !ratio2 ||
+              !recordDate ||
+              !effectiveDate ||
+              datesOutOfOrder ||
+              loading
+            }
             onClick={fetchPreview}
           >
             Fetch Affected Accounts
@@ -518,7 +546,7 @@ function BonusPage() {
                         isin,
                         ratio1,
                         ratio2,
-                        exDate: date,
+                        recordDate,
                       });
 
                       const res = await fetch(
@@ -567,7 +595,7 @@ function BonusPage() {
                 {/* APPLY BONUS */}
                 <button
                   className="cm-primary"
-                  disabled={applying}
+                  disabled={applying || !effectiveDate || datesOutOfOrder}
                   onClick={async () => {
                     setApplying(true);
                     setError(null);
@@ -581,7 +609,8 @@ function BonusPage() {
                           isin,
                           ratio1: Number(ratio1),
                           ratio2: Number(ratio2),
-                          exDate: date,
+                          recordDate,
+                          effectiveDate,
                           securityCode,
                           securityName,
                         }),

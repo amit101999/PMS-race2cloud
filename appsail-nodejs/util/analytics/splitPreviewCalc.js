@@ -35,12 +35,12 @@ const nextISODate = (isoDate) => {
  *   holdingValue = unchanged (same total cost)
  *   newWAP       = holdingValue / newHolding (price per share changes)
  */
-export async function computeSplitPreviewRows(zcql, { isin, r1, r2, issueDateISO }) {
-  // cutoff = day AFTER issueDate for the date filter (exclusive upper bound)
-  const cutoff = nextISODate(issueDateISO);
+export async function computeSplitPreviewRows(zcql, { isin, r1, r2, recordDateISO }) {
+  // cutoff = day AFTER the record date for the date filter (exclusive upper bound)
+  const cutoff = nextISODate(recordDateISO);
 
-  /* STEP 1: READ Holdings AS OF issueDate — walk in FIFO order and keep
-     updating per account; last row per account = state on issueDate. */
+  /* STEP 1: READ Holdings AS OF the record date — walk in FIFO order and keep
+     updating per account; last row per account = state on the record date. */
   const latestByAccount = new Map(); // accountCode → last Holdings row
   const rowsByAccount = new Map(); // accountCode → every effective row, for re-derivation
   // ZCQL's OFFSET is 1-based, so each page repeats the previous page's last
@@ -113,7 +113,7 @@ export async function computeSplitPreviewRows(zcql, { isin, r1, r2, issueDateISO
 
   for (const [accountCode, h] of latestByAccount) {
     const currentHolding = Number(h.HOLDING) || 0;
-    if (currentHolding <= 0) continue; // fully sold before issueDate
+    if (currentHolding <= 0) continue; // fully sold by the record date
 
     const holdingValue = Number(h.HOLDING_VALUE) || 0;
     const currentWAP = Number(h.WAP) || 0;

@@ -28,7 +28,8 @@ const esc = (s) => String(s ?? "").replace(/'/g, "''");
 const isIsoDate = (s) => /^\d{4}-\d{2}-\d{2}$/.test(String(s || "").trim());
 
 /**
- * Frozen work list: every bonus whose ExDate falls in [fromDate, toDate].
+ * Frozen work list: every bonus whose record date or effective date (ExDate)
+ * falls in [fromDate, toDate] — the same range rule as Demerger.
  * One manifest entry == one bonus event.
  */
 async function buildManifest(zcql, fromDate, toDate) {
@@ -42,9 +43,10 @@ async function buildManifest(zcql, fromDate, toDate) {
 
   while (true) {
     const rows = await zcql.executeZCQLQuery(`
-      SELECT ROWID, SecurityCode, SecurityName, Ratio1, Ratio2, ExDate, ISIN
+      SELECT ROWID, SecurityCode, SecurityName, Ratio1, Ratio2, Record_Date, ExDate, ISIN
       FROM Bonus_Record
-      WHERE ExDate >= '${from}' AND ExDate <= '${to}'
+      WHERE (ExDate >= '${from}' AND ExDate <= '${to}')
+         OR (Record_Date >= '${from}' AND Record_Date <= '${to}')
       ORDER BY ExDate ASC, ROWID ASC
       LIMIT ${MANIFEST_BATCH} OFFSET ${offset}
     `);
@@ -57,9 +59,12 @@ async function buildManifest(zcql, fromDate, toDate) {
         if (seenRowIds.has(b.ROWID)) continue;
         seenRowIds.add(b.ROWID);
       }
+      const exDate = String(b.ExDate ?? "").slice(0, 10);
       events.push({
         isin: String(b.ISIN ?? "").trim(),
-        exDate: String(b.ExDate ?? "").slice(0, 10),
+        exDate,
+        // Bonuses saved before Record_Date existed use ExDate for both dates.
+        recordDate: String(b.Record_Date ?? "").slice(0, 10) || exDate,
         ratio1: Number(b.Ratio1),
         ratio2: Number(b.Ratio2),
         securityCode: b.SecurityCode ?? "",
@@ -79,7 +84,11 @@ async function buildManifest(zcql, fromDate, toDate) {
  * Returns "" when the event has no per-account `Bonus` rows.
  */
 async function buildEventCsv({ zcql, event, generatedAt, fromDate, toDate, csvCell }) {
+  // ExDate is the effective date on both Bonus_Record and Bonus, so it still
+  // joins an event to its per-account rows. A manifest frozen before this
+  // change has no recordDate; ExDate then served as both dates.
   const { isin, exDate, ratio1, ratio2 } = event;
+  const recordDate = event.recordDate || exDate;
   if (!isin || !isIsoDate(exDate)) return "";
 
   const r1 = Number(ratio1);
@@ -140,6 +149,7 @@ async function buildEventCsv({ zcql, event, generatedAt, fromDate, toDate, csvCe
         generatedAt,
         fromDate,
         toDate,
+        recordDate,
         exDate,
         acc,
         actual,
@@ -158,7 +168,7 @@ async function buildEventCsv({ zcql, event, generatedAt, fromDate, toDate, csvCe
 module.exports = {
   reportType: "bonus",
   header:
-    "GENERATED_AT,FROM_DATE,TO_DATE,EX_DATE,VIRTUAL_CODE,ACTUAL_CODE," +
+    "GENERATED_AT,FROM_DATE,TO_DATE,RECORD_DATE,EFFECTIVE_DATE,VIRTUAL_CODE,ACTUAL_CODE," +
     "ISIN,TYPE,BONUS_RATIO,SHARES_ALLOCATED\n",
   buildManifest,
   buildEventCsv,

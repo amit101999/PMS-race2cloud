@@ -38,7 +38,8 @@ function SplitPage() {
   const [securityName, setSecurityName] = useState("");
   const [ratio1, setRatio1] = useState("");
   const [ratio2, setRatio2] = useState("");
-  const [date, setDate] = useState("");
+  const [recordDate, setRecordDate] = useState("");
+  const [effectiveDate, setEffectiveDate] = useState("");
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewData, setPreviewData] = useState([]);
   const [showPreview, setShowPreview] = useState(false);
@@ -65,6 +66,9 @@ function SplitPage() {
   const { trackJob, reportJob } = useJobNotifications();
 
   useEffect(() => setPage(1), [previewData]);
+
+  // yyyy-mm-dd strings compare correctly as text.
+  const datesOutOfOrder = Boolean(recordDate && effectiveDate && effectiveDate < recordDate);
 
   /* ===========================
      GROUP PREVIEW BY ACTUAL ACCOUNT
@@ -135,7 +139,7 @@ function SplitPage() {
         isin,
         ratio1: Number(ratio1),
         ratio2: Number(ratio2),
-        issueDate: date,
+        recordDate,
       };
 
       const res = await fetch(`${BASE_URL}/split/preview`, {
@@ -228,7 +232,8 @@ function SplitPage() {
         securityName,
         ratio1: Number(ratio1),
         ratio2: Number(ratio2),
-        issueDate: date,
+        recordDate,
+        effectiveDate,
       };
 
       const res = await fetch(`${BASE_URL}/split/add`, {
@@ -275,7 +280,8 @@ function SplitPage() {
       setSecurityName("");
       setRatio1("");
       setRatio2("");
-      setDate("");
+      setRecordDate("");
+      setEffectiveDate("");
       setPreviewData([]);
       setShowPreview(false);
       setExportDownloadUrl("");
@@ -394,15 +400,29 @@ function SplitPage() {
             />
           </div>
 
-          {/* DATE */}
+          {/* DATES — Record Date drives every calculation; Effective Date is stored for reference. */}
+          <div className="split-field">
+            <label>Record Date</label>
+            <input
+              type="date"
+              value={recordDate}
+              onChange={(e) => setRecordDate(e.target.value)}
+            />
+          </div>
+
           <div className="split-field">
             <label>Effective Date</label>
             <input
               type="date"
-              value={date}
-              onChange={(e) => setDate(e.target.value)}
+              value={effectiveDate}
+              min={recordDate || undefined}
+              onChange={(e) => setEffectiveDate(e.target.value)}
             />
           </div>
+
+          {datesOutOfOrder && (
+            <div className="cm-verdict bad">Effective Date cannot be before the Record Date.</div>
+          )}
 
           {/* ACTION - same as Bonus: single "Fetch Affected Accounts" button */}
           <div className="ops-form-actions">
@@ -412,7 +432,9 @@ function SplitPage() {
               !isin ||
               !ratio1 ||
               !ratio2 ||
-              !date ||
+              !recordDate ||
+              !effectiveDate ||
+              datesOutOfOrder ||
               Number(ratio1) <= 0 ||
               Number(ratio2) <= 0 ||
               previewLoading
@@ -429,7 +451,7 @@ function SplitPage() {
           <h3 className="ops-card-title">Split Impact Preview</h3>
 
           {previewData.length === 0 ? (
-            <p className="cm-empty">No eligible holdings found before split date.</p>
+            <p className="cm-empty">No eligible holdings found on the record date.</p>
           ) : (
             <>
               <div className="data-table-wrap">
@@ -531,7 +553,7 @@ function SplitPage() {
                         isin,
                         ratio1,
                         ratio2,
-                        issueDate: date,
+                        recordDate,
                       });
                       const res = await fetch(
                         `${BASE_URL}/split/export-preview?${params.toString()}`,
@@ -562,7 +584,7 @@ function SplitPage() {
                 />
                 <button
                   className="cm-primary"
-                  disabled={loading}
+                  disabled={loading || !effectiveDate || datesOutOfOrder}
                   onClick={handleSubmit}
                 >
                   {loading ? "Applying…" : "Confirm & Apply Split"}

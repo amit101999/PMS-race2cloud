@@ -155,15 +155,16 @@ export const exportCorporateAction = async (req, res) => {
     const zcql = catalystApp.zcql();
     const dayAfterToISO = addOneCalendarDayUtc(toISO);
 
-    /* ---------- BONUS ROWS from Bonus_Record (ExDate between fromDate and toDate) ---------- */
+    /* ---------- BONUS ROWS from Bonus_Record (record or effective date between fromDate and toDate, like Demerger) ---------- */
     const bonusRows = [];
     let offset = 0;
 
     while (true) {
       const rows = await zcql.executeZCQLQuery(`
-        SELECT SecurityCode, SecurityName, Ratio1, Ratio2, ExDate, ISIN, EXCHG, SCHEMENAME
+        SELECT SecurityCode, SecurityName, Ratio1, Ratio2, Record_Date, ExDate, ISIN, EXCHG, SCHEMENAME
         FROM Bonus_Record
-        WHERE ExDate >= '${fromISO}' AND ExDate <= '${toISO}'
+        WHERE (ExDate >= '${fromISO}' AND ExDate <= '${toISO}')
+           OR (Record_Date >= '${fromISO}' AND Record_Date <= '${toISO}')
         ORDER BY ExDate ASC, ROWID ASC
         LIMIT ${BATCH_SIZE} OFFSET ${offset}
       `);
@@ -174,15 +175,16 @@ export const exportCorporateAction = async (req, res) => {
       offset += BATCH_SIZE;
     }
 
-    /* ---------- SPLIT ROWS (Issue_Date between fromDate and toDate) ---------- */
+    /* ---------- SPLIT ROWS (record or effective date between fromDate and toDate, like Demerger) ---------- */
     const splitRows = [];
     offset = 0;
 
     while (true) {
       const rows = await zcql.executeZCQLQuery(`
-        SELECT ROWID, ISIN, Issue_Date, Ratio1, Ratio2, Security_Code, Security_Name
+        SELECT ROWID, ISIN, Record_Date, Issue_Date, Ratio1, Ratio2, Security_Code, Security_Name
         FROM Split
-        WHERE Issue_Date >= '${fromISO}' AND Issue_Date <= '${toISO}'
+        WHERE (Issue_Date >= '${fromISO}' AND Issue_Date <= '${toISO}')
+           OR (Record_Date >= '${fromISO}' AND Record_Date <= '${toISO}')
         ORDER BY Issue_Date ASC, ROWID ASC
         LIMIT ${BATCH_SIZE} OFFSET ${offset}
       `);
@@ -256,7 +258,10 @@ export const exportCorporateAction = async (req, res) => {
     const bonusByEvent = {};
     for (const r of bonusRows) {
       const b = r.Bonus_Record || r;
+      // ExDate holds the effective date. Bonuses saved before Record_Date
+      // existed have no record date, so their ExDate stands in for it.
       const exDate = b.ExDate ?? "";
+      const recordDate = b.Record_Date || exDate;
       const securityCode = b.SecurityCode ?? "";
       const securityName = b.SecurityName ?? "";
       const isin = b.ISIN ?? "";
@@ -264,7 +269,7 @@ export const exportCorporateAction = async (req, res) => {
       if (!bonusByEvent[key]) {
         const isinNorm = String(isin ?? "").trim();
         bonusByEvent[key] = {
-          date: exDate,
+          date: recordDate,
           ratio1: b.Ratio1 ?? "",
           ratio2: b.Ratio2 ?? "",
           type: "bonus",
@@ -273,7 +278,7 @@ export const exportCorporateAction = async (req, res) => {
           oldIsin: isinNorm && isinNorm !== "-" ? isinNorm : "",
           newIsin: "",
           effectiveDate: exDate,
-          recordDate: "",
+          recordDate,
           allocationToNewPct: "",
         };
       }
@@ -295,8 +300,10 @@ export const exportCorporateAction = async (req, res) => {
       const securityCode = s.Security_Code ?? "";
       const securityName = s.Security_Name ?? "";
       const splitIsin = String(s.ISIN ?? "").trim();
+      // Issue_Date holds the effective date. Splits saved before Record_Date
+      // existed have no record date, so their Issue_Date stands in for it.
       splitEvents.push({
-        date: s.Issue_Date ?? "",
+        date: s.Record_Date || s.Issue_Date || "",
         ratio1: s.Ratio1 ?? "",
         ratio2: s.Ratio2 ?? "",
         type: "split",
@@ -305,7 +312,7 @@ export const exportCorporateAction = async (req, res) => {
         oldIsin: splitIsin && splitIsin !== "-" ? splitIsin : "",
         newIsin: "",
         effectiveDate: s.Issue_Date ?? "",
-        recordDate: "",
+        recordDate: s.Record_Date || s.Issue_Date || "",
         allocationToNewPct: "",
       });
     }

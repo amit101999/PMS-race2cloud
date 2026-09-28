@@ -120,16 +120,21 @@ function runFifoForLots(transactions, bonuses, splits, demergers, mergers, mode)
 
     ...bonuses
       .filter((b) => (b.ISIN || b.isin) === activeIsin)
-      .map((b) => ({
-        type: "BONUS",
-        date: normalizeDate(b.ExDate || b.exDate),
-        data: {
-          sourceRowId: b.ROWID ? `BON-${b.ROWID}` : null,
-          bonusShare: b.BonusShare || b.bonusShare,
-          exDate: normalizeDate(b.ExDate || b.exDate),
-          isin: b.ISIN || b.isin,
-        },
-      })),
+      .map((b) => {
+        // A bonus lands in holdings on its record date; bonuses saved before
+        // Record_Date existed only have ExDate, which served that role.
+        const bonusDate = normalizeDate(b.Record_Date || b.ExDate || b.exDate);
+        return {
+          type: "BONUS",
+          date: bonusDate,
+          data: {
+            sourceRowId: b.ROWID ? `BON-${b.ROWID}` : null,
+            bonusShare: b.BonusShare || b.bonusShare,
+            exDate: bonusDate,
+            isin: b.ISIN || b.isin,
+          },
+        };
+      }),
 
     ...splits
       .filter((s) => s.isin === activeIsin)

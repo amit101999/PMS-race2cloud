@@ -131,33 +131,34 @@ export const previewStockBonus = async (req, res) => {
       });
     }
 
-    const { isin, ratio1, ratio2, exDate } = req.body;
+    // Eligibility is decided by the holding at the end of the record date.
+    const { isin, ratio1, ratio2, recordDate } = req.body;
 
     const r1 = Number(ratio1);
     const r2 = Number(ratio2);
 
-    if (!isin || !exDate || !Number.isFinite(r1) || !Number.isFinite(r2) || r1 <= 0) {
+    if (!isin || !recordDate || !Number.isFinite(r1) || !Number.isFinite(r2) || r1 <= 0) {
       return res.status(400).json({
         success: false,
-        message: "Invalid ISIN, ratio or date",
+        message: "Invalid ISIN, ratio or record date",
       });
     }
 
-    const exDateISO = toISODateOnly(exDate);
-    if (!exDateISO) {
-      return res.status(400).json({ success: false, message: "Invalid date" });
+    const recordDateISO = toISODateOnly(recordDate);
+    if (!recordDateISO) {
+      return res.status(400).json({ success: false, message: "Invalid record date" });
     }
 
-    // cutoff = day AFTER exDate for the date filter (exclusive upper bound)
-    const cutoff = nextISODate(exDateISO);
+    // cutoff = day AFTER the record date for the date filter (exclusive upper bound)
+    const cutoff = nextISODate(recordDateISO);
 
     const zcql = req.catalystApp.zcql();
 
     /* ======================================================
-       STEP 1: READ Holdings AS OF exDate
+       STEP 1: READ Holdings AS OF the record date
        Fetch all Holdings rows for this ISIN with date filter.
        Walk in FIFO order (CREATEDTIME ASC, ROWID ASC) and keep
-       updating per account — last row per account = state on exDate.
+       updating per account — last row per account = state on the record date.
        ====================================================== */
     const latestByAccount = new Map(); // accountCode → last Holdings row
     const rowsByAccount = new Map(); // accountCode → every effective row, for re-derivation
@@ -209,13 +210,13 @@ export const previewStockBonus = async (req, res) => {
 
     /* The stored HOLDING is a running balance frozen in settlement order at
        rebuild time, so it can contradict the rows the trade-date rule selected
-       above — it may include a buy that is not yet effective on the ex-date.
+       above — it may include a buy that is not yet effective on the record date.
        Re-derive the position from the rows themselves. Once the Holdings table
        has been rebuilt on the new basis this becomes a no-op. */
     for (const [acc, accRows] of rowsByAccount) {
       const snap = recomputeHoldingsSnapshot(accRows);
       if (snap.HOLDING <= 0) {
-        latestByAccount.delete(acc); // fully sold as at the ex-date
+        latestByAccount.delete(acc); // fully sold as at the record date
         continue;
       }
       latestByAccount.set(acc, { ...latestByAccount.get(acc), ...snap });
@@ -238,7 +239,7 @@ export const previewStockBonus = async (req, res) => {
 
     for (const [accountCode, h] of latestByAccount) {
       const currentHolding = Number(h.HOLDING) || 0;
-      if (currentHolding <= 0) continue; // fully sold before exDate
+      if (currentHolding <= 0) continue; // fully sold by the record date
 
       const holdingValue = Number(h.HOLDING_VALUE) || 0;
       const currentWAP   = Number(h.WAP) || 0;
@@ -294,7 +295,8 @@ export const applyStockBonus = async (req, res) => {
       isin,
       ratio1,
       ratio2,
-      exDate,
+      recordDate,
+      effectiveDate,
       securityCode: bodySecurityCode,
       securityName: bodySecurityName,
     } = req.body;
@@ -302,23 +304,37 @@ export const applyStockBonus = async (req, res) => {
     const r1 = Number(ratio1);
     const r2 = Number(ratio2);
 
-    if (!isin || !exDate || !Number.isFinite(r1) || !Number.isFinite(r2) || r1 <= 0) {
+    if (!isin || !recordDate || !effectiveDate || !Number.isFinite(r1) || !Number.isFinite(r2) || r1 <= 0) {
       return res.status(400).json({
         success: false,
-        message: "Invalid input values",
+        message: "Invalid input values (ISIN, ratio, record date and effective date are required)",
       });
     }
 
-    const exDateISO = toISODateOnly(exDate);
-    if (!exDateISO) {
-      return res.status(400).json({ success: false, message: "Invalid date" });
+    /*
+     * Record Date drives every holdings calculation (who is eligible, when the
+     * bonus shares land in FIFO, the duplicate check). Effective Date is stored
+     * in the existing ExDate column for reference only, so bonuses saved before
+     * Record_Date existed still read correctly (their ExDate doubles as their
+     * record date).
+     */
+    const recordDateISO = toISODateOnly(recordDate);
+    const effectiveDateISO = toISODateOnly(effectiveDate);
+    if (!recordDateISO || !effectiveDateISO) {
+      return res.status(400).json({ success: false, message: "Invalid record date or effective date" });
+    }
+    if (effectiveDateISO < recordDateISO) {
+      return res.status(400).json({
+        success: false,
+        message: "Effective date cannot be before the record date",
+      });
     }
 
     const catalystApp = req.catalystApp;
     const zcql = catalystApp.zcql();
     const jobScheduling = catalystApp.jobScheduling();
 
-    const jobName = `BON_${isin.slice(-6)}_${exDateISO}`;
+    const jobName = `BON_${isin.slice(-6)}_${recordDateISO}`;
 
     const existing = await zcql.executeZCQLQuery(
       `SELECT ROWID, status, CREATEDTIME FROM Jobs WHERE jobName = '${jobName}' LIMIT 1`
@@ -379,7 +395,8 @@ export const applyStockBonus = async (req, res) => {
         isin,
         ratio1: String(r1),
         ratio2: String(r2),
-        exDate: exDateISO,
+        recordDate: recordDateISO,
+        exDate: effectiveDateISO,
         secCode: bodySecurityCode || "",
         secName: bodySecurityName || "",
         jobName,

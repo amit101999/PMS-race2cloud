@@ -10,7 +10,8 @@
  *                   "All Corporate Actions" export reads.
  *   2. `Holdings` — the per-client effect the rebuild materialised as
  *                   TYPE='SPLIT' rows (TRANSACTION_DATE = the split's
- *                   Issue_Date). HOLDING/WAP on those rows are the running
+ *                   Record_Date, or Issue_Date for splits saved before
+ *                   Record_Date existed). HOLDING/WAP on those rows are the running
  *                   post-split balance; the row with the greatest HOLDING for an
  *                   account is its final post-split total (running holdings
  *                   increases across the per-lot SPLIT rows the rebuild emits,
@@ -38,7 +39,8 @@ function round4(n) {
 }
 
 /**
- * Frozen work list: every split whose Issue_Date falls in [fromDate, toDate].
+ * Frozen work list: every split whose record date or effective date (Issue_Date)
+ * falls in [fromDate, toDate] — the same range rule as Demerger.
  * One manifest entry == one split event.
  */
 async function buildManifest(zcql, fromDate, toDate) {
@@ -52,9 +54,10 @@ async function buildManifest(zcql, fromDate, toDate) {
 
   while (true) {
     const rows = await zcql.executeZCQLQuery(`
-      SELECT ROWID, Security_Code, Security_Name, Ratio1, Ratio2, Issue_Date, ISIN
+      SELECT ROWID, Security_Code, Security_Name, Ratio1, Ratio2, Record_Date, Issue_Date, ISIN
       FROM Split
-      WHERE Issue_Date >= '${from}' AND Issue_Date <= '${to}'
+      WHERE (Issue_Date >= '${from}' AND Issue_Date <= '${to}')
+         OR (Record_Date >= '${from}' AND Record_Date <= '${to}')
       ORDER BY Issue_Date ASC, ROWID ASC
       LIMIT ${MANIFEST_BATCH} OFFSET ${offset}
     `);
@@ -67,9 +70,11 @@ async function buildManifest(zcql, fromDate, toDate) {
         if (seenRowIds.has(s.ROWID)) continue;
         seenRowIds.add(s.ROWID);
       }
+      const effectiveDate = String(s.Issue_Date ?? "").slice(0, 10);
       events.push({
         isin: String(s.ISIN ?? "").trim(),
-        issueDate: String(s.Issue_Date ?? "").slice(0, 10),
+        recordDate: String(s.Record_Date ?? "").slice(0, 10) || effectiveDate,
+        effectiveDate,
         ratio1: Number(s.Ratio1),
         ratio2: Number(s.Ratio2),
         securityCode: s.Security_Code ?? "",
@@ -90,8 +95,12 @@ async function buildManifest(zcql, fromDate, toDate) {
  * the rebuild hasn't materialised the SPLIT rows yet).
  */
 async function buildEventCsv({ zcql, event, generatedAt, fromDate, toDate, csvCell }) {
-  const { isin, issueDate, ratio1, ratio2 } = event;
-  if (!isin || !isIsoDate(issueDate)) return "";
+  // A manifest frozen before this change carries only `issueDate`, which then
+  // served as both dates.
+  const { isin, ratio1, ratio2 } = event;
+  const recordDate = event.recordDate || event.issueDate;
+  const effectiveDate = event.effectiveDate || event.issueDate;
+  if (!isin || !isIsoDate(recordDate)) return "";
 
   const r1 = Number(ratio1);
   const r2 = Number(ratio2);
@@ -108,7 +117,8 @@ async function buildEventCsv({ zcql, event, generatedAt, fromDate, toDate, csvCe
   const seenRowIds = new Set();
   let offset = 0;
   const isinEsc = esc(isin);
-  const dateEsc = esc(issueDate);
+  // The rebuild dates SPLIT rows by the split's record date.
+  const dateEsc = esc(recordDate);
 
   while (true) {
     const rows = await zcql.executeZCQLQuery(`
@@ -165,7 +175,8 @@ async function buildEventCsv({ zcql, event, generatedAt, fromDate, toDate, csvCe
         generatedAt,
         fromDate,
         toDate,
-        issueDate,
+        recordDate,
+        effectiveDate,
         acc,
         actual,
         isin,
@@ -183,7 +194,7 @@ async function buildEventCsv({ zcql, event, generatedAt, fromDate, toDate, csvCe
 module.exports = {
   reportType: "split",
   header:
-    "GENERATED_AT,FROM_DATE,TO_DATE,ISSUE_DATE,VIRTUAL_CODE,ACTUAL_CODE," +
+    "GENERATED_AT,FROM_DATE,TO_DATE,RECORD_DATE,EFFECTIVE_DATE,VIRTUAL_CODE,ACTUAL_CODE," +
     "ISIN,TYPE,SPLIT_RATIO,SHARES_ALLOCATED\n",
   buildManifest,
   buildEventCsv,
