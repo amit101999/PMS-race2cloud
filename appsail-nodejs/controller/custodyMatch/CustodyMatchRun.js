@@ -10,15 +10,13 @@
  *   Gate 2  POST /run/:id/proceed — status COMPLETED_CLEAN AND exceptionCount === 0
  */
 
-import { FA_FILE_TYPE, RUN_STATUS, STAGE } from "../../util/custodyMatch/constants.js";
+import { FA_FILE_TYPE, FILE_SIDE, RUN_STATUS, STAGE } from "../../util/custodyMatch/constants.js";
 import {
   buildRunDatesKey,
   getBucket,
   getBuffer,
   getJson,
-  listDay,
   loadFieldMapProfiles,
-  putJson,
   signedGetUrl,
 } from "../../util/custodyMatch/storage.js";
 import { PROFILE_TYPE, isDefaultProfile } from "../../util/custodyMatch/fieldMap.js";
@@ -36,14 +34,15 @@ import {
   setStage,
   setStageDetail,
   findImportedRunForDate,
+  listFiles,
   listRunsForDate,
-  supersedeRunsForDate,
 } from "../../util/custodyMatch/runStore.js";
 import {
   DIFFERENCE_CSV_COLUMNS,
   DIFFERENCE_CSV_HEADERS,
 } from "../../util/custodyMatch/compare.js";
 import { uploadTempTransaction } from "../uploader/TempTransactionUpload.js";
+import { uploadDayFiles } from "./CustodyMatchUpload.js";
 
 const JOB_POOL = "CustodyMatch";
 const JOB_TARGET = "CustodyMatchRunner";
@@ -67,6 +66,7 @@ const toRunView = (run) => {
   return {
     runId: run.runId,
     businessDate: run.businessDate,
+    uploadDate: run.uploadDate || "",
     status: run.status,
     stage: run.stage,
     stageDetail: run.stageDetail,
@@ -98,69 +98,64 @@ const toRunView = (run) => {
   };
 };
 
+/** The files for a file date under one upload date, split by side. Match compares exactly these. */
+const filesForDate = async (catalystApp, businessDate, uploadDate) => {
+  const files = uploadDate
+    ? await listFiles(catalystApp, { forDate: businessDate, uploadedOn: uploadDate })
+    : [];
+  return {
+    faFiles: files.filter((f) => f.side === FILE_SIDE.FA),
+    custodyFiles: files.filter((f) => f.side === FILE_SIDE.CUSTODY),
+  };
+};
+
 /**
  * Everything Gate 1 requires, checked in one place so the reason can be shown
  * before the button is pressed rather than as a failed run afterwards.
  */
-const checkGateOne = (day) => {
+const checkGateOne = ({ faFiles, custodyFiles }) => {
   const blockers = [];
 
-  if (!day.fa.hasFile) {
+  if (faFiles.length === 0) {
     blockers.push({
       code: "NO_TRANSACTION_FILE",
-      message: "No transaction file has been staged for this date.",
+      message: "FA file is not present for this date.",
     });
   }
-  if (!day.custody.hasFiles) {
+  if (custodyFiles.length === 0) {
     blockers.push({
       code: "NO_CUSTODY_FILES",
-      message: "No custodian files have been uploaded for this date.",
+      message: "Custodian file is not present for this date.",
     });
   }
   return blockers;
 };
 
-/** The dates a run was told to compare. Empty means it was not limited. */
-const runDates = async (catalystApp, run) => {
-  try {
-    const saved = await getJson(
-      getBucket(catalystApp),
-      buildRunDatesKey(run.businessDate, run.runId),
-    );
-    return Array.isArray(saved?.dates) ? [...saved.dates].sort() : [];
-  } catch {
-    return [];
-  }
-};
-
-const sameDates = (a, b) => a.length === b.length && a.every((d, i) => d === b[i]);
-
 /**
- * A finished run over exactly these dates whose answer still stands.
+ * A finished run for this file date and upload date whose answer still stands.
  *
  * SUPERSEDED runs are skipped: that status is set only when a file or a mapping
- * changed, so their answer no longer describes what is on disk. A run that is
+ * changed, so their answer no longer describes what is stored. A run that is
  * merely older is fine — nothing about it has changed.
  */
-const findReusableRun = async (catalystApp, businessDate, selectedDates) => {
-  const runs = await listRunsForDate(catalystApp, businessDate, 50);
-  const finished = runs.filter(
-    (r) =>
-      r.status === RUN_STATUS.COMPLETED_CLEAN ||
-      r.status === RUN_STATUS.COMPLETED_WITH_EXCEPTIONS,
+const findReusableRun = async (catalystApp, businessDate, uploadDate) => {
+  const runs = await listRunsForDate(catalystApp, businessDate, 50, uploadDate);
+  return (
+    runs.find(
+      (r) =>
+        r.status === RUN_STATUS.COMPLETED_CLEAN ||
+        r.status === RUN_STATUS.COMPLETED_WITH_EXCEPTIONS,
+    ) || null
   );
-
-  for (const run of finished) {
-    if (sameDates(await runDates(catalystApp, run), selectedDates)) return run;
-  }
-  return null;
 };
 
 /**
  * POST /api/custody-match/run
- * body: { businessDate }
+ * body: { businessDate, uploadDate }
  *
- * Gate 1. Re-checks its own preconditions, then queues the job.
+ * Gate 1. Re-checks its own preconditions, then queues the job. One run
+ * compares one file date's files under one upload date; the screen starts one
+ * per date the user ticks.
  */
 export const startRun = async (req, res) => {
   try {
@@ -168,61 +163,44 @@ export const startRun = async (req, res) => {
     if (!catalystApp) return noApp(res);
 
     const businessDate = String(req.body?.businessDate || "").trim();
-    if (!DATE_PATTERN.test(businessDate)) {
+    const uploadDate = String(req.body?.uploadDate || "").trim();
+    if (!DATE_PATTERN.test(businessDate) || !DATE_PATTERN.test(uploadDate)) {
       return fail(res, 400, {
         code: "BAD_DATE",
-        message: `businessDate must be yyyy-mm-dd; received "${businessDate}".`,
+        message: `businessDate and uploadDate must be yyyy-mm-dd; received "${businessDate}" and "${uploadDate}".`,
       });
     }
 
-    const day = await listDay(catalystApp, businessDate);
-    const blockers = checkGateOne(day);
+    const { faFiles, custodyFiles } = await filesForDate(catalystApp, businessDate, uploadDate);
+    const blockers = checkGateOne({ faFiles, custodyFiles });
     if (blockers.length > 0) {
       return fail(res, 409, {
         code: "GATE_1_BLOCKED",
-        message: "Matching cannot start yet.",
+        message: `${businessDate} cannot be matched for upload date ${uploadDate} yet. ${blockers.map((b) => b.message).join(" ")}`,
         blockers,
         businessDate,
+        uploadDate,
       });
     }
 
     /*
-     * An optional date filter. Absent or empty means every date the files
-     * contain, which is what a run has always done.
-     */
-    const requested = Array.isArray(req.body?.dates) ? req.body.dates : [];
-    const selectedDates = [...new Set(requested.map((d) => String(d || "").trim()))]
-      .filter(Boolean)
-      .sort();
-
-    const badDate = selectedDates.find((d) => !DATE_PATTERN.test(d));
-    if (badDate) {
-      return fail(res, 400, {
-        code: "BAD_DATE",
-        message: `Selected dates must be yyyy-mm-dd; received "${badDate}".`,
-      });
-    }
-
-    /*
-     * A match already made over exactly these dates is not made again.
+     * A pair already matched is not matched again.
      *
-     * Comparing the same files over the same dates can only produce the same
-     * report, so re-running would spend the whole pipeline to write a second
-     * copy and push the first one down the list. The existing run is handed
-     * back instead. Uploading, removing or remapping a file supersedes every
-     * run for the date, which is what makes a stale answer un-reusable.
+     * The same files can only produce the same report, so re-running would
+     * spend the whole pipeline to write a second copy. The existing run is
+     * handed back instead. Uploading, removing or remapping a file supersedes
+     * the pair's runs, which is what makes a stale answer un-reusable.
      */
-    const existing = await findReusableRun(catalystApp, businessDate, selectedDates);
+    const existing = await findReusableRun(catalystApp, businessDate, uploadDate);
     if (existing) {
       return res.status(200).json({
         success: true,
         reused: true,
         runId: existing.runId,
         businessDate,
+        uploadDate,
         status: existing.status,
-        message:
-          "These dates have already been matched. Showing that report — upload or change a file to match them again.",
-        dates: selectedDates,
+        message: `${businessDate} (uploaded ${uploadDate}) has already been matched. Showing that report — upload or change a file to match it again.`,
       });
     }
 
@@ -230,33 +208,21 @@ export const startRun = async (req, res) => {
     await createRun(catalystApp, {
       runId,
       businessDate,
+      uploadDate,
       startedBy: String(req.body?.startedBy || req.headers?.["x-user"] || ""),
-      // A record of what the run started from. The job re-lists the day itself,
-      // so this names the newest transaction file rather than driving the read.
-      faRawKey: day.fa.latestRaw?.key || "",
-      custodyFiles: day.custody.files.map((f) => ({
+      // A record of what the run started from. The job reads the file table
+      // itself, so these name the files rather than driving the read.
+      faRawKey: faFiles[0].fileKey,
+      custodyFiles: custodyFiles.map((f) => ({
         scheme: f.scheme,
         fileType: f.fileType,
-        key: f.key,
+        key: f.fileKey,
       })),
     });
 
     // job_name: alphanumeric and underscore only, and existing code caps it at
     // 20 characters — so the entropy goes at the front, not after a long prefix.
     const jobName = `CM_${Date.now()}`.slice(0, 20);
-
-    /*
-     * Written before the job is queued so the filter exists whenever the job
-     * gets to it — including on a retry, which submits a fresh job that would
-     * otherwise arrive with no idea the run was ever limited.
-     */
-    if (selectedDates.length > 0) {
-      await putJson(getBucket(catalystApp), buildRunDatesKey(businessDate, runId), {
-        runId,
-        businessDate,
-        dates: selectedDates,
-      });
-    }
 
     try {
       await catalystApp.jobScheduling().JOB.submitJob({
@@ -265,7 +231,7 @@ export const startRun = async (req, res) => {
         target_name: JOB_TARGET,
         target_type: "Function",
         job_config: { number_of_retries: 3, retry_interval: 60 * 1000 },
-        params: { runId, businessDate },
+        params: { runId, businessDate, uploadDate },
       });
     } catch (submitErr) {
       // The run row exists but nothing will pick it up — say so rather than
@@ -283,15 +249,15 @@ export const startRun = async (req, res) => {
     return res.status(202).json({
       success: true,
       runId,
-      selectedDates,
       jobName,
       businessDate,
+      uploadDate,
       status: RUN_STATUS.QUEUED,
       message: "Matching started.",
       files: {
-        transaction: day.fa.raw.map((f) => f.originalFileName).join(", "),
-        custody: day.custody.files.length,
-        schemes: [...new Set(day.custody.files.map((f) => f.scheme))].sort(),
+        transaction: faFiles.map((f) => f.originalFileName).join(", "),
+        custody: custodyFiles.length,
+        schemes: [...new Set(custodyFiles.map((f) => f.scheme))].sort(),
       },
     });
   } catch (error) {
@@ -318,12 +284,9 @@ export const listReports = async (req, res) => {
     const bucket = getBucket(catalystApp);
 
     /*
-     * Which dates each run actually compared, from the sidecar the run wrote.
-     *
-     * Without this two reports for the same business date are indistinguishable:
-     * comparing Mon+Tue and then Wed produces two separate reports that both say
-     * only "2026-09-09". The sidecar is absent when a run was not limited, which
-     * means it covered every date in the files.
+     * Which dates each run compared. Runs from before one-match-per-date could
+     * be limited to some of the dates in their files, recorded in a sidecar;
+     * every newer run compares just its own date.
      */
     const datesFor = async (run) => {
       try {
@@ -341,8 +304,8 @@ export const listReports = async (req, res) => {
       reports: runs.map((run, i) => ({
         runId: run.runId,
         businessDate: run.businessDate,
-        // Empty means the run was not limited to a selection: every date in the files.
-        dates: datesByRun[i],
+        uploadDate: run.uploadDate || "",
+        dates: datesByRun[i].length > 0 ? datesByRun[i] : [run.businessDate],
         // The stored file's own name, which is what a person downloads.
         reportName: (run.differenceKey || "").split("/").pop() || "",
         differenceKey: run.differenceKey || "",
@@ -390,7 +353,7 @@ export const getRunStatus = async (req, res) => {
   }
 };
 
-/** GET /api/custody-match/latest-run/:date — restores the screen on reload. */
+/** GET /api/custody-match/latest-run/:date?uploadDate= — restores the screen on reload. */
 export const getLatestRun = async (req, res) => {
   try {
     const catalystApp = req.catalystApp;
@@ -401,8 +364,14 @@ export const getLatestRun = async (req, res) => {
       return fail(res, 400, { code: "BAD_DATE", message: "Date must be yyyy-mm-dd." });
     }
 
-    const run = await getLatestRunForDate(catalystApp, date);
-    const day = await listDay(catalystApp, date);
+    // Runs belong to an upload date; without one there is no run to show.
+    const uploadDate = String(req.query.uploadDate || "").trim();
+    if (uploadDate && !DATE_PATTERN.test(uploadDate)) {
+      return fail(res, 400, { code: "BAD_UPLOAD_DATE", message: "uploadDate must be yyyy-mm-dd." });
+    }
+
+    const run = uploadDate ? await getLatestRunForDate(catalystApp, date, uploadDate) : null;
+    const day = await uploadDayFiles(catalystApp, date, uploadDate);
     const view = toRunView(run);
 
     // Same breakdown getRunStatus attaches, so a page reload shows the banner
@@ -416,7 +385,6 @@ export const getLatestRun = async (req, res) => {
       businessDate: date,
       run: view,
       day,
-      gateOneBlockers: checkGateOne(day),
     });
   } catch (error) {
     console.error("[CustodyMatchRun] getLatestRun:", error);
@@ -549,7 +517,7 @@ export const retryRun = async (req, res) => {
       target_name: JOB_TARGET,
       target_type: "Function",
       job_config: { number_of_retries: 3, retry_interval: 60 * 1000 },
-      params: { runId, businessDate: run.businessDate },
+      params: { runId, businessDate: run.businessDate, uploadDate: run.uploadDate || "" },
     });
 
     return res.status(202).json({
@@ -647,13 +615,23 @@ export const proceedToImport = async (req, res) => {
       });
     }
 
-    const day = await listDay(catalystApp, run.businessDate);
-    const faFiles = day.fa.raw;
+    /*
+     * The same files the match compared: the FA files for the run's file date
+     * under the run's upload date. The guard above keeps this to one import per
+     * file date, whichever upload date it comes from.
+     */
+    const faFiles = (
+      await filesForDate(catalystApp, run.businessDate, run.uploadDate)
+    ).faFiles.map((f) => ({
+      key: f.fileKey,
+      fileType: f.fileType,
+      originalFileName: f.originalFileName,
+    }));
     if (faFiles.length === 0) {
       return fail(res, 409, {
         code: "FA_FILE_MISSING",
         message:
-          "The staged transaction file is no longer in the bucket. Upload it again and re-run the match.",
+          "The staged transaction file is no longer stored. Upload it again and re-run the match.",
       });
     }
 

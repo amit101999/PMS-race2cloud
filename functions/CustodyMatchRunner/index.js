@@ -5,15 +5,16 @@
  *
  * Params (from POST /api/custody-match/run):
  *   runId         Custody_Match_Run.runId
- *   businessDate  yyyy-mm-dd
+ *   businessDate  yyyy-mm-dd, the file date
+ *   uploadDate    yyyy-mm-dd, the upload date whose files are compared
  *
  * Every stage writes its checkpoint to Custody_Match_Run BEFORE the stage's work
  * starts, so a crash leaves `stage` pointing at the step that needs re-running
  * rather than the one that finished. Catalyst auto-retries job functions, so
  * each stage is written to be safely repeatable:
  *
- *   S1 BUILD_FA        re-reads the raw file; writes final-<date>-FA.csv at a fixed key
- *   S2 BUILD_CUSTODY   re-reads the custodian files; writes final-<date>-Custodian.csv
+ *   S1 BUILD_FA        re-reads the raw file; writes final-<date>-<runId>-FA.csv
+ *   S2 BUILD_CUSTODY   re-reads the custodian files; writes final-<date>-<runId>-Custodian.csv
  *   S3 PERSIST         verifies both finals read back before anything is compared
  *   S4 COMPARE         always re-walks from zero (see the note at the walk) and
  *                      reports live progress via comparedKeyCount
@@ -129,45 +130,41 @@ module.exports = async (jobRequest, context) => {
     const bucket = CM.getBucket(app);
     const zcql = app.zcql();
 
-    /*
-     * An optional date filter, written beside the run when it was created.
-     * Absent means compare every date the files contain. Read from the bucket
-     * rather than the job params so a retry — which arrives as a fresh
-     * submission — still honours what the run was asked to do.
-     */
-    let selectedDates = null;
-    try {
-      const saved = await CM.getJson(bucket, CM.buildRunDatesKey(businessDate, runId));
-      if (saved && Array.isArray(saved.dates) && saved.dates.length > 0) {
-        selectedDates = new Set(saved.dates);
-      }
-    } catch {
-      // No sidecar is the normal case: the run was not limited to any dates.
-    }
-    const wanted = (d) => !selectedDates || selectedDates.has(d);
-
-    /*
-     * A custodian file covers a span of days, so it belongs to the run when ANY
-     * day it covers was selected — rows outside the selection are dropped later,
-     * row by row, the same way the FA side is.
-     */
-    const rangeWanted = (from, to) => {
-      if (!selectedDates) return true;
-      for (const d of selectedDates) {
-        if (d >= from && d <= to) return true;
-      }
-      return false;
-    };
-    if (selectedDates) log(`limited to ${[...selectedDates].sort().join(", ")}`);
     const resumeFrom = STAGE_ORDER.includes(run.stage) ? run.stage : "S0";
     if (resumeFrom !== "S0" && resumeFrom !== "S1") {
       log(`resuming from ${resumeFrom} (attempt ${(run.attemptCount || 0) + 1})`);
     }
 
-    const day = await CM.listDay(app, businessDate, { bucket });
+    /*
+     * The files to compare: the file date's rows in Custody_Match_File under
+     * this run's upload date. Read from the table rather than the Stratus
+     * listing, which keeps showing a deleted object for a while. The run row is
+     * the fallback for the upload date, so a job submitted before the param
+     * existed still resolves it.
+     */
+    const uploadDate = String(params.uploadDate || run.uploadDate || "").trim();
+    if (!uploadDate) {
+      throw Object.assign(
+        new Error("This run has no upload date, so its files cannot be found. Start a new match."),
+        { code: "NO_UPLOAD_DATE" },
+      );
+    }
+    const activeFiles = await CM.listFiles(app, { forDate: businessDate, uploadedOn: uploadDate });
+    const faFiles = activeFiles
+      .filter((f) => f.side === CM.FILE_SIDE.FA)
+      .map((f) => ({ key: f.fileKey, fileType: f.fileType, originalFileName: f.originalFileName }));
+    const custodyFiles = activeFiles
+      .filter((f) => f.side === CM.FILE_SIDE.CUSTODY)
+      .map((f) => ({
+        key: f.fileKey,
+        scheme: f.scheme,
+        fileType: f.fileType,
+        originalFileName: f.originalFileName,
+      }));
 
-    const faFinalKey = CM.buildFaFinalKey(businessDate);
-    const custodyFinalKey = CM.buildCustodyFinalKey(businessDate);
+    // Per run: the same file date can be matched once per upload date.
+    const faFinalKey = CM.buildFaFinalKey(businessDate, runId);
+    const custodyFinalKey = CM.buildCustodyFinalKey(businessDate, runId);
 
     let unmapped = [];
     let resolvedCount = 0;
@@ -184,7 +181,6 @@ module.exports = async (jobRequest, context) => {
        * both. Their rows are then one set — from here on nothing cares which
        * file a row arrived in.
        */
-      const faFiles = day.fa.raw;
       if (faFiles.length === 0) {
         throw Object.assign(new Error("No transaction file is stored for this date."), {
           code: "FA_FILE_MISSING",
@@ -199,11 +195,8 @@ module.exports = async (jobRequest, context) => {
             ? CM.PROFILE_TYPE.FA_MUTUAL_FUND
             : CM.PROFILE_TYPE.FA;
 
-        /*
-         * Stratus keeps listing an object for around twenty seconds after it is
-         * deleted, so a file the user removed just before pressing Match can still
-         * be in `day`. Say so plainly; the raw NoSuchKey reads like a bucket fault.
-         */
+        // The file table and the bucket can disagree if a file was removed after
+        // this run was queued. Say so plainly; NoSuchKey reads like a bucket fault.
         let faBuffer;
         try {
           faBuffer = await CM.getBuffer(bucket, raw.key);
@@ -247,26 +240,6 @@ module.exports = async (jobRequest, context) => {
         `Resolving ${parsed.rows.length} rows onto actual codes`,
       );
 
-      /*
-       * Filter before resolution, not after. Doing it afterwards would leave the
-       * unmapped-code list and the resolved counts describing rows this run was
-       * never asked about — and unmapped codes from an unselected day would
-       * surface as exceptions.
-       */
-      if (selectedDates) {
-        const before = parsed.rows.length;
-        parsed.rows = parsed.rows.filter((r) => wanted(r.tranDate));
-        log(`date filter kept ${parsed.rows.length} of ${before} FA rows`);
-        if (parsed.rows.length === 0) {
-          throw Object.assign(
-            new Error(
-              `The transaction file has no rows on the selected date(s): ${[...selectedDates].sort().join(", ")}.`,
-            ),
-            { code: "NO_FA_ROWS_FOR_DATES" },
-          );
-        }
-      }
-
       const { virtualToActual, knownActual } = await CM.buildCodeMaps(
         zcql,
         parsed.rows.map((r) => r.accountCode),
@@ -290,7 +263,7 @@ module.exports = async (jobRequest, context) => {
       // Two things the 26-column consolidated file has no room for: codes that
       // could not be resolved at all, and which virtual codes rolled into each
       // actual code. Both are needed after S1 — see buildFaMetaKey.
-      await CM.putJson(bucket, CM.buildFaMetaKey(businessDate), {
+      await CM.putJson(bucket, CM.buildFaMetaKey(businessDate, runId), {
         runId,
         businessDate,
         resolvedCount: resolved.resolvedCount,
@@ -316,31 +289,18 @@ module.exports = async (jobRequest, context) => {
     if (atOrBefore(resumeFrom, "S2")) {
       await CM.setStage(app, runId, CM.STAGE.BUILD_CUSTODY, "Merging the custodian files");
 
-      const custodyForRun = day.custody.files.filter((f) => rangeWanted(f.coveredFrom, f.coveredTo));
-
-      if (day.custody.files.length === 0) {
+      if (custodyFiles.length === 0) {
         throw Object.assign(new Error("No custodian files are stored for this date."), {
           code: "CUSTODY_FILES_MISSING",
         });
       }
-      if (custodyForRun.length === 0) {
-        // Every custodian file sits outside the selection. Comparing would
-        // report the whole FA side as missing, which is a misleading way to say
-        // "you picked dates the custodian never sent".
-        throw Object.assign(
-          new Error(
-            `No custodian file covers the selected date(s): ${[...selectedDates].sort().join(", ")}.`,
-          ),
-          { code: "NO_CUSTODY_FOR_DATES" },
-        );
-      }
 
       const files = [];
-      for (const f of custodyForRun) {
+      for (const f of custodyFiles) {
         await CM.setStageDetail(
           app,
           runId,
-          `Reading ${f.originalFileName} (${files.length + 1} of ${custodyForRun.length})`,
+          `Reading ${f.originalFileName} (${files.length + 1} of ${custodyFiles.length})`,
         );
 
         let buffer;
@@ -387,23 +347,6 @@ module.exports = async (jobRequest, context) => {
           ),
           { code: "CUSTODY_VALIDATION_FAILED" },
         );
-      }
-
-      /*
-       * A custodian file can span days, so the file-level filter above only
-       * decides which files to open. The selection is applied here, row by row,
-       * exactly as it is on the FA side.
-       */
-      if (selectedDates) {
-        merged.rows = merged.rows.filter((r) => wanted(r.tranDate));
-        if (merged.rows.length === 0) {
-          throw Object.assign(
-            new Error(
-              `The custodian files have no rows on the selected date(s): ${[...selectedDates].sort().join(", ")}.`,
-            ),
-            { code: "NO_CUSTODY_FOR_DATES" },
-          );
-        }
       }
 
       await CM.putText(
@@ -459,7 +402,7 @@ module.exports = async (jobRequest, context) => {
     // Recover what S1 worked out when this attempt did not run S1 itself.
     if (Object.keys(actualToVirtual).length === 0) {
       try {
-        const saved = await CM.getJson(bucket, CM.buildFaMetaKey(businessDate));
+        const saved = await CM.getJson(bucket, CM.buildFaMetaKey(businessDate, runId));
         unmapped = saved.unmapped || unmapped;
         resolvedCount = saved.resolvedCount || resolvedCount;
         actualToVirtual = saved.actualToVirtual || {};

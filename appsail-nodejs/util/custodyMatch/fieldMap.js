@@ -179,13 +179,13 @@ const CUSTODY_HOLDINGS_REQUIRED_FIELDS = [...CUSTODY_HOLDINGS_KEY_FIELDS, "asOfD
 const FA_FIELDS = [
   { field: "accountCode", label: "Account Code", kind: "code", required: true, matchKey: true },
   { field: "isin", label: "ISIN", kind: "isin", required: true, matchKey: true },
-  { field: "tranDate", label: "Transaction Date", kind: "isoDate", required: true, matchKey: true },
+  { field: "tranDate", label: "Transaction Date", kind: "date", required: true, matchKey: true },
   { field: "tranType", label: "Transaction Type", kind: "type", required: true, matchKey: true },
   { field: "quantity", label: "Quantity", kind: "number", required: true, matchKey: true },
 
   { field: "brokerCode", label: "Broker Code", kind: "code", required: true },
   { field: "exchange", label: "Exchange", kind: "text", required: true },
-  { field: "settlementDate", label: "Settlement Date", kind: "isoDate", required: true },
+  { field: "settlementDate", label: "Settlement Date", kind: "date", required: true },
   { field: "rate", label: "Rate", kind: "number", required: true },
   { field: "brokerage", label: "Brokerage", kind: "number", required: true },
   { field: "serviceTax", label: "Service Tax", kind: "number", required: true },
@@ -204,7 +204,7 @@ const FA_FIELDS = [
   { field: "chequeNumber", label: "Cheque Number", kind: "text", required: true },
   { field: "chequeDetail", label: "Cheque Detail", kind: "text", required: true },
   { field: "bankRef", label: "Bank Ref", kind: "text", required: true },
-  { field: "cashSetdate", label: "Cash Settlement Date", kind: "isoDate", required: true },
+  { field: "cashSetdate", label: "Cash Settlement Date", kind: "date", required: true },
 ];
 
 /**
@@ -226,7 +226,7 @@ export const FIELD_CATALOG = {
   [PROFILE_TYPE.CUSTODY_RESIDENTIAL]: [
     { field: "actualCode", label: "Actual Code", kind: "code", required: true, matchKey: true },
     { field: "isin", label: "ISIN", kind: "isin", required: true, matchKey: true },
-    { field: "tranDate", label: "Transaction Date", kind: "isoDate", required: true, matchKey: true },
+    { field: "tranDate", label: "Transaction Date", kind: "date", required: true, matchKey: true },
     { field: "tranType", label: "Transaction Type", kind: "type", required: true, matchKey: true },
     { field: "quantity", label: "Quantity", kind: "number", required: true, matchKey: true },
 

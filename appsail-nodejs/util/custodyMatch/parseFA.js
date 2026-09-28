@@ -30,12 +30,11 @@ import {
   detectSeparator,
   displayNum,
   firstLineOf,
-  isoDateErrorMessage,
   normCode,
   normIsin,
   normTranType,
   num,
-  parseIsoDate,
+  parseDate,
   splitHeaderCells,
   text,
 } from "./normalize.js";
@@ -325,36 +324,42 @@ export const parseFaFile = (
           rejected = true;
         }
 
-        // Every FA date must be YYYY-MM-DD: the import accepts nothing else and
-        // stores the value as it is, so anything looser only fails later.
-        const tranDate = parseIsoDate(rawDate);
-        if (!rawDate) {
-          fail(rowNumber, ROW_ERROR.MISSING_DATE, `${colName.tranDate} is blank.`, colName.tranDate, "");
-          rejected = true;
-        } else if (!tranDate) {
-          fail(
-            rowNumber,
-            ROW_ERROR.BAD_DATE_FORMAT,
-            isoDateErrorMessage(colName.tranDate, rawDate),
-            colName.tranDate,
-            rawDate,
-          );
-          rejected = true;
-        }
-
-        // The settlement dates are required too, and held to the same format.
-        // Placeholders such as 0, null or NA are not dates, so they fail the
-        // format check like any other value.
-        for (const field of ["settlementDate", "cashSetdate"]) {
-          if (!(field in at)) continue;
+        /*
+         * Dates may arrive as 20-08-2026, 20-Aug-2026, 2026-08-20 and so on
+         * (see parseDate). Each one is converted to YYYY-MM-DD here and written
+         * back into the row below, because the import accepts nothing else and
+         * stores the value it is given as it is.
+         */
+        const isoDates = {};
+        const readDate = (field) => {
           const raw = get(field);
           if (!raw) {
             fail(rowNumber, ROW_ERROR.MISSING_DATE, `${colName[field]} is blank.`, colName[field], "");
-            rejected = true;
-          } else if (!parseIsoDate(raw)) {
-            fail(rowNumber, ROW_ERROR.BAD_DATE_FORMAT, isoDateErrorMessage(colName[field], raw), colName[field], raw);
-            rejected = true;
+            return null;
           }
+          const iso = parseDate(raw);
+          if (!iso) {
+            fail(
+              rowNumber,
+              ROW_ERROR.BAD_DATE,
+              `${colName[field]} "${raw}" is not a readable date. Use a format such as 2026-08-20 or 20-08-2026.`,
+              colName[field],
+              raw,
+            );
+            return null;
+          }
+          isoDates[field] = iso;
+          return iso;
+        };
+
+        const tranDate = readDate("tranDate");
+        if (!tranDate) rejected = true;
+
+        // The settlement dates are required too. Placeholders such as 0, null
+        // or NA are not dates, so they fail like any other unreadable value.
+        for (const field of ["settlementDate", "cashSetdate"]) {
+          if (!(field in at)) continue;
+          if (!readDate(field)) rejected = true;
         }
         /*
          * A row dated differently from the run is NOT a problem: a run covers
@@ -386,17 +391,25 @@ export const parseFaFile = (
 
         if (rejected) return;
 
+        // The original 26 cells, so the consolidated file can be produced by
+        // swapping ONE column rather than rebuilding a row from parsed fields.
+        // Anything we did not parse still reaches the import untouched.
+        const cells = rawHeaders.map((_, i) => cell(i));
+        // Every mapped field, raw. When the file is NOT the 26-column template
+        // this is what the consolidated file is rebuilt from, so a remapped
+        // upload still reaches the import in the layout the import expects.
+        const mapped = Object.fromEntries(Object.keys(at).map((f) => [f, get(f)]));
+        // Except the dates, which reach the import already converted.
+        for (const [field, iso] of Object.entries(isoDates)) {
+          cells[at[field]] = iso;
+          mapped[field] = iso;
+        }
+
         rows.push({
           rowNumber,
           side: SIDE.FA,
-          // The original 26 cells, so the consolidated file can be produced by
-          // swapping ONE column rather than rebuilding a row from parsed fields.
-          // Anything we did not parse still reaches the import untouched.
-          cells: rawHeaders.map((_, i) => cell(i)),
-          // Every mapped field, raw. When the file is NOT the 26-column template
-          // this is what the consolidated file is rebuilt from, so a remapped
-          // upload still reaches the import in the layout the import expects.
-          mapped: Object.fromEntries(Object.keys(at).map((f) => [f, get(f)])),
+          cells,
+          mapped,
           usedTemplateLayout: usingDefault,
           accountCode,
           isin,
@@ -411,7 +424,7 @@ export const parseFaFile = (
           // Only the mutual fund file carries these; they read blank elsewhere.
           tds: displayNum(get("tds")),
           stampDuty: displayNum(get("stampDuty")),
-          settlementDate: parseIsoDate(get("settlementDate")),
+          settlementDate: isoDates.settlementDate || null,
           ref: get("ref"),
           exchange: get("exchange"),
           brokerCode: get("brokerCode"),

@@ -102,6 +102,15 @@ module.exports = async (cronDetails, context) => {
   // yyyy-mm-dd is exact and timezone-free.
   const cutoff = isoDaysAgo(retentionDays);
 
+  /*
+   * A folder's date is the day its files are FOR, not the day they were
+   * uploaded: a file for last year can be uploaded this morning. So an old date
+   * is only deleted once nothing in it has been uploaded or run within the
+   * retention window. Upload times come from the object keys; run start times
+   * from the run rows.
+   */
+  const cutoffMs = Date.now() - retentionDays * 24 * 60 * 60 * 1000;
+
   const report = {
     cutoff,
     retentionDays,
@@ -153,6 +162,21 @@ module.exports = async (cronDetails, context) => {
         continue;
       }
 
+      const day = await CM.listDay(app, date, { bucket });
+      const lastActivityMs = Math.max(
+        0,
+        ...day.fa.raw.map((f) => f.uploadedAtMs || 0),
+        ...day.custody.files.map((f) => f.uploadedAtMs || 0),
+        ...runs.map((r) => r.startedAtMs || 0),
+      );
+      if (lastActivityMs >= cutoffMs) {
+        report.datesSkipped.push({
+          date,
+          reason: `last upload or run was ${new Date(lastActivityMs).toISOString()}, inside the retention window`,
+        });
+        continue;
+      }
+
       if (dryRun) {
         const objects = [
           ...(await CM.listAllObjects(bucket, CM.faDayPrefix(date))),
@@ -165,6 +189,9 @@ module.exports = async (cronDetails, context) => {
       }
 
       const removed = await CM.deleteDay(app, date, { bucket });
+      // The file rows go with the files: an ACTIVE row whose object is gone
+      // would offer the date in the Match dialog and then fail the run.
+      await CM.deleteFileRowsForDate(app, date);
       const objectCount = removed.fa.count + removed.custody.count;
       report.objectsDeleted += objectCount;
       report.objectsFailed.push(...removed.fa.failed, ...removed.custody.failed);
@@ -181,6 +208,7 @@ module.exports = async (cronDetails, context) => {
       // fail on its next status write if its row vanished underneath it.
       const rows = await CM.deleteRunsBefore(app, cutoff, {
         skipDates: report.datesSkipped.map((d) => d.date),
+        startedBeforeMs: cutoffMs,
       });
       report.runsDeleted = rows.runs;
       report.exceptionsDeleted = rows.exceptions;

@@ -243,6 +243,12 @@ export const RUN_STATUS = {
   SUPERSEDED: "SUPERSEDED",
 };
 
+/** Custody_Match_File.side — which half of the comparison a stored file belongs to. */
+export const FILE_SIDE = {
+  FA: "FA",
+  CUSTODY: "CUSTODY",
+};
+
 /** File-level failures. The file is rejected whole; no rows are read. */
 export const FILE_ERROR = {
   EMPTY_FILE: "EMPTY_FILE",
@@ -268,6 +274,8 @@ export const ROW_ERROR = {
   BAD_DATE: "BAD_DATE",
   BAD_DATE_FORMAT: "BAD_DATE_FORMAT",
   MISSING_DATE: "MISSING_DATE",
+  /** The row's date is not the date the user said the file is for. */
+  WRONG_DATE: "WRONG_DATE",
   BAD_CONTRACT_NO: "BAD_CONTRACT_NO",
   UNKNOWN_TRAN_TYPE: "UNKNOWN_TRAN_TYPE",
   MISSING_TRAN_TYPE: "MISSING_TRAN_TYPE",

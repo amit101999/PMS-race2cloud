@@ -18,7 +18,9 @@
 import {
   FA_FILE_TYPE,
   FA_FILE_TYPE_LABEL,
+  FILE_SIDE,
   PREDEFINED_SCHEMES,
+  ROW_ERROR,
 } from "../../util/custodyMatch/constants.js";
 import { PROFILE_TYPE } from "../../util/custodyMatch/fieldMap.js";
 import { parseFaFile, validateFaHeader } from "../../util/custodyMatch/parseFA.js";
@@ -35,10 +37,8 @@ import {
   parseCustodyKey,
   parseFaRawKey,
   deleteDaySide,
-  deleteFaRawOfType,
   deleteKeys,
   getBucket,
-  getBuffer,
   listDay,
   listCustodyHistory,
   listKnownSchemes,
@@ -48,7 +48,12 @@ import {
   saveToCustodyHistory,
   signedGetUrl,
 } from "../../util/custodyMatch/storage.js";
-import { supersedeRunsForDate } from "../../util/custodyMatch/runStore.js";
+import {
+  deleteFileRows,
+  listFiles,
+  recordFile,
+  supersedeRunsForDate,
+} from "../../util/custodyMatch/runStore.js";
 import { insertNotification } from "../../util/notifications.js";
 
 /** Row errors are for reading, not for scrolling. Send the first page and say how many more. */
@@ -76,96 +81,171 @@ const summariseIssues = (rowErrors = [], warnings = []) => ({
 });
 
 /**
- * The date a file covers, taken from the file itself.
- *
- * The screen may not carry a date picker, and asking the user to type the date
- * of a file they just exported invites a mismatch nobody notices. The modal
- * transaction date is the file's own answer; it is returned to the caller so the
- * screen can show which day it is about to process.
+ * The date the user picked for this file. Required: a file is filed under the
+ * day its rows are for, so there is no sensible default to fall back on.
  */
-const inferBusinessDate = (rows) => {
-  const counts = new Map();
-  for (const r of rows) {
-    if (!r.tranDate) continue;
-    counts.set(r.tranDate, (counts.get(r.tranDate) || 0) + 1);
+const readUploadDate = (requested) => {
+  const given = String(requested || "").trim();
+  if (!given) {
+    return { error: "Choose the date this file is for before uploading it." };
   }
-  let best = null;
-  let bestCount = -1;
-  for (const [date, n] of counts) {
-    if (n > bestCount || (n === bestCount && date > best)) {
-      best = date;
-      bestCount = n;
-    }
+  if (!DATE_PATTERN.test(given)) {
+    return { error: `businessDate must be yyyy-mm-dd; received "${given}".` };
   }
-  return best;
+  return { businessDate: given };
+};
+
+/** Today in India. The server clock is UTC, so this is what "today" means to the user. */
+const indiaToday = () => new Date(Date.now() + 330 * 60 * 1000).toISOString().slice(0, 10);
+
+/**
+ * The upload date the user picked at the top of the screen. Files are recorded
+ * under it and Match offers them by it. Required, and not later than today.
+ */
+const readUploadedOn = (requested) => {
+  const given = String(requested || "").trim();
+  if (!given) {
+    return { error: "Choose the upload date at the top of the screen before uploading." };
+  }
+  if (!DATE_PATTERN.test(given)) {
+    return { error: `uploadDate must be yyyy-mm-dd; received "${given}".` };
+  }
+  if (given > indiaToday()) {
+    return { error: `The upload date ${given} is in the future.` };
+  }
+  return { uploadedOn: given };
 };
 
 /**
- * The span of days a file actually describes, first to last.
- *
- * A custodian file is identified by this range, not by one date: a file that
- * covers three days has no single "its" date, and picking one (the most common,
- * say) makes two genuinely different files look alike — the second then lands in
- * the first one's slot and silently replaces it.
+ * The files saved under one upload date — for one file date, or (no date) for
+ * every file date. The file table decides which files; the Stratus listing of
+ * each file date's folder supplies their sizes. No upload date means no files.
  */
-const coveredRange = (rows, fallbackDate) => {
-  let from = null;
-  let to = null;
-  for (const r of rows) {
-    if (!r.tranDate) continue;
-    if (!from || r.tranDate < from) from = r.tranDate;
-    if (!to || r.tranDate > to) to = r.tranDate;
-  }
-  return { coveredFrom: from || fallbackDate, coveredTo: to || fallbackDate };
-};
-
-const describeRange = (from, to) => (from === to ? from : `${from} to ${to}`);
-
-const resolveBusinessDate = (requested, rows) => {
-  const given = String(requested || "").trim();
-  if (given) {
-    if (!DATE_PATTERN.test(given)) {
-      return { error: `businessDate must be yyyy-mm-dd; received "${given}".` };
-    }
-    return { businessDate: given, inferred: false };
-  }
-  const inferred = inferBusinessDate(rows);
-  if (!inferred) {
+export const uploadDayFiles = async (catalystApp, date, uploadDate) => {
+  const rows = uploadDate
+    ? await listFiles(catalystApp, { forDate: date || null, uploadedOn: uploadDate })
+    : [];
+  const fileDates = [...new Set(rows.map((r) => String(r.forDate)))];
+  const days = await Promise.all(fileDates.map((d) => listDay(catalystApp, d)));
+  const sizeByKey = new Map(
+    days.flatMap((day) => [...day.fa.raw, ...day.custody.files]).map((f) => [f.key, f.sizeBytes]),
+  );
+  const describe = (row, parseKey) => {
+    const parsed = parseKey(row.fileKey) || {};
     return {
-      error:
-        "Could not work out which business date this file covers, and none was supplied.",
+      ...parsed,
+      key: row.fileKey,
+      fileType: row.fileType,
+      scheme: row.scheme || parsed.scheme || "",
+      originalFileName: row.originalFileName || parsed.originalFileName || "",
+      // A just-uploaded object can be missing from the listing for a moment.
+      sizeBytes: sizeByKey.get(row.fileKey) ?? null,
+      uploadedOn: String(row.uploadedOn),
     };
-  }
-  return { businessDate: inferred, inferred: true };
+  };
+
+  // Newest file date first, so the all-dates view reads top-down by date.
+  const byFileDateDesc = (a, b) => String(b.coveredFrom).localeCompare(String(a.coveredFrom));
+  const faRaw = rows
+    .filter((r) => r.side === FILE_SIDE.FA)
+    .map((r) => describe(r, parseFaRawKey))
+    .sort(byFileDateDesc);
+  const custodyFiles = rows
+    .filter((r) => r.side === FILE_SIDE.CUSTODY)
+    .map((r) => describe(r, parseCustodyKey))
+    .sort(byFileDateDesc);
+
+  return {
+    businessDate: date || "",
+    uploadDate: uploadDate || "",
+    fa: { raw: faRaw, hasFile: faRaw.length > 0 },
+    custody: { files: custodyFiles, hasFiles: custodyFiles.length > 0 },
+  };
 };
+
+/**
+ * Save a new file, then drop the one it replaces.
+ *
+ * The new object and its row are written first: if either fails nothing that
+ * was already there is lost. Only then are the replaced rows and their objects
+ * deleted. If recording the row fails the new object is deleted again, since a
+ * file in Stratus with no row is invisible to the cards and to Match.
+ */
+const storeReplacing = async (catalystApp, bucket, { key, data, row, replacing }) => {
+  await putBuffer(bucket, key, data, "text/csv");
+  try {
+    await recordFile(catalystApp, { ...row, fileKey: key });
+  } catch (err) {
+    const undo = await deleteKeys(bucket, [key]);
+    if (undo.failed.length > 0) {
+      console.error("[CustodyMatchUpload] could not remove unrecorded file:", key);
+    }
+    throw new Error(`The file could not be recorded for matching, so it was not kept: ${err.message}`);
+  }
+
+  if (replacing.length > 0) {
+    await deleteFileRows(catalystApp, replacing);
+    const removed = await deleteKeys(bucket, replacing.map((r) => r.fileKey));
+    if (removed.failed.length > 0) {
+      // Harmless to Match (the rows are gone); the cleanup cron clears the objects.
+      console.warn("[CustodyMatchUpload] replaced objects not deleted:", removed.failed);
+    }
+  }
+};
+
+/**
+ * Every row must be dated the day the file is uploaded for. Blank and
+ * unreadable dates are already row errors from the parser, so only rows that
+ * parsed to a different date are reported here.
+ */
+const wrongDateErrors = (rows, businessDate, fileName) =>
+  rows
+    .filter((r) => r.tranDate !== businessDate)
+    .map((r) => ({
+      row: r.rowNumber,
+      code: ROW_ERROR.WRONG_DATE,
+      message: `This row is dated ${r.tranDate}, but the file is being uploaded for ${businessDate}. Every row must be dated ${businessDate}.`,
+      column: null,
+      value: r.tranDate,
+      fileName,
+    }));
+
+/** Parser errors and wrong-date errors together, in file order. */
+const allRowErrors = (parsed, businessDate, fileName) =>
+  [...parsed.rowErrors, ...wrongDateErrors(parsed.rows, businessDate, fileName)].sort(
+    (a, b) => a.row - b.row,
+  );
 
 const getUploadedFile = (req) => req.files?.file || null;
 
 const isCsv = (name) => String(name || "").toLowerCase().endsWith(".csv");
 
 /**
- * GET /api/custody-match/day/:date
+ * GET /api/custody-match/files?uploadDate=yyyy-mm-dd[&date=yyyy-mm-dd]
  *
- * Everything stored for a business date, described from the object keys alone.
- * Backs the replace prompt, the scheme rows, and restoring the screen on reload.
+ * The files saved under an upload date — every file date, or just `date` when
+ * given. Backs the file lists on the two upload cards.
  */
-export const getDay = async (req, res) => {
+export const listUploadedFiles = async (req, res) => {
   try {
     const catalystApp = req.catalystApp;
     if (!catalystApp) return noApp(res);
 
-    const date = String(req.params.date || "").trim();
-    if (!DATE_PATTERN.test(date)) {
-      return fail(res, 400, {
-        code: "BAD_DATE",
-        message: `Business date must be yyyy-mm-dd; received "${date}".`,
-      });
+    const uploadDate = String(req.query.uploadDate || "").trim();
+    const date = String(req.query.date || "").trim();
+    for (const [name, value] of [["uploadDate", uploadDate], ["date", date]]) {
+      if (value && !DATE_PATTERN.test(value)) {
+        return fail(res, 400, {
+          code: "BAD_DATE",
+          message: `${name} must be yyyy-mm-dd; received "${value}".`,
+        });
+      }
     }
 
-    const day = await listDay(catalystApp, date);
+    const day = await uploadDayFiles(catalystApp, date, uploadDate);
     return res.status(200).json({ success: true, ...day });
   } catch (error) {
-    console.error("[CustodyMatchUpload] getDay:", error);
+    console.error("[CustodyMatchUpload] listUploadedFiles:", error);
     return fail(res, 500, {
       message: error.message || "Could not read the files for that date.",
     });
@@ -174,7 +254,7 @@ export const getDay = async (req, res) => {
 
 /**
  * POST /api/custody-match/fa-file
- * form-data: file, [businessDate], [replace=true]
+ * form-data: file, businessDate (every row must be dated this day), [fileType], [replace=true]
  *
  * Validates and stages the 26-column transaction file. Staging only — this does
  * NOT upload to client-transaction-files and does NOT import anything.
@@ -221,92 +301,47 @@ export const listSchemes = async (req, res) => {
 };
 
 /**
- * GET /api/custody-match/day/:date/dates
+ * GET /api/custody-match/dates
  *
- * Which dates this run could compare, and what each one has on either side.
- * Backs the date picker shown when Match is pressed.
- *
- * The custodian side is free — each key carries the day it covers. The FA side
- * means reading the staged file, which is why this is its own endpoint rather
- * than part of the day view: the cost is paid when somebody opens the dialog,
- * not on every screen load.
+ * One entry per (upload date, file date) that has a file, newest file date
+ * first, with what each side has. Backs the Match dialog and the summary: the
+ * screen keeps the entries for the upload date picked at the top. A pair can
+ * only be matched when both sides were uploaded under that upload date.
  */
-export const listRunDates = async (req, res) => {
+export const listMatchDates = async (req, res) => {
   try {
     const catalystApp = req.catalystApp;
     if (!catalystApp) return noApp(res);
 
-    const date = String(req.params.date || "").trim();
-    if (!DATE_PATTERN.test(date)) {
-      return fail(res, 400, { code: "BAD_DATE", message: "date must be yyyy-mm-dd." });
-    }
-
-    const day = await listDay(catalystApp, date);
-    const byDate = new Map();
-    const touch = (d) => {
-      if (!byDate.has(d)) byDate.set(d, { date: d, faRows: 0, custodyRows: 0, custodyFiles: 0 });
-      return byDate.get(d);
-    };
-
-    const profiles = await loadFieldMapProfiles(catalystApp);
-    const bucket = getBucket(catalystApp);
-
-    /*
-     * Both sides are counted from the rows themselves, never from the range on a
-     * custodian key. A range says only where a file starts and ends: a file whose
-     * first and last rows are years apart covers two days, not the thousands in
-     * between, and offering every day in the span buries the real ones.
-     */
-    if (day.fa.latestRaw) {
-      const buffer = await getBuffer(bucket, day.fa.latestRaw.key);
-      const parsed = await parseFaFile(buffer, { profile: profiles[PROFILE_TYPE.FA] });
-      for (const row of parsed.rows) {
-        if (row.tranDate) touch(row.tranDate).faRows += 1;
+    const byPair = new Map();
+    for (const f of await listFiles(catalystApp)) {
+      const uploadDate = String(f.uploadedOn);
+      const date = String(f.forDate);
+      const pairKey = `${uploadDate}|${date}`;
+      if (!byPair.has(pairKey)) {
+        byPair.set(pairKey, { uploadDate, date, faFiles: [], custodyFiles: [] });
       }
-    }
-
-    for (const f of day.custody.files) {
-      let buffer;
-      try {
-        buffer = await getBuffer(bucket, f.key);
-      } catch {
-        // Stratus keeps listing an object for around twenty seconds after it is
-        // deleted, so a file the user has just removed can still turn up here.
-        // It is gone; leave its dates out rather than fail the whole dialog.
-        continue;
-      }
-
-      const parsed = await parseCustodyFile(buffer, {
-        scheme: f.scheme,
+      const entry = byPair.get(pairKey);
+      const file = {
+        key: f.fileKey,
         fileType: f.fileType,
-        fileName: f.originalFileName,
-        profiles,
-      });
-
-      const daysInThisFile = new Set();
-      for (const row of parsed.rows) {
-        if (!row.tranDate) continue;
-        touch(row.tranDate).custodyRows += 1;
-        daysInThisFile.add(row.tranDate);
-      }
-      // A file counts once per day it has rows on, however many rows that is.
-      for (const d of daysInThisFile) touch(d).custodyFiles += 1;
+        scheme: f.scheme || "",
+        fileName: f.originalFileName || "",
+      };
+      if (f.side === FILE_SIDE.FA) entry.faFiles.push(file);
+      else entry.custodyFiles.push(file);
     }
 
-    const dates = [...byDate.values()].sort((a, b) => a.date.localeCompare(b.date));
+    const dates = [...byPair.values()]
+      .map((d) => ({ ...d, canMatch: d.faFiles.length > 0 && d.custodyFiles.length > 0 }))
+      .sort((a, b) => b.date.localeCompare(a.date) || b.uploadDate.localeCompare(a.uploadDate));
 
-    return res.json({
-      success: true,
-      businessDate: date,
-      dates,
-      count: dates.length,
-      hasFaFile: Boolean(day.fa.latestRaw),
-    });
+    return res.json({ success: true, dates, count: dates.length });
   } catch (err) {
-    console.error("[CustodyMatchUpload] listRunDates:", err);
+    console.error("[CustodyMatchUpload] listMatchDates:", err);
     return fail(res, 500, {
       code: "DATE_LIST_FAILED",
-      message: `Could not work out which dates these files cover: ${err.message}`,
+      message: `Could not list the dates that have files: ${err.message}`,
     });
   }
 };
@@ -356,93 +391,95 @@ export const uploadFaFile = async (req, res) => {
       return fail(res, 400, { ...headerError, fileName: file.name });
     }
 
-    const firstPass = await parseFaFile(file.data, { profile: faProfile, type: profileType });
-    if (firstPass.fileError) {
-      return fail(res, 400, { ...firstPass.fileError, fileName: file.name });
+    const forDate = readUploadDate(req.body?.businessDate);
+    if (forDate.error) {
+      return fail(res, 400, { code: "BAD_DATE", message: forDate.error });
     }
+    const { businessDate } = forDate;
 
-    const resolved = resolveBusinessDate(req.body?.businessDate, firstPass.rows);
-    if (resolved.error) {
-      return fail(res, 400, { code: "BAD_DATE", message: resolved.error });
+    const uploadDay = readUploadedOn(req.body?.uploadDate);
+    if (uploadDay.error) {
+      return fail(res, 400, { code: "BAD_UPLOAD_DATE", message: uploadDay.error });
     }
-    const { businessDate, inferred } = resolved;
+    const { uploadedOn } = uploadDay;
 
-    // Re-parse against the resolved date so off-date rows are warned about.
     const parsed = await parseFaFile(file.data, {
       businessDate,
       profile: faProfile,
       type: profileType,
     });
-    if (!parsed.ok) {
+    if (parsed.fileError) {
+      return fail(res, 400, { ...parsed.fileError, fileName: file.name });
+    }
+
+    const rowErrors = allRowErrors(parsed, businessDate, file.name);
+    if (rowErrors.length > 0) {
       return fail(res, 400, {
         code: "VALIDATION_FAILED",
-        message: `${parsed.rowErrors.length} row(s) in the transaction file could not be read. Nothing was uploaded.`,
+        message: `${rowErrors.length} row(s) in the transaction file are not valid for ${businessDate}. Nothing was uploaded.`,
         fileName: file.name,
         businessDate,
-        ...summariseIssues(parsed.rowErrors, parsed.warnings),
-        hint: "Fix the rows listed above in the source file and upload it again.",
+        ...summariseIssues(rowErrors, parsed.warnings),
+        hint: `Every row must be dated ${businessDate}. Fix the rows listed above, or pick the date the file is for, then upload it again.`,
       });
     }
 
-    const day = await listDay(catalystApp, businessDate);
     const wantsReplace = String(req.body?.replace || "").toLowerCase() === "true";
 
     /*
-     * Only a file of the SAME type conflicts. The regular and mutual fund
-     * transaction files are both expected for a date, so the presence of one
-     * must not read as the other already being there.
+     * Only a file of the SAME type, for the same file date AND the same upload
+     * date, conflicts. The same file date under another upload date is a
+     * separate file and is left alone. The regular and mutual fund files are
+     * both expected for a date, so one never reads as the other.
      */
-    const existingOfType = day.fa.latestByType?.[faFileType] || null;
+    const sameSlot = (await listFiles(catalystApp, { forDate: businessDate, uploadedOn })).filter(
+      (r) => r.side === FILE_SIDE.FA && r.fileType === faFileType,
+    );
 
-    if (existingOfType && !wantsReplace) {
+    if (sameSlot.length > 0 && !wantsReplace) {
       return fail(res, 409, {
         code: "FILE_ALREADY_EXISTS",
-        message: `A ${FA_FILE_TYPE_LABEL[faFileType]} file is already stored for ${businessDate}.`,
+        message: `A ${FA_FILE_TYPE_LABEL[faFileType]} file for ${businessDate} is already uploaded under ${uploadedOn}.`,
         businessDate,
+        uploadDate: uploadedOn,
         fileType: faFileType,
-        existing: [
-          {
-            key: existingOfType.key,
-            fileName: existingOfType.originalFileName,
-            uploadedAtMs: existingOfType.uploadedAtMs,
-            sizeBytes: existingOfType.sizeBytes,
-          },
-        ],
+        existing: sameSlot.map((r) => ({ key: r.fileKey, fileName: r.originalFileName })),
         hint: "Re-send with replace=true to delete the stored file and use this one instead.",
       });
     }
 
     const bucket = getBucket(catalystApp);
 
-    if (existingOfType) {
-      // Clears this type's raw file plus the final and difference files — a
-      // stale final must never be paired with a new raw file.
-      await deleteFaRawOfType(catalystApp, businessDate, faFileType, { bucket });
-    }
-
-    // The span of transaction dates the rows cover, stored on the key so the
-    // screen can name the file by what is in it without reopening it.
-    const { coveredFrom, coveredTo } = coveredRange(parsed.rows, businessDate);
-
+    // Every row is dated businessDate, so the file covers exactly that day.
     const uploadedAtMs = Date.now();
     const key = buildFaRawKey({
       businessDate,
       fileType: faFileType,
-      coveredFrom,
-      coveredTo,
+      coveredFrom: businessDate,
+      coveredTo: businessDate,
       originalFileName: file.name,
       uploadedAtMs,
     });
-    await putBuffer(bucket, key, file.data, "text/csv");
+    await storeReplacing(catalystApp, bucket, {
+      key,
+      data: file.data,
+      row: {
+        side: FILE_SIDE.FA,
+        fileType: faFileType,
+        forDate: businessDate,
+        uploadedOn,
+        originalFileName: file.name,
+      },
+      replacing: sameSlot,
+    });
 
-    // Any earlier clean result was reached against files that are no longer here.
-    const superseded = await supersedeRunsForDate(catalystApp, businessDate);
+    // Earlier results for this upload date's files no longer describe them.
+    const superseded = await supersedeRunsForDate(catalystApp, businessDate, uploadedOn);
 
     return res.status(200).json({
       success: true,
       message: `The ${FA_FILE_TYPE_LABEL[faFileType]} file is staged for ${businessDate}. It has not been imported.`,
       businessDate,
-      businessDateInferred: inferred,
       key,
       fileType: faFileType,
       fileName: file.name,
@@ -464,7 +501,7 @@ export const uploadFaFile = async (req, res) => {
 
 /**
  * POST /api/custody-match/custody-file
- * form-data: file, scheme, fileType (RESIDENTIAL|NDPMS|MUTUAL_FUND), [businessDate], [replace=true]
+ * form-data: file, scheme, fileType (RESIDENTIAL|NDPMS|MUTUAL_FUND), businessDate, [replace=true]
  *
  * One deal-allocation file per scheme. fileType selects which custodian layout
  * to expect inside it, and which field mapping reads it.
@@ -507,60 +544,49 @@ export const uploadCustodyFile = async (req, res) => {
     // scheme on every exception it produces.
     const profiles = await loadFieldMapProfiles(catalystApp);
 
-    const requestedDate = String(req.body?.businessDate || "").trim();
-    if (requestedDate && !DATE_PATTERN.test(requestedDate)) {
-      return fail(res, 400, {
-        code: "BAD_DATE",
-        message: `businessDate must be yyyy-mm-dd; received "${requestedDate}".`,
-      });
+    const forDate = readUploadDate(req.body?.businessDate);
+    if (forDate.error) {
+      return fail(res, 400, { code: "BAD_DATE", message: forDate.error });
     }
+    const { businessDate } = forDate;
+
+    const uploadDay = readUploadedOn(req.body?.uploadDate);
+    if (uploadDay.error) {
+      return fail(res, 400, { code: "BAD_UPLOAD_DATE", message: uploadDay.error });
+    }
+    const { uploadedOn } = uploadDay;
 
     const parsed = await parseCustodyFile(file.data, {
       scheme,
       fileType,
       fileName: file.name,
       // Settles an NDPMS ContractNo whose first 8 digits read as a valid date
-      // in both orders; the run's own date is the only outside fact we have.
-      businessDate: requestedDate || null,
+      // in both orders; the picked date is the only outside fact we have.
+      businessDate,
       profiles,
     });
     if (parsed.fileError) {
       return fail(res, 400, { ...parsed.fileError, scheme, fileType });
     }
 
-    const resolved = resolveBusinessDate(requestedDate, parsed.rows);
-    if (resolved.error) {
-      return fail(res, 400, { code: "BAD_DATE", message: resolved.error });
-    }
-    const { businessDate, inferred } = resolved;
-
-    if (!parsed.ok) {
+    const rowErrors = allRowErrors(parsed, businessDate, file.name);
+    if (rowErrors.length > 0) {
       return fail(res, 400, {
         code: "VALIDATION_FAILED",
-        message: `${parsed.rowErrors.length} row(s) in ${file.name} could not be read. Nothing was uploaded.`,
+        message: `${rowErrors.length} row(s) in ${file.name} are not valid for ${businessDate}. Nothing was uploaded.`,
         fileName: file.name,
         scheme,
         fileType,
         businessDate,
         detectedFormat: parsed.format,
-        ...summariseIssues(parsed.rowErrors, parsed.warnings),
-        hint: "Ask the custodian to correct the rows listed above, then upload the file again.",
+        ...summariseIssues(rowErrors, parsed.warnings),
+        hint: `Every row must be dated ${businessDate}. Correct the rows listed above, or pick the date the file is for, then upload it again.`,
       });
     }
 
-    /*
-     * Two different things, and conflating them is what limited a run to one day.
-     *
-     *   businessDate            — the run this file belongs to. Decides the
-     *                             folder, so everything for a run stays together.
-     *   coveredFrom..coveredTo  — the days the rows inside describe, read from
-     *                             the file. Decides the slot, so a scheme can
-     *                             hold as many files as the run needs.
-     */
-    const { coveredFrom, coveredTo } = coveredRange(parsed.rows, businessDate);
-    const range = describeRange(coveredFrom, coveredTo);
-
-    const day = await listDay(catalystApp, businessDate);
+    // Every row is dated businessDate, so the file covers exactly that day.
+    const coveredFrom = businessDate;
+    const coveredTo = businessDate;
 
     // Build the key we would write, then read the scheme back out of it, so the
     // slot comparison uses storage.js's own sanitisation rather than a second
@@ -576,49 +602,35 @@ export const uploadCustodyFile = async (req, res) => {
     });
     const storedScheme = parseCustodyKey(prospectiveKey).scheme;
 
-    const sameSlot = day.custody.files.filter(
-      (f) =>
-        f.scheme === storedScheme &&
-        f.fileType === fileType &&
-        f.coveredFrom === coveredFrom &&
-        f.coveredTo === coveredTo,
+    /*
+     * One file per scheme and type, per file date AND upload date. The same
+     * file date under another upload date is a separate file and is left alone.
+     */
+    const sameSlot = (await listFiles(catalystApp, { forDate: businessDate, uploadedOn })).filter(
+      (r) =>
+        r.side === FILE_SIDE.CUSTODY && r.scheme === storedScheme && r.fileType === fileType,
     );
     const wantsReplace = String(req.body?.replace || "").toLowerCase() === "true";
 
     if (sameSlot.length > 0 && !wantsReplace) {
       return fail(res, 409, {
         code: "FILE_ALREADY_EXISTS",
-        message: `A ${fileType} file for ${scheme} covering ${range} is already stored.`,
+        message: `A ${fileType} file for ${scheme} for ${businessDate} is already uploaded under ${uploadedOn}.`,
         businessDate,
-        coveredFrom,
-        coveredTo,
+        uploadDate: uploadedOn,
         scheme,
         fileType,
-        existing: sameSlot.map((f) => ({
-          key: f.key,
-          scheme: f.scheme,
-          fileType: f.fileType,
-          coveredFrom: f.coveredFrom,
-          coveredTo: f.coveredTo,
-          uploadedAtMs: f.uploadedAtMs,
-          sizeBytes: f.sizeBytes,
+        existing: sameSlot.map((r) => ({
+          key: r.fileKey,
+          scheme: r.scheme,
+          fileType: r.fileType,
+          fileName: r.originalFileName,
         })),
-        allCustodyFiles: day.custody.files.length,
-        hint: `Re-send with replace=true. Only this file — ${scheme} ${fileType} for ${range} — is replaced; the other schemes and dates in this run are left alone.`,
+        hint: `Re-send with replace=true. Only this file — ${scheme} ${fileType} for ${businessDate} under ${uploadedOn} — is replaced.`,
       });
     }
 
     const bucket = getBucket(catalystApp);
-
-    /*
-     * Replace only this slot. The old rule cleared the whole custodian date,
-     * which was safe when a date held one file per scheme — with several dates
-     * in a run it would silently delete the other days' files.
-     */
-    if (sameSlot.length > 0) {
-      await deleteKeys(bucket, sameSlot.map((f) => f.key));
-    }
-
     const uploadedAtMs = Date.now();
     const key = buildCustodyKey({
       businessDate,
@@ -629,7 +641,19 @@ export const uploadCustodyFile = async (req, res) => {
       originalFileName: file.name,
       uploadedAtMs,
     });
-    await putBuffer(bucket, key, file.data, "text/csv");
+    await storeReplacing(catalystApp, bucket, {
+      key,
+      data: file.data,
+      row: {
+        side: FILE_SIDE.CUSTODY,
+        fileType,
+        scheme: storedScheme,
+        forDate: businessDate,
+        uploadedOn,
+        originalFileName: file.name,
+      },
+      replacing: sameSlot,
+    });
 
     /*
      * Keep a copy for Previous Uploads. Best-effort: the file IS stored for
@@ -655,33 +679,13 @@ export const uploadCustodyFile = async (req, res) => {
       console.error("[CustodyMatchUpload] could not save upload history copy:", historyErr);
     }
 
-    /*
-     * A file whose range straddles another file's is stored — the user asked for
-     * anything but an exact repeat to be added — but the days they share would
-     * then be counted twice in the comparison, so say so.
-     */
-    const replacedKeys = new Set(sameSlot.map((f) => f.key));
-    const overlapping = day.custody.files.filter(
-      (f) =>
-        !replacedKeys.has(f.key) &&
-        f.scheme === storedScheme &&
-        f.fileType === fileType &&
-        f.coveredFrom <= coveredTo &&
-        f.coveredTo >= coveredFrom,
-    );
-    const overlapWarning =
-      overlapping.length > 0
-        ? `This file shares dates with ${overlapping.length} other ${fileType} file(s) already stored for ${scheme}. Rows on the shared dates will be counted from both.`
-        : "";
-
-    const superseded = await supersedeRunsForDate(catalystApp, businessDate);
-    const after = await listDay(catalystApp, businessDate);
+    const superseded = await supersedeRunsForDate(catalystApp, businessDate, uploadedOn);
+    const after = await uploadDayFiles(catalystApp, businessDate, uploadedOn);
 
     return res.status(200).json({
       success: true,
-      message: `File stored for ${scheme} covering ${range}.`,
+      message: `File stored for ${scheme} for ${businessDate}.`,
       businessDate,
-      businessDateInferred: inferred,
       key,
       fileName: file.name,
       scheme,
@@ -693,7 +697,6 @@ export const uploadCustodyFile = async (req, res) => {
       sizeBytes: file.data.length,
       stats: parsed.stats,
       ...summariseIssues([], parsed.warnings),
-      overlapWarning,
       replacedSlot: sameSlot.length > 0,
       supersededRuns: superseded.runIds,
       files: after.custody.files,
@@ -832,17 +835,16 @@ export const deleteUploadedFile = async (req, res) => {
       });
     }
 
-    const superseded = await supersedeRunsForDate(catalystApp, parsed.businessDate);
-    const after = await listDay(catalystApp, parsed.businessDate);
-
-    /*
-     * The object is gone the moment deleteObject returns, but Stratus's listing
-     * index catches up around twenty seconds later — so this listing almost
-     * always still contains the key we just removed. Reporting it back would
-     * put the row straight back on screen, which is what made a removed file
-     * look as though it needed a page refresh to disappear.
-     */
-    const stillThere = (f) => f.key !== key;
+    // The row goes with the file. Its upload date says whose runs are now stale.
+    const rows = (await listFiles(catalystApp, { forDate: parsed.businessDate })).filter(
+      (r) => r.fileKey === key,
+    );
+    await deleteFileRows(catalystApp, rows);
+    const uploadedOn = rows[0] ? String(rows[0].uploadedOn) : null;
+    const superseded = uploadedOn
+      ? await supersedeRunsForDate(catalystApp, parsed.businessDate, uploadedOn)
+      : { runIds: [] };
+    const after = await uploadDayFiles(catalystApp, parsed.businessDate, uploadedOn);
 
     // "In progress" until confirmRemoval sees the key leave the listing.
     try {
@@ -868,8 +870,8 @@ export const deleteUploadedFile = async (req, res) => {
       businessDate: parsed.businessDate,
       key,
       supersededRuns: superseded.runIds,
-      files: after.custody.files.filter(stillThere),
-      faFiles: after.fa.raw.filter(stillThere),
+      files: after.custody.files,
+      faFiles: after.fa.raw,
     });
   } catch (error) {
     console.error("[CustodyMatchUpload] deleteUploadedFile:", error);
@@ -882,7 +884,8 @@ export const deleteUploadedFile = async (req, res) => {
 /**
  * DELETE /api/custody-match/day/:date?side=fa|custody|all
  *
- * Clears a side wholesale so the user can restart a day.
+ * Clears a side wholesale so the user can restart a day — for every upload
+ * date, since it empties the file date's folder.
  */
 export const deleteDayFiles = async (req, res) => {
   try {
@@ -914,6 +917,14 @@ export const deleteDayFiles = async (req, res) => {
     if (side === SIDE_KEY.CUSTODY || side === "all") {
       results.push(await deleteDaySide(catalystApp, date, SIDE_KEY.CUSTODY, { bucket }));
     }
+
+    const clearedSides = new Set();
+    if (side === SIDE_KEY.FA || side === "all") clearedSides.add(FILE_SIDE.FA);
+    if (side === SIDE_KEY.CUSTODY || side === "all") clearedSides.add(FILE_SIDE.CUSTODY);
+    await deleteFileRows(
+      catalystApp,
+      (await listFiles(catalystApp, { forDate: date })).filter((r) => clearedSides.has(r.side)),
+    );
 
     const superseded = await supersedeRunsForDate(catalystApp, date);
     const failedDeletes = results.flatMap((r) => r.failed);
