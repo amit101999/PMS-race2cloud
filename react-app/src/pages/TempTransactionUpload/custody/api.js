@@ -72,27 +72,45 @@ const form = (path, fields) => {
 
 /* ── files ────────────────────────────────────────────────────────────── */
 
-export const getDay = (date) => request(`/day/${date}`);
+/** The files saved under an upload date: every file date, or only `date` when given. */
+export const getUploadedFiles = (uploadDate, date = "") =>
+  request(
+    `/files?uploadDate=${encodeURIComponent(uploadDate || "")}&date=${encodeURIComponent(date || "")}`,
+  );
 
 /** Schemes already used, each with the layout it was last filed under. */
 export const getSchemes = () => request("/schemes");
 
-/** The dates a run could compare, with what each has on either side. */
-export const getRunDates = (date) => request(`/day/${date}/dates`);
+/** Every date with uploaded files, newest first, with what each side has. */
+export const getMatchDates = () => request("/dates");
 
+/*
+ * businessDate — the day the file's rows are for.
+ * uploadDate   — the upload date picked at the top; the file is recorded under it.
+ */
 export const uploadFaFile = ({
   file,
   businessDate,
+  uploadDate,
   fileType = FA_FILE_TYPE.REGULAR,
   replace = false,
-}) => form("/fa-file", { file, businessDate, fileType, replace: replace ? "true" : "" });
+}) =>
+  form("/fa-file", { file, businessDate, uploadDate, fileType, replace: replace ? "true" : "" });
 
-export const uploadCustodyFile = ({ file, scheme, fileType, businessDate, replace = false }) =>
+export const uploadCustodyFile = ({
+  file,
+  scheme,
+  fileType,
+  businessDate,
+  uploadDate,
+  replace = false,
+}) =>
   form("/custody-file", {
     file,
     scheme,
     fileType,
     businessDate,
+    uploadDate,
     replace: replace ? "true" : "",
   });
 
@@ -112,15 +130,17 @@ export const getDownloadUrl = (key) =>
 
 /* ── matching ─────────────────────────────────────────────────────────── */
 
-export const startRun = (businessDate, startedBy, dates) =>
-  json("/run", "POST", { businessDate, startedBy, dates });
+/** Starts the match for one file date's files under one upload date. */
+export const startRun = (businessDate, uploadDate, startedBy) =>
+  json("/run", "POST", { businessDate, uploadDate, startedBy });
 
 export const getRun = (runId) => request(`/run/${runId}`);
 
 /** Past runs that found differences — the report history. */
 export const getReports = (limit = 10) => request(`/reports?limit=${limit}`);
 
-export const getLatestRun = (date) => request(`/latest-run/${date}`);
+export const getLatestRun = (date, uploadDate) =>
+  request(`/latest-run/${date}?uploadDate=${encodeURIComponent(uploadDate || "")}`);
 
 export const getExceptions = (runId, params = {}) => {
   const qs = new URLSearchParams();
@@ -182,7 +202,7 @@ export const PROFILE_LABEL = {
 export const PROFILE_HELP = {
   FA: "The daily transaction file. Whatever layout you map here is rewritten into the standard 26-column format before it is imported, so the import is unaffected.",
   FA_MUTUAL_FUND:
-    "The mutual fund fund-accounting file. Same 26 fields as the regular transaction file — it renames one heading (SYMBOLCODE/ISIN CODE), which is why it is mapped separately. Its rows are matched only against the Mutual Funds custodian files. Dates must be YYYY-MM-DD.",
+    "The mutual fund fund-accounting file. Same 26 fields as the regular transaction file — it renames one heading (SYMBOLCODE/ISIN CODE), which is why it is mapped separately. Its rows are matched only against the Mutual Funds custodian files. Dates may be in any common format (2026-08-20, 20-08-2026, 20-Aug-2026) and are stored as YYYY-MM-DD.",
   CUSTODY_RESIDENTIAL: "The deal allocation file for Resident accounts.",
   CUSTODY_NDPMS: "The deal allocation file for NRE/NRO/NDPMS accounts.",
   CUSTODY_MUTUAL_FUND:

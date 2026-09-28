@@ -1,5 +1,6 @@
 /**
- * Custody Matching — Data Store access for Custody_Match_Run / Custody_Match_Exception.
+ * Custody Matching — Data Store access for Custody_Match_Run, Custody_Match_Exception
+ * and Custody_Match_File.
  *
  * Three Catalyst constraints drive the shape of this file:
  *
@@ -21,6 +22,7 @@ import { EXCEPTION_STATUS, EXCEPTION_TYPE, RUN_STATUS, STAGE } from "./constants
 export const TABLE = {
   RUN: "Custody_Match_Run",
   EXCEPTION: "Custody_Match_Exception",
+  FILE: "Custody_Match_File",
 };
 
 /** ZCQL page size. 300 is the hard server cap, not a tuning choice. */
@@ -91,6 +93,7 @@ const RUN_COLS_A = [
   "ROWID",
   "runId",
   "businessDate",
+  "uploadDate",
   "status",
   "stage",
   "stageDetail",
@@ -190,24 +193,27 @@ export const getRun = async (catalystApp, runId) => {
   return rows[0] || null;
 };
 
-/** Latest run for a business date — what the screen shows on reload. */
-export const getLatestRunForDate = async (catalystApp, businessDate) => {
+/**
+ * Runs for a file date. With an upload date, only the runs over the files
+ * uploaded under it: each upload date is its own set of files, so its own runs.
+ */
+const runsWhere = (businessDate, uploadDate) =>
+  `businessDate = '${esc(businessDate)}'` +
+  (uploadDate ? ` AND uploadDate = '${esc(uploadDate)}'` : "");
+
+/** Latest run for a file date (and upload date) — what the screen shows on reload. */
+export const getLatestRunForDate = async (catalystApp, businessDate, uploadDate = null) => {
   const rows = await fetchRunsWhere(
     catalystApp.zcql(),
-    `businessDate = '${esc(businessDate)}'`,
+    runsWhere(businessDate, uploadDate),
     "ROWID DESC",
     1,
   );
   return rows[0] || null;
 };
 
-export const listRunsForDate = async (catalystApp, businessDate, limit = 20) =>
-  fetchRunsWhere(
-    catalystApp.zcql(),
-    `businessDate = '${esc(businessDate)}'`,
-    "ROWID DESC",
-    limit,
-  );
+export const listRunsForDate = async (catalystApp, businessDate, limit = 20, uploadDate = null) =>
+  fetchRunsWhere(catalystApp.zcql(), runsWhere(businessDate, uploadDate), "ROWID DESC", limit);
 
 /**
  * Finished runs that found differences, newest first — the report history.
@@ -265,7 +271,14 @@ export const newRunId = () => `CM-${Date.now()}`;
 
 export const createRun = async (
   catalystApp,
-  { runId = newRunId(), businessDate, startedBy = "", faRawKey = "", custodyFiles = [] },
+  {
+    runId = newRunId(),
+    businessDate,
+    uploadDate,
+    startedBy = "",
+    faRawKey = "",
+    custodyFiles = [],
+  },
 ) => {
   const table = catalystApp.datastore().table(TABLE.RUN);
   const now = Date.now();
@@ -273,6 +286,7 @@ export const createRun = async (
   const row = await table.insertRow({
     runId,
     businessDate,
+    uploadDate,
     status: RUN_STATUS.QUEUED,
     stage: STAGE.VALIDATE,
     stageDetail: "Queued",
@@ -401,8 +415,10 @@ export const failRun = (catalystApp, runId, { errorCode = "UNKNOWN", errorMessag
  * still true. Conflating the two meant a date matched in two passes lost the
  * first report, and left no way to tell a stale run from a merely older one.
  */
-export const supersedeRunsForDate = async (catalystApp, businessDate) => {
-  const runs = await listRunsForDate(catalystApp, businessDate, ZCQL_PAGE);
+export const supersedeRunsForDate = async (catalystApp, businessDate, uploadDate = null) => {
+  // With an upload date, only that upload date's runs: the other upload
+  // dates' files did not change.
+  const runs = await listRunsForDate(catalystApp, businessDate, ZCQL_PAGE, uploadDate);
   const open = runs.filter(
     (r) =>
       r.status === RUN_STATUS.QUEUED ||
@@ -666,12 +682,17 @@ export const setExceptionStatus = async (catalystApp, rowIds, status) => {
  * caused the files to be kept, so the next sweep deletes them as orphans — and if
  * the run was still QUEUED or RUNNING, its next status write throws.
  *
+ * A business date is the day the files are FOR, not the day they were uploaded,
+ * so an old business date can have a run started yesterday. `startedBeforeMs`
+ * keeps any run started on or after it, whatever its business date.
+ *
  * @param {string[]} [skipDates] business dates to leave completely alone
+ * @param {number} [startedBeforeMs] only delete runs started before this time
  */
 export const deleteRunsBefore = async (
   catalystApp,
   businessDateExclusive,
-  { skipDates = [] } = {},
+  { skipDates = [], startedBeforeMs = null } = {},
 ) => {
   const zcql = catalystApp.zcql();
   const skip = new Set(skipDates.map(String));
@@ -679,9 +700,13 @@ export const deleteRunsBefore = async (
     zcql,
     TABLE.RUN,
     (limit, offset) =>
-      `SELECT ROWID, runId, businessDate FROM ${TABLE.RUN} WHERE businessDate < '${esc(businessDateExclusive)}' LIMIT ${limit} OFFSET ${offset}`,
+      `SELECT ROWID, runId, businessDate, startedAtMs FROM ${TABLE.RUN} WHERE businessDate < '${esc(businessDateExclusive)}' LIMIT ${limit} OFFSET ${offset}`,
   );
-  const runs = all.filter((r) => !skip.has(String(r.businessDate)));
+  const runs = all.filter((r) => {
+    if (skip.has(String(r.businessDate))) return false;
+    const startedAtMs = Number(r.startedAtMs) || 0;
+    return startedBeforeMs == null || startedAtMs < startedBeforeMs;
+  });
   if (runs.length === 0) return { runs: 0, exceptions: 0, skipped: all.length - runs.length };
 
   let exceptions = 0;
@@ -696,6 +721,90 @@ export const deleteRunsBefore = async (
     .deleteRows(runs.map((r) => r.ROWID));
 
   return { runs: runs.length, exceptions, skipped: all.length - runs.length };
+};
+
+// ========================================================= Custody_Match_File
+
+/*
+ * One row per uploaded file. A row existing IS the file existing: replacing or
+ * removing a file deletes its row.
+ *
+ * Each upload date (uploadedOn, picked by the user) is its own set of files: a
+ * file belongs to (uploadedOn, forDate, side, type, scheme), and the same file
+ * date can hold one file per upload date. Match reads its files from here, not
+ * from the Stratus listing, which keeps showing a deleted object for a while.
+ *
+ * fileKey is a text column (a key can pass the 255-character varchar limit), so
+ * rows are always found by date first and then matched on the key in code.
+ */
+const FILE_COLS = [
+  "ROWID",
+  "fileKey",
+  "side",
+  "fileType",
+  "scheme",
+  "forDate",
+  "uploadedOn",
+  "originalFileName",
+];
+
+export const recordFile = (
+  catalystApp,
+  { fileKey, side, fileType, scheme = "", forDate, uploadedOn, originalFileName = "" },
+) =>
+  catalystApp.datastore().table(TABLE.FILE).insertRow({
+    fileKey,
+    side,
+    fileType,
+    scheme,
+    forDate,
+    uploadedOn,
+    originalFileName: clip(originalFileName, 255),
+  });
+
+/**
+ * Stored files, optionally narrowed to a file date and/or an upload date.
+ * No filter at all lists every file.
+ */
+export const listFiles = (catalystApp, { forDate = null, uploadedOn = null } = {}) => {
+  const clauses = [];
+  if (forDate) clauses.push(`forDate = '${esc(forDate)}'`);
+  if (uploadedOn) clauses.push(`uploadedOn = '${esc(uploadedOn)}'`);
+  const where = clauses.length > 0 ? ` WHERE ${clauses.join(" AND ")}` : "";
+  return selectAll(
+    catalystApp.zcql(),
+    TABLE.FILE,
+    (limit, offset) =>
+      `SELECT ${FILE_COLS.join(", ")} FROM ${TABLE.FILE}${where} ORDER BY ROWID ASC LIMIT ${limit} OFFSET ${offset}`,
+  );
+};
+
+/** Delete the given file rows (from listFiles). The Stratus objects are the caller's job. */
+export const deleteFileRows = async (catalystApp, rows) => {
+  for (let i = 0; i < rows.length; i += INSERT_CHUNK) {
+    await catalystApp
+      .datastore()
+      .table(TABLE.FILE)
+      .deleteRows(rows.slice(i, i + INSERT_CHUNK).map((r) => r.ROWID));
+  }
+  return { deleted: rows.length };
+};
+
+/** Every row for a date. Used by the cleanup cron once the date's files are deleted. */
+export const deleteFileRowsForDate = async (catalystApp, forDate) => {
+  const rows = await selectAll(
+    catalystApp.zcql(),
+    TABLE.FILE,
+    (limit, offset) =>
+      `SELECT ROWID FROM ${TABLE.FILE} WHERE forDate = '${esc(forDate)}' LIMIT ${limit} OFFSET ${offset}`,
+  );
+  for (let i = 0; i < rows.length; i += INSERT_CHUNK) {
+    await catalystApp
+      .datastore()
+      .table(TABLE.FILE)
+      .deleteRows(rows.slice(i, i + INSERT_CHUNK).map((r) => r.ROWID));
+  }
+  return { deleted: rows.length };
 };
 
 export { esc as escapeZcql };

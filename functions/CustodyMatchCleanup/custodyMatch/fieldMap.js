@@ -43,6 +43,12 @@ export const PROFILE_TYPE = {
   CUSTODY_RESIDENTIAL: "CUSTODY_RESIDENTIAL",
   CUSTODY_NDPMS: "CUSTODY_NDPMS",
   CUSTODY_MUTUAL_FUND: "CUSTODY_MUTUAL_FUND",
+  /*
+   * The custodian consolidated holdings file used by Holding Comparison. It lives
+   * here only so that module can reuse this mapping screen; custody matching
+   * never reads it. See util/holdingComparison/parse.js.
+   */
+  CUSTODY_HOLDINGS: "CUSTODY_HOLDINGS",
 };
 
 export const PROFILE_TYPES = Object.values(PROFILE_TYPE);
@@ -98,6 +104,52 @@ export const MAP_ERROR = {
 };
 
 /**
+ * The Custodian Consolidated holdings template: [field, standard header, kind].
+ *
+ * All 29 columns are shown in the popup, but only UCC, ISIN, NetBalance and
+ * LTPDate must be mapped — those are what the comparison uses. UCC, ISIN and
+ * NetBalance carry a strict kind; the rest accept any value. Keep in step with CUSTODY_COLUMNS in
+ * util/holdingComparison/constants.js (this folder is vendored into
+ * CustodyMatchRunner, so it cannot import that file).
+ */
+const CUSTODY_HOLDINGS_COLUMNS = [
+  ["srNo", "SrNo", "text"],
+  ["accountCode", "UCC", "code"],
+  ["clientName", "ClientName", "text"],
+  ["clientId", "ClientId", "text"],
+  ["parentName", "Parent Name", "text"],
+  ["fundStrategyCode", "FundStrategyCode", "text"],
+  ["securityName", "SecurityName", "text"],
+  ["isin", "ISIN", "isin"],
+  ["isinSubType", "ISINSubType", "text"],
+  ["investorType", "InvestorType", "text"],
+  ["purchaseOutstanding", "PurchaseOutstanding", "text"],
+  ["saleOutstanding", "SaleOutstanding", "text"],
+  ["purAct", "PurAct", "text"],
+  ["saleAct", "SaleAct", "text"],
+  ["purchaseUnderProcess", "PurchaseUnderProcess", "text"],
+  ["saleUnderProcess", "SaleUnderProcess", "text"],
+  ["pendingDemat", "PendingDemat", "text"],
+  ["pendingReg", "PendingReg", "text"],
+  ["physicalFree", "PhysicalFree", "text"],
+  ["physicalLocked", "PhysicalLocked", "text"],
+  ["dematFree", "DematFree", "text"],
+  ["dematLockedQty", "DematLockedQty", "text"],
+  ["dematPledge", "DematPledge", "text"],
+  ["dematFreezQty", "DematFreezQty", "text"],
+  ["saleStockQty", "SaleStockQty", "text"],
+  ["quantity", "NetBalance", "number"],
+  ["ltpExchange", "LTPExchange", "text"],
+  ["asOfDate", "LTPDate", "text"],
+  ["ltpPrice", "LTPPrice", "text"],
+];
+
+const CUSTODY_HOLDINGS_KEY_FIELDS = ["accountCode", "isin", "quantity"];
+
+/** The columns the comparison needs; the other template columns may be left unmapped. */
+const CUSTODY_HOLDINGS_REQUIRED_FIELDS = [...CUSTODY_HOLDINGS_KEY_FIELDS, "asOfDate"];
+
+/**
  * The canonical fields, per profile type.
  *
  * `matchKey` marks the five that build the match key (Actual Code + ISIN +
@@ -127,20 +179,19 @@ export const MAP_ERROR = {
 const FA_FIELDS = [
   { field: "accountCode", label: "Account Code", kind: "code", required: true, matchKey: true },
   { field: "isin", label: "ISIN", kind: "isin", required: true, matchKey: true },
-  { field: "tranDate", label: "Transaction Date", kind: "isoDate", required: true, matchKey: true },
+  { field: "tranDate", label: "Transaction Date", kind: "date", required: true, matchKey: true },
   { field: "tranType", label: "Transaction Type", kind: "type", required: true, matchKey: true },
   { field: "quantity", label: "Quantity", kind: "number", required: true, matchKey: true },
 
   { field: "brokerCode", label: "Broker Code", kind: "code", required: true },
   { field: "exchange", label: "Exchange", kind: "text", required: true },
-  { field: "settlementDate", label: "Settlement Date", kind: "isoDate", required: true },
+  { field: "settlementDate", label: "Settlement Date", kind: "date", required: true },
   { field: "rate", label: "Rate", kind: "number", required: true },
   { field: "brokerage", label: "Brokerage", kind: "number", required: true },
   { field: "serviceTax", label: "Service Tax", kind: "number", required: true },
   { field: "stt", label: "STT", kind: "number", required: true },
   { field: "ref", label: "Transaction Ref", kind: "text", required: true },
   { field: "description", label: "Description", kind: "text", required: true },
-  { field: "netAmount", label: "Net Amount", kind: "number", required: true },
 
   // Not used by matching, but carried through to the production import. A
   // remapped file that cannot fill these would silently lose Security_code
@@ -153,8 +204,7 @@ const FA_FIELDS = [
   { field: "chequeNumber", label: "Cheque Number", kind: "text", required: true },
   { field: "chequeDetail", label: "Cheque Detail", kind: "text", required: true },
   { field: "bankRef", label: "Bank Ref", kind: "text", required: true },
-  { field: "netRate", label: "Net Rate", kind: "number", required: true },
-  { field: "cashSetdate", label: "Cash Settlement Date", kind: "isoDate", required: true },
+  { field: "cashSetdate", label: "Cash Settlement Date", kind: "date", required: true },
 ];
 
 /**
@@ -176,7 +226,7 @@ export const FIELD_CATALOG = {
   [PROFILE_TYPE.CUSTODY_RESIDENTIAL]: [
     { field: "actualCode", label: "Actual Code", kind: "code", required: true, matchKey: true },
     { field: "isin", label: "ISIN", kind: "isin", required: true, matchKey: true },
-    { field: "tranDate", label: "Transaction Date", kind: "isoDate", required: true, matchKey: true },
+    { field: "tranDate", label: "Transaction Date", kind: "date", required: true, matchKey: true },
     { field: "tranType", label: "Transaction Type", kind: "type", required: true, matchKey: true },
     { field: "quantity", label: "Quantity", kind: "number", required: true, matchKey: true },
 
@@ -274,6 +324,13 @@ export const FIELD_CATALOG = {
     { field: "amcName", label: "Mutual Fund (AMC)", kind: "text", required: true },
     { field: "firstHolderName", label: "First Holder Name", kind: "text", required: true },
   ],
+  [PROFILE_TYPE.CUSTODY_HOLDINGS]: CUSTODY_HOLDINGS_COLUMNS.map(([field, header, kind]) => ({
+    field,
+    label: header,
+    kind,
+    required: CUSTODY_HOLDINGS_REQUIRED_FIELDS.includes(field),
+    matchKey: CUSTODY_HOLDINGS_KEY_FIELDS.includes(field),
+  })),
 };
 
 /** Custodian layout -> profile type, so callers holding a CUSTODY_FORMAT can find the profile. */
@@ -318,7 +375,6 @@ const FA_DEFAULT_PROFILE = {
   stt: byIndex(14), // TRANEXPENSE
   ref: byIndex(17), // TRANSREF
   description: byIndex(18),
-  netAmount: byIndex(23), // the SECOND "filler"
 
   setDateFlag: byIndex(11),
   mktRate: byIndex(12),
@@ -328,7 +384,6 @@ const FA_DEFAULT_PROFILE = {
   chequeNumber: byIndex(19),
   chequeDetail: byIndex(20),
   bankRef: byIndex(21),
-  netRate: byIndex(22), // the FIRST "filler"
   cashSetdate: byIndex(25),
 };
 
@@ -399,6 +454,9 @@ export const DEFAULT_PROFILES = {
     amcName: byName("MutualFund"),
     firstHolderName: byName("FirstHolderName"),
   },
+  [PROFILE_TYPE.CUSTODY_HOLDINGS]: Object.fromEntries(
+    CUSTODY_HOLDINGS_COLUMNS.map(([field, header]) => [field, byName(header)]),
+  ),
 };
 
 /** Case / space / punctuation-insensitive header form — same rule parseCustody.js uses. */
@@ -909,6 +967,21 @@ export const toStoredProfile = (type, profile, { updatedBy = "", updatedAtMs = D
  *
  * @returns {{profile:object, isDefault:boolean, updatedAtMs:number|null, updatedBy:string}}
  */
+/*
+ * Net Rate and Net Amount are no longer mapped on the transaction files: the
+ * import derives them (RATE ± brokerage, × quantity) when the cells are blank.
+ * Mappings saved before that still carry the two fields; drop them on read so
+ * such a mapping stays valid instead of silently falling back to the default.
+ */
+const RETIRED_FA_FIELDS = ["netRate", "netAmount"];
+
+const withoutRetiredFields = (type, profile) => {
+  if (!isFaProfileType(type)) return profile;
+  const kept = { ...profile };
+  for (const field of RETIRED_FA_FIELDS) delete kept[field];
+  return kept;
+};
+
 export const fromStoredProfile = (type, blob) => {
   const fallback = {
     profile: defaultProfile(type),
@@ -919,10 +992,12 @@ export const fromStoredProfile = (type, blob) => {
 
   if (!blob || typeof blob !== "object" || !blob.profile) return fallback;
   if (blob.version !== PROFILE_VERSION) return fallback;
-  if (!validateProfile(type, blob.profile).ok) return fallback;
+
+  const profile = withoutRetiredFields(type, blob.profile);
+  if (!validateProfile(type, profile).ok) return fallback;
 
   return {
-    profile: blob.profile,
+    profile,
     isDefault: false,
     updatedAtMs: Number(blob.updatedAtMs) || null,
     updatedBy: String(blob.updatedBy || ""),
@@ -942,7 +1017,8 @@ export const FA_DEFAULT_COLUMNS = FA_HEADERS.map((name, index) => ({
  *
  * The inverse of the FA default profile, and the thing that lets a file in ANY
  * layout be rewritten into the template the production import still expects.
- * Column 24 (the third "filler") has no field: the import drops it anyway.
+ * The three "filler" columns (23-25) have no field. The first two are NETRATE and
+ * Net_Amount, which the import derives when blank; the third it drops anyway.
  */
 export const FA_TEMPLATE_SLOT = Object.fromEntries(
   Object.entries(DEFAULT_PROFILES[PROFILE_TYPE.FA]).map(([field, source]) => [field, source.index]),

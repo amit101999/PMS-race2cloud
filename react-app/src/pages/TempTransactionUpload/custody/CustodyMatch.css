@@ -1078,6 +1078,15 @@
     color: var(--txo-warning);
 }
 
+/* A date missing one side: shown, but it cannot be ticked. */
+.cm-date-note--error {
+    color: var(--txo-error);
+}
+
+.cm-datelist li.is-blocked label {
+    cursor: not-allowed;
+}
+
 .cm-dialog-summary {
     margin: 0 0 16px;
     font-size: 12.5px;
@@ -1102,6 +1111,10 @@
 .cm-muted {
     font-size: 13px;
     color: var(--txo-text-muted);
+}
+
+.cm-last-upload {
+    margin: 8px 0 0;
 }
 
 /* ── structured upload/run errors (UploadErrorDetails) ────────────────── */

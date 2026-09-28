@@ -159,33 +159,58 @@ const HeaderWarnings = ({ warnings }) => {
     );
 };
 
+/** Why a date cannot be ticked, or "" when both sides have a file. */
+const missingSideMessage = (d) => {
+    if (d.faFiles.length === 0 && d.custodyFiles.length === 0) return "No files are present for this date.";
+    if (d.custodyFiles.length === 0) return "Custodian file is not present for this date.";
+    if (d.faFiles.length === 0) return "FA file is not present for this date.";
+    return "";
+};
+
+/** "2026-09-25" -> "25-09-2026", the way dates are read on this screen. */
+const toDisplayDate = (iso) => (iso ? iso.split("-").reverse().join("-") : "");
+
+/** The "Last uploaded" line under an upload zone. */
+const LastUpload = ({ date }) => (
+    <p className="cm-muted cm-last-upload">
+        {date ? `Last uploaded: ${toDisplayDate(date)}` : "No files uploaded yet"}
+    </p>
+);
+
+/** "3 schemes" style summary of a date's custodian files. */
+const custodySummary = (files) => {
+    const schemes = new Set(files.map((f) => f.scheme)).size;
+    return `${files.length} file(s), ${schemes} scheme${schemes === 1 ? "" : "s"}`;
+};
+
 /**
- * Which dates to compare.
- *
- * Only shown when the files actually cover more than one day — with a single
- * date there is nothing to choose, and a dialog asking a question with one
- * answer is just a step. Every date starts selected, so the default is the same
- * run you would have got before.
+ * Which dates to match. Every date with an uploaded file is listed; one match
+ * runs per ticked date. A date missing either side is shown unticked and
+ * disabled, with the reason, so it is clear what still has to be uploaded.
  */
-const DatePicker = ({ dates, loading, error, selected, onToggle, onAll, onNone, onRun, onClose }) => {
+const MatchDialog = ({ dates, loading, error, selected, onToggle, onAll, onNone, onRun, onClose }) => {
     const chosen = dates.filter((d) => selected.has(d.date));
-    const faRows = chosen.reduce((n, d) => n + d.faRows, 0);
-    const custodyRows = chosen.reduce((n, d) => n + (d.custodyRows || 0), 0);
 
     return (
         <>
             <div className="cm-scrim" onClick={onClose} />
-            <div className="cm-dialog" role="dialog" aria-label="Choose dates to compare">
-                <h3>Which dates should this run compare?</h3>
+            <div className="cm-dialog" role="dialog" aria-label="Choose dates to match">
+                <h3>Which dates should be matched?</h3>
 
-                {loading ? <p className="cm-muted">Reading the files…</p> : null}
+                {loading ? <p className="cm-muted">Loading the uploaded files…</p> : null}
                 {error ? <div className="cm-dialog-error">{error}</div> : null}
 
-                {!loading && !error ? (
+                {!loading && !error && dates.length === 0 ? (
+                    <p className="cm-muted">
+                        No files uploaded yet. Upload an FA file and a custodian file for the same date.
+                    </p>
+                ) : null}
+
+                {!loading && !error && dates.length > 0 ? (
                     <>
                         <div className="cm-dialog-actions">
                             <button type="button" className="cm-linkbtn" onClick={onAll}>
-                                Select all
+                                Select all ready
                             </button>
                             <button type="button" className="cm-linkbtn" onClick={onNone}>
                                 Clear
@@ -193,41 +218,36 @@ const DatePicker = ({ dates, loading, error, selected, onToggle, onAll, onNone, 
                         </div>
 
                         <ul className="cm-datelist">
-                            {dates.map((d) => (
-                                <li key={d.date}>
-                                    <label>
-                                        <input
-                                            type="checkbox"
-                                            checked={selected.has(d.date)}
-                                            onChange={() => onToggle(d.date)}
-                                        />
-                                        <span className="cm-date-label">{d.date}</span>
-                                        <span className="cm-date-counts">
-                                            {d.faRows.toLocaleString()} FA row(s) ·{" "}
-                                            {(d.custodyRows || 0).toLocaleString()} custody row(s)
-                                            {" "}in {d.custodyFiles} file(s)
-                                        </span>
-                                    </label>
-                                    {d.custodyFiles === 0 ? (
-                                        <span className="cm-date-note">
-                                            nothing in the custodian files for this day —
-                                            everything on this day will report as missing in
-                                            custody
-                                        </span>
-                                    ) : null}
-                                    {d.faRows === 0 ? (
-                                        <span className="cm-date-note">
-                                            nothing in the transaction file for this day
-                                        </span>
-                                    ) : null}
-                                </li>
-                            ))}
+                            {dates.map((d) => {
+                                const missing = missingSideMessage(d);
+                                return (
+                                    <li key={d.date} className={missing ? "is-blocked" : ""}>
+                                        <label>
+                                            <input
+                                                type="checkbox"
+                                                checked={!missing && selected.has(d.date)}
+                                                disabled={Boolean(missing)}
+                                                onChange={() => onToggle(d.date)}
+                                            />
+                                            <span className="cm-date-label">{d.date}</span>
+                                            <span className="cm-date-counts">
+                                                FA {d.faFiles.length > 0 ? `✓ (${d.faFiles.length} file(s))` : "✗"} ·
+                                                Custodian{" "}
+                                                {d.custodyFiles.length > 0 ? `✓ (${custodySummary(d.custodyFiles)})` : "✗"}
+                                            </span>
+                                        </label>
+                                        {missing ? (
+                                            <span className="cm-date-note cm-date-note--error">{missing}</span>
+                                        ) : null}
+                                    </li>
+                                );
+                            })}
                         </ul>
 
                         <p className="cm-dialog-summary">
                             {chosen.length === 0
                                 ? "Pick at least one date."
-                                : `${chosen.length} date(s) — ${faRows.toLocaleString()} FA row(s), ${custodyRows.toLocaleString()} custody row(s).`}
+                                : `${chosen.length} date(s) — one match runs for each.`}
                         </p>
                     </>
                 ) : null}
@@ -257,8 +277,7 @@ const DatePicker = ({ dates, loading, error, selected, onToggle, onAll, onNone, 
  * finished run up to the parent through `onRunChange`.
  */
 const CustodyMatchPanel = ({
-    businessDate,
-    onBusinessDateChange,
+    uploadDate,
     onRunChange,
     onCustodyUploaded,
     onDayChange,
@@ -304,9 +323,10 @@ const CustodyMatchPanel = ({
     const [reusedNote, setReusedNote] = useState("");
     const [showFailDetails, setShowFailDetails] = useState(false);
 
-    /* The date chooser, opened by Match when the files span more than one day. */
+    /* Every date with uploaded files, from the file table. Backs the summary
+       and the dialog Match opens. */
+    const [matchDates, setMatchDates] = useState([]);
     const [pickerOpen, setPickerOpen] = useState(false);
-    const [pickerDates, setPickerDates] = useState([]);
     const [pickerLoading, setPickerLoading] = useState(false);
     const [pickerError, setPickerError] = useState("");
     const [selectedDates, setSelectedDates] = useState(new Set());
@@ -334,11 +354,28 @@ const CustodyMatchPanel = ({
 
     /* ── loading a date ───────────────────────────────────────────────── */
 
+    /* The file date whose match result is shown. Set only when the user starts
+       a match (the first ticked date), so picking an upload date never shows an
+       earlier result on its own. */
+    const [resultDate, setResultDate] = useState("");
+
+    // A new upload date starts with no result on screen.
+    useEffect(() => {
+        setResultDate("");
+    }, [uploadDate]);
+
     const loadDay = useCallback(async () => {
-        if (!businessDate) return;
+        // No date chosen (the screen starts that way, or it was cleared): there
+        // is nothing to show, and the previous date's files must not linger.
+        if (!resultDate || !uploadDate) {
+            setDay(null);
+            setRun(null);
+            return;
+        }
         setDayLoading(true);
         try {
-            const res = await api.getLatestRun(businessDate);
+            // Runs belong to an upload date: the result for this file date under it.
+            const res = await api.getLatestRun(resultDate, uploadDate);
             setDay(res.day);
             // A superseded run was matched against files or a mapping that have
             // since changed, so its result no longer describes this date. Treat
@@ -350,11 +387,67 @@ const CustodyMatchPanel = ({
         } finally {
             setDayLoading(false);
         }
-    }, [businessDate]);
+    }, [resultDate, uploadDate]);
 
     useEffect(() => {
         loadDay();
     }, [loadDay]);
+
+    /** Throws, so the dialog can show the error; other callers ignore it. */
+    const loadMatchDates = useCallback(async () => {
+        const res = await api.getMatchDates();
+        setMatchDates(res.dates || []);
+        return res.dates || [];
+    }, []);
+
+    useEffect(() => {
+        loadMatchDates().catch(() => {
+            // The summary just stays empty; opening the dialog retries and shows the error.
+        });
+    }, [loadMatchDates]);
+
+    /*
+     * The date each card's file is for, separate from each other and from the
+     * upload date at the top. Each card lists the files saved under the upload
+     * date: all of them, or only its own date's once that date is picked. No
+     * upload date, no list.
+     */
+    const [custodyDate, setCustodyDate] = useState("");
+    const [custodyDay, setCustodyDay] = useState(null);
+    const [faDate, setFaDate] = useState("");
+    const [faDay, setFaDay] = useState(null);
+
+    const loadCustodyDay = useCallback(async () => {
+        if (!uploadDate) {
+            setCustodyDay(null);
+            return;
+        }
+        try {
+            setCustodyDay(await api.getUploadedFiles(uploadDate, custodyDate));
+        } catch (err) {
+            setAddError({ message: err.message, detail: err.detail });
+        }
+    }, [custodyDate, uploadDate]);
+
+    const loadFaDay = useCallback(async () => {
+        if (!uploadDate) {
+            setFaDay(null);
+            return;
+        }
+        try {
+            setFaDay(await api.getUploadedFiles(uploadDate, faDate));
+        } catch (err) {
+            setFaError({ message: err.message, detail: err.detail });
+        }
+    }, [faDate, uploadDate]);
+
+    useEffect(() => {
+        loadCustodyDay();
+    }, [loadCustodyDay]);
+
+    useEffect(() => {
+        loadFaDay();
+    }, [loadFaDay]);
 
     /* The page shell shows a compact status summary above this panel and
        needs the same `day` this panel already loads — exposed rather than
@@ -426,19 +519,47 @@ const CustodyMatchPanel = ({
 
     /* ── custodian files ──────────────────────────────────────────────── */
 
+    /* Custodian files stored for the custodian card's date. */
     const storedFiles = useMemo(
-        () => (day?.custody?.files || []).filter((f) => !removedKeys.has(f.key)),
-        [day, removedKeys],
+        () => (custodyDay?.custody?.files || []).filter((f) => !removedKeys.has(f.key)),
+        [custodyDay, removedKeys],
     );
 
     /*
-     * Every staged transaction file. A day holds at most one of each type, so
-     * this is the regular file, the mutual fund file, or both.
+     * Transaction files stored for the FA card's date. A day holds at most one
+     * of each type, so this is the regular file, the mutual fund file, or both.
      */
     const faFiles = useMemo(
-        () => (day?.fa?.raw || []).filter((f) => !removedKeys.has(f.key)),
-        [day, removedKeys],
+        () => (faDay?.fa?.raw || []).filter((f) => !removedKeys.has(f.key)),
+        [faDay, removedKeys],
     );
+
+    /*
+     * The file dates with files saved under the upload date picked at the top.
+     * Each upload date is its own set: a file date is ready only when BOTH an FA
+     * and a custodian file were saved under this upload date.
+     */
+    const uploadDayDates = uploadDate
+        ? matchDates.filter((d) => d.uploadDate === uploadDate)
+        : [];
+    const readyDates = uploadDayDates.filter((d) => d.canMatch);
+    const readyDateCount = readyDates.length;
+    const waitingDateCount = uploadDayDates.length - readyDateCount;
+
+    /*
+     * The most recent day a file on each side was uploaded, from the file table.
+     * Shown on each card whatever its date box says, so saved files are visible
+     * even before a date is picked.
+     */
+    const latestUploadedOn = (filesKey) => {
+        let latest = "";
+        for (const d of matchDates) {
+            if (d[filesKey].length > 0 && d.uploadDate > latest) latest = d.uploadDate;
+        }
+        return latest;
+    };
+    const custodyLastUpload = latestUploadedOn("custodyFiles");
+    const faLastUpload = latestUploadedOn("faFiles");
 
     /**
      * Send a custodian file that the mapping panel has cleared.
@@ -458,16 +579,11 @@ const CustodyMatchPanel = ({
                 file,
                 scheme,
                 fileType,
-                businessDate,
+                businessDate: custodyDate,
+                uploadDate,
                 replace,
             });
-            /* Sharing days with a file already stored is not an error — both are
-               kept — but those days would then be counted twice, so it is said
-               alongside the column notes rather than swallowed. */
-            setAddWarnings([
-                ...(res.warnings || []),
-                ...(res.overlapWarning ? [{ message: res.overlapWarning }] : []),
-            ]);
+            setAddWarnings(res.warnings || []);
             reportJob({
                 id: `txn-custody-upload-${Date.now()}`,
                 label: `Custodian file uploaded — ${file.name}`,
@@ -477,7 +593,9 @@ const CustodyMatchPanel = ({
             // The scheme and type stay selected: adding several days for one
             // scheme is the case this screen exists for, and clearing after
             // every file would mean re-picking both each time.
-            await loadDay();
+            // The results date and the date list are reloaded too: the new file
+            // can supersede a shown result and change which dates are ready.
+            await Promise.all([loadCustodyDay(), loadDay(), loadMatchDates().catch(() => {})]);
             // This upload may be the first file for its scheme, in which case
             // the scheme only exists from now on. Re-read so the picker offers
             // it without waiting for a page reload.
@@ -519,7 +637,12 @@ const CustodyMatchPanel = ({
         try {
             await api.deleteUploadedFile(file.key);
             setRemovedKeys((prev) => new Set(prev).add(file.key));
-            await loadDay();
+            await Promise.all([
+                loadCustodyDay(),
+                loadFaDay(),
+                loadDay(),
+                loadMatchDates().catch(() => {}),
+            ]);
         } catch (err) {
             onError({ message: err.message, detail: err.detail });
         } finally {
@@ -545,7 +668,13 @@ const CustodyMatchPanel = ({
         setFaError(null);
         setFaWarnings([]);
         try {
-            const res = await api.uploadFaFile({ file, businessDate, fileType, replace });
+            const res = await api.uploadFaFile({
+                file,
+                businessDate: faDate,
+                uploadDate,
+                fileType,
+                replace,
+            });
             setFaWarnings(res.warnings || []);
             reportJob({
                 id: `txn-fa-upload-${Date.now()}`,
@@ -553,10 +682,7 @@ const CustodyMatchPanel = ({
                 status: "completed",
                 message: `${api.FA_FILE_TYPE_LABEL[fileType] || fileType} file is ready for matching.`,
             });
-            if (res.businessDate !== businessDate && onBusinessDateChange) {
-                onBusinessDateChange(res.businessDate);
-            }
-            await loadDay();
+            await Promise.all([loadFaDay(), loadDay(), loadMatchDates().catch(() => {})]);
             return res;
         } finally {
             setFaBusy(false);
@@ -586,40 +712,75 @@ const CustodyMatchPanel = ({
 
     /* ─── gate 1 ───────── */
 
-    const blockers = [];
-    if (faFiles.length === 0) blockers.push("No transaction file staged.");
-    if (storedFiles.length === 0) blockers.push("No custodian files uploaded.");
+    /* Enabled only when an upload date is picked and a file uploaded that day
+       leaves some date with both an FA and a custodian file. The date list is
+       reloaded after every upload and remove, so this follows them. */
+    const gateOneOpen = readyDateCount > 0 && !run?.isRunning && !starting;
 
-    const gateOneOpen = blockers.length === 0 && !run?.isRunning && !starting;
+    let blockerMessage = "";
+    if (!uploadDate) {
+        blockerMessage = "Choose the upload date at the top to match the files uploaded that day.";
+    } else if (uploadDayDates.length === 0) {
+        blockerMessage = `No files were uploaded on ${toDisplayDate(uploadDate)}.`;
+    } else if (readyDateCount === 0) {
+        blockerMessage = `No date uploaded on ${toDisplayDate(uploadDate)} has both an FA and a custodian file yet.`;
+    }
 
-    /** Start the run. `dates` empty means every date the files contain. */
+    /**
+     * One match per ticked date, started one after another. Each run is tracked
+     * in the bell; the screen then shows the first date's result. Reports with
+     * differences are also listed under Previous reports.
+     */
     const startMatch = async (dates) => {
         setPickerOpen(false);
         setStarting(true);
         setRunError(null);
         setReusedNote("");
-        try {
-            const res = await api.startRun(businessDate, undefined, dates);
-            const status = await api.getRun(res.runId);
-            setRun(status.run);
-            if (res.reused) {
-                reportJob({
-                    id: `txn-match-reused-${Date.now()}`,
-                    label: `FA vs Custody matching — ${businessDate}`,
-                    status: "completed",
-                    message: res.message || "These dates were already matched; showing that report.",
-                });
-            } else {
-                // The runId is the bell's key: the server settles it from the run's own status.
-                trackJob({
-                    id: res.runId,
-                    label: `FA vs Custody matching — ${businessDate}`,
-                    message: "Matching is running in the background.",
-                });
+
+        const failures = [];
+        const reused = [];
+        let firstStarted = null;
+
+        for (const date of dates) {
+            try {
+                const res = await api.startRun(date, uploadDate);
+                if (!firstStarted) firstStarted = { date, runId: res.runId };
+                if (res.reused) {
+                    /* Nothing was re-run: the same files can only say the same thing. */
+                    reused.push(date);
+                    reportJob({
+                        id: `txn-match-reused-${date}-${Date.now()}`,
+                        label: `FA vs Custody matching — ${date}`,
+                        status: "completed",
+                        message: res.message || "Already matched; showing that report.",
+                    });
+                } else {
+                    // The runId is the bell's key: the server settles it from the run's own status.
+                    trackJob({
+                        id: res.runId,
+                        label: `FA vs Custody matching — ${date}`,
+                        message: "Matching is running in the background.",
+                    });
+                }
+            } catch (err) {
+                failures.push(`${date}: ${err.message}`);
             }
-            /* Nothing was re-run: these dates already had a report, and the same
-               files over the same dates can only say the same thing. */
-            setReusedNote(res.reused ? res.message : "");
+        }
+
+        try {
+            if (firstStarted) {
+                const status = await api.getRun(firstStarted.runId);
+                setRun(status.run);
+                setResultDate(firstStarted.date);
+            }
+            if (reused.length > 0) {
+                setReusedNote(
+                    `Already matched, so not run again: ${reused.join(", ")}. Upload or change a file to match a date again.`,
+                );
+            }
+            if (failures.length > 0) {
+                setRunError({ message: `Could not start: ${failures.join(" · ")}` });
+            }
         } catch (err) {
             setRunError({ message: err.message, detail: err.detail });
         } finally {
@@ -627,24 +788,14 @@ const CustodyMatchPanel = ({
         }
     };
 
-    /*
-     * Ask the server what dates the files cover. One date means there is nothing
-     * to choose, so the run starts straight away rather than showing a dialog
-     * with a single tick in it.
-     */
+    /* Always re-read the dates on open: files may have changed since the screen loaded. */
     const handleMatch = async () => {
         setPickerLoading(true);
         setPickerError("");
+        setSelectedDates(new Set());
         setPickerOpen(true);
         try {
-            const res = await api.getRunDates(businessDate);
-            const dates = res.dates || [];
-            setPickerDates(dates);
-            setSelectedDates(new Set(dates.map((d) => d.date)));
-            if (dates.length <= 1) {
-                await startMatch([]);
-                return;
-            }
+            await loadMatchDates();
         } catch (err) {
             setPickerError(err.message);
         } finally {
@@ -770,6 +921,38 @@ const CustodyMatchPanel = ({
     const custodyZoneDisabled = addBusy || Boolean(run?.isRunning);
     const faZoneDisabled = faBusy || Boolean(run?.isRunning);
 
+    /*
+     * The date a card's file is for. Every row must carry it, and the file is
+     * stored under it, so no file can be picked until it is chosen. Locked while
+     * that card's file is waiting on its mapping or uploading, so a file cannot
+     * be sent under one date while the card shows another.
+     */
+    const renderDateInput = (label, value, setValue, locked) => (
+        <input
+            type="date"
+            className="up-select"
+            aria-label={label}
+            title={label}
+            value={value}
+            onChange={(e) => setValue(e.target.value)}
+            disabled={locked}
+        />
+    );
+    /* A file needs both dates: the upload date at the top (recorded as when it
+       was uploaded) and its card's date (the day its rows are for). */
+    const custodyDropDisabled = custodyZoneDisabled || !custodyDate || !uploadDate;
+    const faDropDisabled = faZoneDisabled || !faDate || !uploadDate;
+
+    const zoneTitle = (busy, cardDate, readyText) => {
+        if (busy) return "Validating…";
+        if (!uploadDate) return "Choose the upload date at the top first";
+        if (!cardDate) return "Choose a date first";
+        return readyText;
+    };
+
+    /* "· uploaded 25-09-2026" on a file row, when the file table knows it. */
+    const uploadedLabel = (f) => (f.uploadedOn ? ` · uploaded ${toDisplayDate(f.uploadedOn)}` : "");
+
     /* ── render ───────────────────────────────────────────────────────── */
 
     return (
@@ -845,20 +1028,27 @@ const CustodyMatchPanel = ({
                                 {api.FILE_TYPE_LABEL.MUTUAL_FUND}
                             </option>
                         </select>
+
+                        {renderDateInput(
+                            "Date the custodian file is for",
+                            custodyDate,
+                            setCustodyDate,
+                            addBusy || pending?.kind === "custody",
+                        )}
                     </div>
 
                     <div
                         className={custodyDragActive ? "up-zone is-drag" : "up-zone"}
                         onDragEnter={(e) => {
                             e.preventDefault();
-                            if (!custodyZoneDisabled) setCustodyDragActive(true);
+                            if (!custodyDropDisabled) setCustodyDragActive(true);
                         }}
                         onDragOver={(e) => e.preventDefault()}
                         onDragLeave={() => setCustodyDragActive(false)}
                         onDrop={(e) => {
                             e.preventDefault();
                             setCustodyDragActive(false);
-                            if (custodyZoneDisabled) return;
+                            if (custodyDropDisabled) return;
                             const f = e.dataTransfer.files && e.dataTransfer.files[0];
                             if (f) handleCustodyFilePicked(f);
                         }}
@@ -868,7 +1058,7 @@ const CustodyMatchPanel = ({
                             accept=".csv"
                             className="up-zone-input"
                             aria-label="Upload custodian file"
-                            disabled={custodyZoneDisabled}
+                            disabled={custodyDropDisabled}
                             onChange={(e) => {
                                 const f = e.target.files[0];
                                 e.target.value = "";
@@ -878,13 +1068,15 @@ const CustodyMatchPanel = ({
                         <div className="up-zone-visual">
                             <UploadGlyph />
                             <span className="up-zone-title">
-                                {addBusy ? "Validating…" : "Upload custodian file"}
+                                {zoneTitle(addBusy, custodyDate, "Upload custodian file")}
                             </span>
                             <span className="up-zone-sub">
                                 Drag &amp; drop or <span className="up-zone-browse">Browse</span>
                             </span>
                         </div>
                     </div>
+
+                    <LastUpload date={custodyLastUpload} />
 
                     {addError ? (
                         <UploadErrorDetails message={addError.message} detail={addError.detail} />
@@ -908,6 +1100,7 @@ const CustodyMatchPanel = ({
                                             <span className="up-file-meta">
                                                 {f.scheme} · {api.FILE_TYPE_LABEL[f.fileType] || f.fileType} ·{" "}
                                                 {rangeLabel(f)} · {api.formatBytes(f.sizeBytes)}
+                                                {uploadedLabel(f)}
                                             </span>
                                         </div>
                                         {removingKey === f.key ? (
@@ -956,20 +1149,27 @@ const CustodyMatchPanel = ({
                                 {api.FA_FILE_TYPE_LABEL.MUTUAL_FUND}
                             </option>
                         </select>
+
+                        {renderDateInput(
+                            "Date the transaction file is for",
+                            faDate,
+                            setFaDate,
+                            faBusy || pending?.kind === "fa",
+                        )}
                     </div>
 
                     <div
                         className={faDragActive ? "up-zone is-drag" : "up-zone"}
                         onDragEnter={(e) => {
                             e.preventDefault();
-                            if (!faZoneDisabled) setFaDragActive(true);
+                            if (!faDropDisabled) setFaDragActive(true);
                         }}
                         onDragOver={(e) => e.preventDefault()}
                         onDragLeave={() => setFaDragActive(false)}
                         onDrop={(e) => {
                             e.preventDefault();
                             setFaDragActive(false);
-                            if (faZoneDisabled) return;
+                            if (faDropDisabled) return;
                             const f = e.dataTransfer.files && e.dataTransfer.files[0];
                             if (f) handleFaFilePicked(f);
                         }}
@@ -980,7 +1180,7 @@ const CustodyMatchPanel = ({
                             accept=".csv"
                             className="up-zone-input"
                             aria-label="Upload transaction file"
-                            disabled={faZoneDisabled}
+                            disabled={faDropDisabled}
                             onChange={(e) => {
                                 const f = e.target.files[0];
                                 e.target.value = "";
@@ -990,13 +1190,15 @@ const CustodyMatchPanel = ({
                         <div className="up-zone-visual">
                             <UploadGlyph />
                             <span className="up-zone-title">
-                                {faBusy ? "Validating…" : "Upload transaction file"}
+                                {zoneTitle(faBusy, faDate, "Upload transaction file")}
                             </span>
                             <span className="up-zone-sub">
                                 Drag &amp; drop or <span className="up-zone-browse">Browse</span>
                             </span>
                         </div>
                     </div>
+
+                    <LastUpload date={faLastUpload} />
 
                     {faError ? <UploadErrorDetails message={faError.message} detail={faError.detail} /> : null}
                     <HeaderWarnings warnings={faWarnings} />
@@ -1015,6 +1217,7 @@ const CustodyMatchPanel = ({
                                             <span className="up-file-meta">
                                                 {api.FA_FILE_TYPE_LABEL[f.fileType] || f.fileType} ·{" "}
                                                 {faDateLabel(f)} · {api.formatBytes(f.sizeBytes)}
+                                                {uploadedLabel(f)}
                                             </span>
                                         </div>
                                         {removingKey === f.key ? (
@@ -1047,19 +1250,15 @@ const CustodyMatchPanel = ({
             <div className="temp-transaction-card cm-gate">
                 <div className="cm-gate-summary">
                     <div className="cm-gate-fact">
-                        <span className="cm-gate-fact-label">Fund accounting</span>
+                        <span className="cm-gate-fact-label">Ready to match</span>
                         <span className="cm-gate-fact-value">
-                            {faFiles.length > 0
-                                ? `${faFiles.length} file${faFiles.length === 1 ? "" : "s"} ready`
-                                : "Not staged"}
+                            {readyDateCount} date{readyDateCount === 1 ? "" : "s"}
                         </span>
                     </div>
                     <div className="cm-gate-fact">
-                        <span className="cm-gate-fact-label">Custodian</span>
+                        <span className="cm-gate-fact-label">Waiting for a file</span>
                         <span className="cm-gate-fact-value">
-                            {storedFiles.length > 0
-                                ? `${storedFiles.length} file${storedFiles.length === 1 ? "" : "s"} ready`
-                                : "Not staged"}
+                            {waitingDateCount} date{waitingDateCount === 1 ? "" : "s"}
                         </span>
                     </div>
                 </div>
@@ -1077,14 +1276,8 @@ const CustodyMatchPanel = ({
                     {/* One short sentence, not the raw blocker list — a greyed-out
                         button with no explanation is the thing users complain about,
                         but a paragraph of reasons is just as unhelpful in a hurry. */}
-                    {blockers.length > 0 && !run?.isRunning ? (
-                        <p className="cm-blockers">
-                            {faFiles.length === 0 && storedFiles.length === 0
-                                ? "Upload a Fund Accounting file and at least one Custodian file."
-                                : faFiles.length === 0
-                                    ? "Upload a Fund Accounting file to continue."
-                                    : "Upload at least one Custodian file to continue."}
-                        </p>
+                    {blockerMessage && !run?.isRunning ? (
+                        <p className="cm-blockers">{blockerMessage}</p>
                     ) : null}
                 </div>
 
@@ -1177,20 +1370,17 @@ const CustodyMatchPanel = ({
             </div>
 
             {pickerOpen ? (
-                <DatePicker
-                    dates={pickerDates}
+                <MatchDialog
+                    dates={uploadDayDates}
                     loading={pickerLoading}
                     error={pickerError}
                     selected={selectedDates}
                     onToggle={toggleDate}
-                    onAll={() => setSelectedDates(new Set(pickerDates.map((d) => d.date)))}
-                    onNone={() => setSelectedDates(new Set())}
-                    onRun={() =>
-                        startMatch(
-                            // Everything selected is the same as no filter at all.
-                            selectedDates.size === pickerDates.length ? [] : [...selectedDates],
-                        )
+                    onAll={() =>
+                        setSelectedDates(new Set(readyDates.map((d) => d.date)))
                     }
+                    onNone={() => setSelectedDates(new Set())}
+                    onRun={() => startMatch([...selectedDates].sort())}
                     onClose={() => setPickerOpen(false)}
                 />
             ) : null}

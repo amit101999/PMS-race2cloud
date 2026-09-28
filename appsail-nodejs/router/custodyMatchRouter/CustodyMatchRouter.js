@@ -5,11 +5,11 @@ import {
   deleteDayFiles,
   deleteUploadedFile,
   downloadObject,
-  getDay,
   health,
-  listRunDates,
+  listMatchDates,
   listCustodyUploads,
   listSchemes,
+  listUploadedFiles,
   uploadCustodyFile,
   uploadFaFile,
 } from "../../controller/custodyMatch/CustodyMatchUpload.js";
@@ -77,11 +77,11 @@ router.delete("/field-map/:type", deleteFieldMap);
 // GET /api/custody-match/schemes — schemes already used, with their layout
 router.get("/schemes", listSchemes);
 
-// GET /api/custody-match/day/:date/dates — the dates this run could compare
-router.get("/day/:date/dates", listRunDates);
+// GET /api/custody-match/dates — every date with active files, for the Match dialog
+router.get("/dates", listMatchDates);
 
-// GET /api/custody-match/day/:date — everything stored for a business date
-router.get("/day/:date", getDay);
+// GET /api/custody-match/files?uploadDate=&date= — files saved under an upload date
+router.get("/files", listUploadedFiles);
 
 // DELETE /api/custody-match/file?key=... — one staged file, either side
 router.delete("/file", deleteUploadedFile);

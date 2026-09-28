@@ -2,13 +2,13 @@ import React, { useCallback, useEffect, useState } from "react";
 import MainLayout from "../../layouts/MainLayout";
 import { BASE_URL } from "../../constant";
 import CustodyMatchPanel from "./custody/CustodyMatchPanel";
+import { todayIso } from "./custody/api";
 import DifferenceReports from "./custody/DifferenceReports";
 import PreviousCustodianUploads from "./custody/PreviousCustodianUploads";
 import ExceptionGrid from "./custody/ExceptionGrid";
 import GateTwo from "./custody/GateTwo";
 import WorkflowTracker from "./WorkflowTracker";
 import DownloadButton from "../../components/common/DownloadButton";
-import { todayIso } from "./custody/api";
 import "./tokens.css";
 import "./TempTransaction.css";
 
@@ -71,7 +71,11 @@ function deriveStage({ faReady, custodyReady, run }) {
  * Recent Uploads below is unchanged.
  */
 const TempTransaction = () => {
-    const [businessDate, setBusinessDate] = useState(todayIso());
+    /* The upload date, picked by the user. Every file uploaded is recorded under
+       it, Match offers only the files recorded under it, and uploading and the
+       Match button both stay disabled until it is picked. A match never changes
+       it. Each upload card has its own date (the day its file is for). */
+    const [uploadDate, setUploadDate] = useState("");
     const [run, setRun] = useState(null);
     const [day, setDay] = useState(null);
     /* The custodian history list an upload hands back, so the new file shows at once. */
@@ -174,19 +178,19 @@ const TempTransaction = () => {
                 />
 
                 <label className="cm-date">
-                    <span>Date</span>
+                    <span>Upload date</span>
                     <input
                         type="date"
-                        value={businessDate}
-                        onChange={(e) => setBusinessDate(e.target.value)}
+                        value={uploadDate}
+                        max={todayIso()}
+                        onChange={(e) => setUploadDate(e.target.value)}
                         disabled={run?.isRunning}
                     />
                 </label>
                 </div>
 
                 <CustodyMatchPanel
-                    businessDate={businessDate}
-                    onBusinessDateChange={setBusinessDate}
+                    uploadDate={uploadDate}
                     onRunChange={setRun}
                     onDayChange={setDay}
                     onCustodyUploaded={setCustodyHistory}

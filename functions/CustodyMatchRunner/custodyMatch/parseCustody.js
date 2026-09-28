@@ -38,7 +38,6 @@ import {
   detectSeparator,
   displayNum,
   firstLineOf,
-  isoDateErrorMessage,
   normCode,
   normIsin,
   normMutualFundTranType,
@@ -46,7 +45,6 @@ import {
   num,
   parseContractNoDate,
   parseDate,
-  parseIsoDate,
   splitHeaderCells,
   text,
 } from "./normalize.js";
@@ -440,30 +438,17 @@ export const parseCustodyFile = (
         const dateCol = columnOf.tranDate;
         if (transformOf.tranDate !== TRANSFORM.DATE_FROM_FIRST_8) {
           const rawDate = cell("tranDate");
-          /*
-           * Only Residential is held to YYYY-MM-DD. The Mutual Funds custodian
-           * sends DD-MM-YYYY ("03-09-2026"), and an NDPMS file mapped to a real
-           * date column keeps the wider reading too.
-           */
-          const isoOnly = format === CUSTODY_FORMAT.RESIDENT;
-          tranDate = isoOnly ? parseIsoDate(rawDate) : parseDate(rawDate);
+          // Every layout accepts any format parseDate reads (20-08-2026,
+          // 20-Aug-2026, 2026-08-20, ...) and carries it on as YYYY-MM-DD.
+          tranDate = parseDate(rawDate);
           if (!rawDate) {
             fail(rowNumber, ROW_ERROR.MISSING_DATE, `${dateCol} is blank.`, dateCol, "");
-            rejected = true;
-          } else if (!tranDate && isoOnly) {
-            fail(
-              rowNumber,
-              ROW_ERROR.BAD_DATE_FORMAT,
-              isoDateErrorMessage(dateCol, rawDate),
-              dateCol,
-              rawDate,
-            );
             rejected = true;
           } else if (!tranDate) {
             fail(
               rowNumber,
               ROW_ERROR.BAD_DATE,
-              `"${rawDate}" is not a readable date.`,
+              `"${rawDate}" is not a readable date. Use a format such as 2026-08-20 or 20-08-2026.`,
               dateCol,
               rawDate,
             );

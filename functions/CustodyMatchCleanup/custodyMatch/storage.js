@@ -134,11 +134,17 @@ export const buildFaRawKey = ({
   return `${faDayPrefix(businessDate)}raw-${type}-${from}-${to}-${uploadedAtMs}-${sanitiseFileName(originalFileName)}`;
 };
 
-export const buildFaFinalKey = (businessDate) =>
-  `${faDayPrefix(businessDate)}final-${assertBusinessDate(businessDate)}-FA.csv`;
+/*
+ * With a runId the name is per run. One file date can be matched once per
+ * upload date, and those runs must not overwrite each other's working files.
+ */
+const runPart = (runId) => (runId ? `-${sanitiseToken(runId)}` : "");
 
-export const buildCustodyFinalKey = (businessDate) =>
-  `${custodyDayPrefix(businessDate)}final-${assertBusinessDate(businessDate)}-Custodian.csv`;
+export const buildFaFinalKey = (businessDate, runId = "") =>
+  `${faDayPrefix(businessDate)}final-${assertBusinessDate(businessDate)}${runPart(runId)}-FA.csv`;
+
+export const buildCustodyFinalKey = (businessDate, runId = "") =>
+  `${custodyDayPrefix(businessDate)}final-${assertBusinessDate(businessDate)}${runPart(runId)}-Custodian.csv`;
 
 /**
  * What stage S1 worked out, persisted beside the FA final.
@@ -155,8 +161,8 @@ export const buildCustodyFinalKey = (businessDate) =>
  *                  what the user needs to find the offending row in their OWN
  *                  file, which is written in virtual codes.
  */
-export const buildFaMetaKey = (businessDate) =>
-  `${faDayPrefix(businessDate)}fa-meta-${assertBusinessDate(businessDate)}.json`;
+export const buildFaMetaKey = (businessDate, runId = "") =>
+  `${faDayPrefix(businessDate)}fa-meta-${assertBusinessDate(businessDate)}${runPart(runId)}.json`;
 
 /**
  * The dates a run was told to compare, written when the run is created.
