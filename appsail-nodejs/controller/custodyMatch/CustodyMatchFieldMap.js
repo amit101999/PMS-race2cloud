@@ -190,6 +190,8 @@ const supersedeStoredDates = async (app) => {
  * the three custody-matching types.
  */
 const supersedeForType = async (app, type) => {
+  // The corporate actions file is only stored, so no run was read under its mapping.
+  if (type === PROFILE_TYPE.CUSTODY_CORP_ACTION) return { superseded: [], supersedeErrors: [] };
   if (type !== PROFILE_TYPE.CUSTODY_HOLDINGS) return supersedeStoredDates(app);
   try {
     const { runIds } = await supersedeHoldingComparisonRuns(app);
@@ -413,8 +415,13 @@ export const previewHeaders = async (req, res) => {
      * custodian layouts, and the FA file arrives through its own control.
      */
     let detectedType = null;
-    // The holdings file is not a deal-allocation layout, so detection has nothing to say about it.
-    if (asked !== PROFILE_TYPE.FA && asked !== PROFILE_TYPE.CUSTODY_HOLDINGS) {
+    // The holdings and corporate actions files are not deal-allocation layouts,
+    // so detection has nothing to say about them.
+    if (
+      asked !== PROFILE_TYPE.FA &&
+      asked !== PROFILE_TYPE.CUSTODY_HOLDINGS &&
+      asked !== PROFILE_TYPE.CUSTODY_CORP_ACTION
+    ) {
       try {
         /*
          * Detected against the saved mappings, exactly as the upload does.

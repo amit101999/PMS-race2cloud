@@ -440,8 +440,7 @@ export function Sidebar({ items = [], activeKey }) {
     }
   }, [location.pathname, items]);
 
-  // Fixed rather than sticky: html/body set overflow-x: hidden (index.css),
-  // which stops position: sticky from working. PageLayout reserves the width.
+  // Fixed rather than sticky; PageLayout reserves the width.
   const sidebarStyle = {
     position: "fixed",
     top: 0,
@@ -566,8 +565,7 @@ export function Sidebar({ items = [], activeKey }) {
 }
 
 export function Topbar({ title, rightContent }) {
-  // Fixed for the same reason as the sidebar (sticky does not work here).
-  // z-index sits above page content (Analytics filters use up to 210) and
+  // Fixed, like the sidebar. z-index sits above page content (Analytics filters use up to 210) and
   // below the notification bell (NotificationTray.css, 350) and pop-ups (400+).
   const bar = {
     position: "fixed",
@@ -620,7 +618,8 @@ export function PageLayout({ sidebar, children }) {
     display: "flex",
     backgroundColor: "#ffffff", // Changed from #f3f4ff to white
     minHeight: "100vh",
-    overflowX: "hidden",
+    // clip, not hidden: hidden would stop position: sticky working inside pages (index.css).
+    overflowX: "clip",
     width: "100%",
     maxWidth: "100vw",
     boxSizing: "border-box",
@@ -633,7 +632,7 @@ export function PageLayout({ sidebar, children }) {
     display: "flex",
     flexDirection: "column",
     minWidth: 0,
-    overflowX: "hidden",
+    overflowX: "clip",
     width: "100%",
     maxWidth: "100%",
     boxSizing: "border-box",

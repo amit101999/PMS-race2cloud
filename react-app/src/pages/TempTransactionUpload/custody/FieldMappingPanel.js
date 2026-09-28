@@ -51,6 +51,7 @@ const FILE_BLURB = {
     CUSTODY_NDPMS: "The deal allocation file your custodian sends for NRE/NRO/NDPMS accounts.",
     CUSTODY_MUTUAL_FUND: "The Mutual Funds transaction file your custodian sends (Subscription / Redemption). Matched only against mutual fund rows in the transaction file.",
     CUSTODY_HOLDINGS: "The consolidated holdings file your custodian sends, used by Holding Comparison.",
+    CUSTODY_CORP_ACTION: "The corporate actions file your custodian sends, uploaded on Corporate Actions → Custodian Upload.",
 };
 
 const NONE = "NONE";

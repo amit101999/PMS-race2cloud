@@ -1,0 +1,33 @@
+import express from "express";
+import fileUpload from "express-fileupload";
+
+import { deleteCustodianFile, getDay, uploadCustodianFile } from "../controller/corporateAction/CustodianUploadController.js";
+
+const router = express.Router();
+
+router.use((req, res, next) => {
+  if (req.catalystApp) return next();
+  return res
+    .status(500)
+    .json({ success: false, code: "CATALYST_NOT_INITIALIZED", message: "Catalyst not initialized" });
+});
+
+// abortOnLimit rejects an oversized file outright instead of silently truncating it.
+router.use(
+  fileUpload({
+    limits: { fileSize: 25 * 1024 * 1024 },
+    abortOnLimit: true,
+    responseOnLimit: "File is larger than the 25 MB limit for a custodian file.",
+  }),
+);
+
+// GET /api/custodian-upload/day/:date — the newest file uploaded for the date
+router.get("/day/:date", getDay);
+
+// POST /api/custodian-upload/file — check against the saved mapping and store
+router.post("/file", uploadCustodianFile);
+
+// DELETE /api/custodian-upload/file?key=... — remove the file (every upload for its date)
+router.delete("/file", deleteCustodianFile);
+
+export default router;

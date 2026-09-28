@@ -49,6 +49,12 @@ export const PROFILE_TYPE = {
    * never reads it. See util/holdingComparison/parse.js.
    */
   CUSTODY_HOLDINGS: "CUSTODY_HOLDINGS",
+  /*
+   * The custodian corporate actions file uploaded on Corporate Actions ->
+   * Custodian Upload. Like CUSTODY_HOLDINGS it is here only to reuse the
+   * mapping screen; custody matching never reads it.
+   */
+  CUSTODY_CORP_ACTION: "CUSTODY_CORP_ACTION",
 };
 
 export const PROFILE_TYPES = Object.values(PROFILE_TYPE);
@@ -148,6 +154,49 @@ const CUSTODY_HOLDINGS_KEY_FIELDS = ["accountCode", "isin", "quantity"];
 
 /** The columns the comparison needs; the other template columns may be left unmapped. */
 const CUSTODY_HOLDINGS_REQUIRED_FIELDS = [...CUSTODY_HOLDINGS_KEY_FIELDS, "asOfDate"];
+
+/**
+ * The custodian corporate actions template: [field, standard header].
+ *
+ * Every field is optional text for now: the file is only stored, and nothing
+ * reads these values yet, so no column can make a mapping incomplete.
+ */
+const CORP_ACTION_COLUMNS = [
+  ["parentClientName", "Parent Client Name"],
+  ["clientUccCode", "Client UCC Code"],
+  ["clientName", "Client Name"],
+  ["dpName", "DP Name"],
+  ["dpId", "DP ID"],
+  ["depositoryName", "DepositoryName"],
+  ["uccStatus", "UCC Status"],
+  ["nsdlClientId", "NSDL Client ID"],
+  ["isin", "ISIN"],
+  ["isinName", "ISIN Name"],
+  ["caRefNo", "CA REF NO"],
+  ["exDate", "EX Date"],
+  ["bookClosureFromDate", "Book Closure FM DT"],
+  ["bookClosureToDate", "Book Closure TO DT"],
+  ["recordDate", "Record Date"],
+  ["tentativePaymentDate", "Tentative Payment Date"],
+  ["caType", "CA Type"],
+  ["caTypeDescr", "CA Type Descr"],
+  ["faceValue", "Face Value"],
+  ["ratio", "Ratio (Propose : Held)"],
+  ["dividendRate", "Dividend Rate"],
+  ["holdingQty", "Holding Qty"],
+  ["caQty", "CA Qty"],
+  ["fractionQty", "Fraction Qty"],
+  ["caAmt", "CA Amt"],
+  ["newIsin", "New ISIN"],
+  ["newIsinName", "New ISIN Name"],
+  ["newIsinFaceValue", "New ISIN FaceValue"],
+  ["remarks", "Remarks"],
+  ["bankAccountType", "Bank Account Type"],
+  ["bankAcNo", "Bank AC NO"],
+  ["bankName", "Bank Name"],
+  ["brName", "BR Name"],
+  ["custodyBankAccountFlag", "Custody Bank Account Flag"],
+];
 
 /**
  * The canonical fields, per profile type.
@@ -331,6 +380,13 @@ export const FIELD_CATALOG = {
     required: CUSTODY_HOLDINGS_REQUIRED_FIELDS.includes(field),
     matchKey: CUSTODY_HOLDINGS_KEY_FIELDS.includes(field),
   })),
+  [PROFILE_TYPE.CUSTODY_CORP_ACTION]: CORP_ACTION_COLUMNS.map(([field, header]) => ({
+    field,
+    label: header,
+    kind: "text",
+    required: false,
+    matchKey: false,
+  })),
 };
 
 /** Custodian layout -> profile type, so callers holding a CUSTODY_FORMAT can find the profile. */
@@ -456,6 +512,9 @@ export const DEFAULT_PROFILES = {
   },
   [PROFILE_TYPE.CUSTODY_HOLDINGS]: Object.fromEntries(
     CUSTODY_HOLDINGS_COLUMNS.map(([field, header]) => [field, byName(header)]),
+  ),
+  [PROFILE_TYPE.CUSTODY_CORP_ACTION]: Object.fromEntries(
+    CORP_ACTION_COLUMNS.map(([field, header]) => [field, byName(header)]),
   ),
 };
 

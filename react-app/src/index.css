@@ -4,6 +4,9 @@ html, body {
   width: 100%;
   max-width: 100vw;
   overflow-x: hidden;
+  /* clip, not hidden, where supported: hidden turns the element into a scroll
+     container, which stops position: sticky (the workflow tracker) working. */
+  overflow-x: clip;
   box-sizing: border-box;
 }
 

@@ -29,6 +29,9 @@ function MainLayout({ title, rightContent, children }) {
     if (location.pathname === "/merger") {
       return "merger";
     }
+    if (location.pathname === "/custodian-upload") {
+      return "custodian-upload";
+    }
     if (location.pathname === "/bhav-copy") {
       return "bhav-copy";
     }
@@ -70,6 +73,7 @@ function MainLayout({ title, rightContent, children }) {
         { key: "dividend", label: "Dividend" },
         { key: "demerger", label: "Demerger" },
         { key: "merger", label: "Merger" },
+        { key: "custodian-upload", label: "Custodian Upload" },
       ]
     },
     { key: "bhav-copy", label: "Bhav Copy" },
