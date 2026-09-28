@@ -309,9 +309,9 @@ export const addStockSplit = async (req, res) => {
     const { securityCode, securityName, ratio1, ratio2, recordDate, effectiveDate, isin } =
       req.body;
 
-    if (!securityCode || !securityName || !ratio1 || !ratio2 || !recordDate || !effectiveDate || !isin) {
+    if (!securityCode || !securityName || !ratio1 || !ratio2 || !recordDate || !isin) {
       return res.status(400).json({
-        message: "Missing required fields (ISIN, ratio, record date and effective date are required)",
+        message: "Missing required fields (ISIN, ratio and record date are required)",
       });
     }
 
@@ -321,9 +321,10 @@ export const addStockSplit = async (req, res) => {
      * Effective Date is stored in Issue_Date for reference only — Issue_Date is
      * kept as the column name so splits saved before Record_Date existed still
      * read correctly (their Issue_Date doubles as their record date).
+     * Effective Date is optional; when it is left empty the record date is stored.
      */
     const recordDateISO = toISODateOnly(recordDate);
-    const effectiveDateISO = toISODateOnly(effectiveDate);
+    const effectiveDateISO = effectiveDate ? toISODateOnly(effectiveDate) : recordDateISO;
     if (!recordDateISO || !effectiveDateISO) {
       return res.status(400).json({ message: "Invalid record date or effective date" });
     }

@@ -236,6 +236,40 @@
     font-weight: inherit;
 }
 
+/*
+ * Split / Bonus: the clear "✕" and the ISIN options are real <button>s so they
+ * work from the keyboard. These rules only remove the browser's button look.
+ */
+.ops-page button.clear-icon {
+    border: 0;
+    padding: 0;
+    font-family: inherit;
+}
+
+.ops-page button.dropdown-option {
+    display: block;
+    width: 100%;
+    border-top: 0;
+    border-right: 0;
+    border-bottom: 0;
+    background-color: transparent;
+    text-align: left;
+    font-family: inherit;
+}
+
+.ops-page button.clear-icon:focus-visible,
+.ops-page button.dropdown-option:focus-visible {
+    outline: 2px solid var(--txo-primary);
+    outline-offset: -2px;
+}
+
+/* A form-level message inside the Split / Bonus field grid spans the whole row. */
+.ops-page .split-card > .ops-form-message,
+.ops-page .bonus-card > .ops-form-message {
+    grid-column: 1 / -1;
+    margin: 0;
+}
+
 .ops-page .ops-option-sub {
     font-size: 12px;
     color: var(--txo-text-muted);

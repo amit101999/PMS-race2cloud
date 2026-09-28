@@ -304,10 +304,10 @@ export const applyStockBonus = async (req, res) => {
     const r1 = Number(ratio1);
     const r2 = Number(ratio2);
 
-    if (!isin || !recordDate || !effectiveDate || !Number.isFinite(r1) || !Number.isFinite(r2) || r1 <= 0) {
+    if (!isin || !recordDate || !Number.isFinite(r1) || !Number.isFinite(r2) || r1 <= 0) {
       return res.status(400).json({
         success: false,
-        message: "Invalid input values (ISIN, ratio, record date and effective date are required)",
+        message: "Invalid input values (ISIN, ratio and record date are required)",
       });
     }
 
@@ -316,10 +316,11 @@ export const applyStockBonus = async (req, res) => {
      * bonus shares land in FIFO, the duplicate check). Effective Date is stored
      * in the existing ExDate column for reference only, so bonuses saved before
      * Record_Date existed still read correctly (their ExDate doubles as their
-     * record date).
+     * record date). Effective Date is optional; when it is left empty the
+     * record date is stored.
      */
     const recordDateISO = toISODateOnly(recordDate);
-    const effectiveDateISO = toISODateOnly(effectiveDate);
+    const effectiveDateISO = effectiveDate ? toISODateOnly(effectiveDate) : recordDateISO;
     if (!recordDateISO || !effectiveDateISO) {
       return res.status(400).json({ success: false, message: "Invalid record date or effective date" });
     }

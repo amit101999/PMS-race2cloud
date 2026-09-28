@@ -11,10 +11,15 @@
 import { Readable } from "stream";
 import csvParser from "csv-parser";
 
+import { computeBonusPreviewRows } from "../../util/analytics/bonusPreviewCalc.js";
+import { computeSplitPreviewRows } from "../../util/analytics/splitPreviewCalc.js";
+import { checkEvent, compareHoldings, comparisonToCsv } from "../../util/corporateAction/compareCustodian.js";
+import { parseDate, num, stripIsinSuffix } from "../../util/custodian/parseCustodianCsv.js";
 import { PROFILE_TYPE } from "../../util/custodyMatch/fieldMap.js";
+import { STRATUS_GET_URL_OPTS, stratusSignedUrlToString } from "../../util/stratusSignedUrl.js";
 import { DATE_PATTERN } from "../../util/holdingComparison/constants.js";
 import { normHeader } from "../../util/holdingComparison/parse.js";
-import { getBucket, listAll, readFieldMapProfile } from "../../util/holdingComparison/storage.js";
+import { getBucket, getBuffer, listAll, readFieldMapProfile } from "../../util/holdingComparison/storage.js";
 
 const FOLDER = "Custodian-CorpAction";
 const KEY_PATTERN = /^Custodian-CorpAction\/(\d{4}-\d{2}-\d{2})\/(\d+)-([^/]+)$/;
@@ -129,6 +134,219 @@ export const uploadCustodianFile = async (req, res) => {
   } catch (error) {
     console.error("[CustodianUpload] uploadCustodianFile:", error);
     return fail(res, 500, { message: error.message || "Could not upload the custodian file." });
+  }
+};
+
+/*
+ * "CA Type Descr" values in the custodian file for each corporate action page.
+ * Values seen in the file: Bonus, Buyback, Demerger, Dividend In Cash, Split.
+ */
+const CA_TYPE_DESCR = {
+  split: ["split"],
+  bonus: ["bonus"],
+};
+
+/** The columns the Split / Bonus comparison reads (see CORP_ACTION_REQUIRED_FIELDS in fieldMap.js). */
+const COMPARE_FIELDS = ["clientUccCode", "clientName", "isin", "isinName", "caTypeDescr", "recordDate", "ratio", "holdingQty"];
+const OPTIONAL_COMPARE_FIELDS = ["clientName", "isinName"];
+
+const MONTHS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
+
+/**
+ * yyyy-mm-dd from a custodian date cell, or null.
+ * "10-Mar-2026" is read here directly: parseDate's Date() fallback would read it
+ * as local midnight and can land on the previous day ahead of UTC.
+ */
+const toIsoDate = (value) => {
+  const m = /^(\d{1,2})[-/ ]([A-Za-z]{3})[A-Za-z]*[-/ ](\d{4})$/.exec(String(value || "").trim());
+  if (m) {
+    const month = MONTHS.indexOf(m[2].toLowerCase()) + 1;
+    if (month > 0) return `${m[3]}-${String(month).padStart(2, "0")}-${m[1].padStart(2, "0")}`;
+  }
+  return parseDate(value);
+};
+
+/** The newest custodian corporate actions file across every date that still exists, or null. */
+const newestCorpActionFile = async (bucket) => {
+  const items = (await listAll(bucket, `${FOLDER}/`))
+    .map((item) => {
+      const parsed = parseKey(item.key);
+      return parsed ? { ...parsed, sizeBytes: item.sizeBytes } : null;
+    })
+    .filter(Boolean)
+    .sort((a, b) => b.timeMs - a.timeMs);
+  for (const item of items) {
+    // A deleted object stays listed for about twenty seconds.
+    if (await bucket.headObject(item.key, { throwErr: false })) return item;
+  }
+  return null;
+};
+
+/**
+ * The newest custodian file's rows for one corporate action type and ISIN,
+ * read through the saved field mapping.
+ *
+ * Throws an Error with `code` when the file cannot be used, so callers can
+ * return it to the screen as-is.
+ *
+ * @param {object} catalystApp
+ * @param {{ caType: "split"|"bonus", isin: string }} filter
+ * @returns {Promise<{ file: object, rows: Array<{
+ *   accountCode, clientName, isin, isinName, recordDate, ratio, holdingQty }> }>}
+ */
+export const readLatestCorpActionRows = async (catalystApp, { caType, isin }) => {
+  const wantedTypes = CA_TYPE_DESCR[caType];
+  if (!wantedTypes) throw Object.assign(new Error(`Unknown corporate action type "${caType}".`), { code: "BAD_TYPE" });
+
+  const bucket = getBucket(catalystApp);
+  const file = await newestCorpActionFile(bucket);
+  if (!file) {
+    throw Object.assign(new Error("No custodian file has been uploaded on the Custodian Upload page."), { code: "NO_FILE" });
+  }
+
+  const profile = await readFieldMapProfile(bucket, PROFILE_TYPE.CUSTODY_CORP_ACTION);
+  if (!profile) throw Object.assign(new Error("The custodian file's columns have not been mapped."), { code: "NO_MAPPING" });
+
+  const buffer = await getBuffer(bucket, file.key);
+  const [headers = [], ...dataRows] = await readRows(buffer);
+  const normHeaders = headers.map(normHeader);
+
+  // Where each field sits in this file, according to the saved mapping.
+  const columnOf = {};
+  for (const field of COMPARE_FIELDS) {
+    const source = profile[field];
+    let index = -1;
+    if (source?.by === "name") index = normHeaders.indexOf(normHeader(source.name));
+    if (source?.by === "index") index = Number(source.index);
+    if (index < 0 || index >= headers.length) {
+      if (OPTIONAL_COMPARE_FIELDS.includes(field)) continue;
+      throw Object.assign(
+        new Error(`The custodian file ${file.fileName} has no column mapped for "${field}". Re-map and upload it again.`),
+        { code: "FIELD_NOT_MAPPED" },
+      );
+    }
+    columnOf[field] = index;
+  }
+  const cell = (cells, field) => (columnOf[field] === undefined ? "" : String(cells[columnOf[field]] ?? "").trim());
+
+  const wantedIsin = stripIsinSuffix(isin).toUpperCase();
+  const rows = [];
+  for (const cells of dataRows) {
+    const typeDescr = cell(cells, "caTypeDescr").toLowerCase();
+    if (!wantedTypes.includes(typeDescr)) continue;
+    if (stripIsinSuffix(cell(cells, "isin")).toUpperCase() !== wantedIsin) continue;
+    rows.push({
+      accountCode: cell(cells, "clientUccCode").toUpperCase(),
+      clientName: cell(cells, "clientName"),
+      isin: wantedIsin,
+      isinName: cell(cells, "isinName"),
+      recordDate: toIsoDate(cell(cells, "recordDate")),
+      ratio: cell(cells, "ratio"),
+      holdingQty: num(cell(cells, "holdingQty")),
+    });
+  }
+
+  return { file, rows };
+};
+
+/**
+ * GET /api/custodian-upload/latest?caType=split|bonus&isin=...
+ * Which custodian file the Split / Bonus page will compare with, and how many of its rows apply.
+ */
+export const getLatestForCorpAction = async (req, res) => {
+  try {
+    const caType = String(req.query?.caType || "").trim().toLowerCase();
+    const isin = String(req.query?.isin || "").trim();
+    if (!isin) return fail(res, 400, { code: "BAD_ISIN", message: "isin is required." });
+
+    const { file, rows } = await readLatestCorpActionRows(req.catalystApp, { caType, isin });
+    return res.json({ success: true, file, rowCount: rows.length });
+  } catch (error) {
+    if (error.code) return fail(res, error.code === "BAD_TYPE" ? 400 : 404, { code: error.code, message: error.message });
+    console.error("[CustodianUpload] getLatestForCorpAction:", error);
+    return fail(res, 500, { message: error.message || "Could not read the custodian file." });
+  }
+};
+
+const PREVIEW_ROWS = 10;
+const DIFFERENCE_FOLDER = "CA-Differences";
+
+/**
+ * POST /api/split/compare-custodian and /api/bonus/compare-custodian
+ * body: { isin, ratio1, ratio2, recordDate, securityName }
+ *
+ * Compares the page's preview (holding on the record date) with the newest
+ * custodian file's rows for the same ISIN and action. Stops with 409 when the
+ * record dates differ; a different ratio is returned as a warning.
+ *
+ * @param {"split"|"bonus"} caType
+ */
+export const compareWithCustodian = (caType) => async (req, res) => {
+  try {
+    const isin = String(req.body?.isin || "").trim();
+    const recordDateISO = String(req.body?.recordDate || "").trim().slice(0, 10);
+    const r1 = Number(req.body?.ratio1);
+    const r2 = Number(req.body?.ratio2);
+    if (!isin || !DATE_PATTERN.test(recordDateISO) || !(r1 > 0) || !(r2 > 0)) {
+      return fail(res, 400, { code: "BAD_INPUT", message: "ISIN, ratio and a yyyy-mm-dd record date are required." });
+    }
+
+    const catalystApp = req.catalystApp;
+    const zcql = catalystApp.zcql();
+
+    /*
+     * The custodian's ratio is "Propose : Held". On the Split page ratio1 is
+     * "for every" (held) and ratio2 is "investor gets" (propose); on the Bonus
+     * page ratio1 is the bonus shares (propose) and ratio2 is held.
+     */
+    const [previewRows, { file, rows: custodyRows }] = await Promise.all([
+      caType === "split"
+        ? computeSplitPreviewRows(zcql, { isin, r1, r2, recordDateISO })
+        : computeBonusPreviewRows(zcql, { isin, r1, r2, recordDateISO }),
+      readLatestCorpActionRows(catalystApp, { caType, isin }),
+    ]);
+    const pageRatio = caType === "split" ? r2 / r1 : r1 / r2;
+    const pageRatioLabel = caType === "split" ? `${r2}:${r1}` : `${r1}:${r2}`;
+    const typeLabel = caType === "split" ? "Split" : "Bonus";
+
+    if (custodyRows.length === 0) {
+      return fail(res, 409, {
+        code: "NO_CUSTODIAN_ROWS",
+        file,
+        message: `The custodian file ${file.fileName} has no ${typeLabel} rows for ${isin}.`,
+      });
+    }
+
+    const { error, warnings } = checkEvent({ custodyRows, recordDateISO, pageRatio, pageRatioLabel });
+    if (error) return fail(res, 409, { code: "RECORD_DATE_MISMATCH", file, message: error });
+
+    const { rows, counts } = compareHoldings({
+      previewRows,
+      custodyRows,
+      isin,
+      isinName: String(req.body?.securityName || ""),
+      recordDateISO,
+    });
+
+    const bucket = getBucket(catalystApp);
+    const reportKey = `${DIFFERENCE_FOLDER}/${safeFileName(isin)}/${caType}-${Date.now()}.csv`;
+    await bucket.putObject(reportKey, comparisonToCsv(rows), { contentType: "text/csv", overwrite: true });
+    const downloadUrl = stratusSignedUrlToString(
+      await bucket.generatePreSignedUrl(reportKey, "GET", STRATUS_GET_URL_OPTS),
+    );
+
+    return res.json({
+      success: true,
+      file,
+      counts,
+      warnings,
+      rows: rows.slice(0, PREVIEW_ROWS),
+      downloadUrl,
+    });
+  } catch (error) {
+    if (error.code) return fail(res, 409, { code: error.code, message: error.message });
+    console.error(`[CustodianUpload] compareWithCustodian(${caType}):`, error);
+    return fail(res, 500, { message: error.message || "Could not compare with the custodian file." });
   }
 };
 

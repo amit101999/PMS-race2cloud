@@ -1,0 +1,71 @@
+/* Split / Bonus pages — "Compare with Custodian File" card. */
+
+.cc-panel .cm-verdict {
+    margin: 0 0 12px;
+}
+
+.cc-file-name {
+    overflow-wrap: anywhere;
+}
+
+.cc-actions {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 12px;
+    margin-bottom: 4px;
+}
+
+.cc-message {
+    margin-top: 12px;
+}
+
+/* Counts on the left, Download on the right, wrapping on narrow screens. */
+.cc-summary {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin: 16px 0 12px;
+}
+
+.cc-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.cc-chip {
+    height: 26px;
+    padding: 0 10px;
+    font-size: 12.5px;
+}
+
+.cc-chip strong {
+    font-variant-numeric: tabular-nums;
+}
+
+/* Long security names stay on one line; the full name is in the cell's title. */
+.cc-table .cc-name {
+    max-width: 260px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* A thin coloured edge marks every row that needs attention. */
+.cc-table tr.cc-row-break td:first-child {
+    box-shadow: inset 3px 0 0 var(--ds-error, #d93025);
+}
+
+.cc-table .cc-diff {
+    font-weight: 600;
+}
+
+.cc-table .cc-diff-zero {
+    color: var(--ds-neutral, #6b7280);
+}

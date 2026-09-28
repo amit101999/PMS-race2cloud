@@ -158,8 +158,9 @@ const CUSTODY_HOLDINGS_REQUIRED_FIELDS = [...CUSTODY_HOLDINGS_KEY_FIELDS, "asOfD
 /**
  * The custodian corporate actions template: [field, standard header].
  *
- * Every field is optional text for now: the file is only stored, and nothing
- * reads these values yet, so no column can make a mapping incomplete.
+ * Every field is read as text. The Split / Bonus pages compare the file against
+ * their preview using CORP_ACTION_REQUIRED_FIELDS, so those must be mapped (and
+ * cannot be marked absent); every other column stays optional.
  */
 const CORP_ACTION_COLUMNS = [
   ["parentClientName", "Parent Client Name"],
@@ -196,6 +197,16 @@ const CORP_ACTION_COLUMNS = [
   ["bankName", "Bank Name"],
   ["brName", "BR Name"],
   ["custodyBankAccountFlag", "Custody Bank Account Flag"],
+];
+
+/** Columns the Split / Bonus custodian comparison reads. */
+const CORP_ACTION_REQUIRED_FIELDS = [
+  "clientUccCode",
+  "isin",
+  "caTypeDescr",
+  "recordDate",
+  "ratio",
+  "holdingQty",
 ];
 
 /**
@@ -384,8 +395,8 @@ export const FIELD_CATALOG = {
     field,
     label: header,
     kind: "text",
-    required: false,
-    matchKey: false,
+    required: CORP_ACTION_REQUIRED_FIELDS.includes(field),
+    matchKey: CORP_ACTION_REQUIRED_FIELDS.includes(field),
   })),
 };
 

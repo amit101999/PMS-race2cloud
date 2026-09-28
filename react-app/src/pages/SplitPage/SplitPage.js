@@ -3,6 +3,7 @@
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import MainLayout from "../../layouts/MainLayout";
 import DownloadButton from "../../components/common/DownloadButton";
+import CustodianComparePanel from "../CustodianUploadPage/CustodianComparePanel";
 import "./SplitPage.css";
 import "../TempTransactionUpload/tokens.css";
 import "../TempTransactionUpload/TempTransaction.css";
@@ -10,6 +11,8 @@ import "../TempTransactionUpload/custody/CustodyMatch.css";
 import "../../styles/ops-pages.css";
 import { BASE_URL } from "../../constant";
 import { useJobNotifications } from "../../notifications/JobNotificationContext";
+
+const numberFormat = new Intl.NumberFormat(undefined, { maximumFractionDigits: 4 });
 
 /** Maps GET /split/job-status → the notification system's vocabulary. */
 function parseSplitStatus(d) {
@@ -46,6 +49,7 @@ function SplitPage() {
 
   const [exportLoading, setExportLoading] = useState(false);
   const [exportDownloadUrl, setExportDownloadUrl] = useState("");
+  const [exportError, setExportError] = useState("");
 
   const [securities, setSecurities] = useState([]);
   const [searchQuery, setSearchQuery] = useState("");
@@ -285,6 +289,7 @@ function SplitPage() {
       setPreviewData([]);
       setShowPreview(false);
       setExportDownloadUrl("");
+      setExportError("");
 
       setTimeout(() => setSuccess(false), 3000);
     } catch (err) {
@@ -298,23 +303,29 @@ function SplitPage() {
     <MainLayout title="Stock Split">
       <div className="temp-transaction-container txn-ops ops-page">
       <div className="temp-transaction-card">
-        {success && (
-          <div className="cm-verdict ok">Split saved successfully!</div>
-        )}
-        {error && <div className="cm-verdict bad">{error}</div>}
+        <div aria-live="polite">
+          {success && (
+            <div className="cm-verdict ok">Split saved successfully.</div>
+          )}
+          {error && <div className="cm-verdict bad">{error}</div>}
+        </div>
 
         <div className="split-card">
           {/* ISIN SEARCH */}
           <div className="account-code-search" ref={dropdownRef}>
-            <label className="search-label">ISIN</label>
+            <label className="search-label" htmlFor="split-isin">ISIN</label>
 
             <div className="search-input-wrapper">
-              <span className="search-icon">🔍</span>
+              <span className="search-icon" aria-hidden="true">🔍</span>
 
               <input
+                id="split-isin"
+                name="isin"
                 type="text"
                 className="search-input"
-                placeholder="Search ISIN..."
+                placeholder="Search ISIN, code or name…"
+                autoComplete="off"
+                spellCheck={false}
                 value={searchQuery}
                 onChange={(e) => {
                   setSearchQuery(e.target.value);
@@ -324,8 +335,10 @@ function SplitPage() {
               />
 
               {searchQuery && (
-                <span
+                <button
+                  type="button"
                   className="clear-icon"
+                  aria-label="Clear ISIN"
                   onClick={() => {
                     setSearchQuery("");
                     setIsin("");
@@ -334,10 +347,10 @@ function SplitPage() {
                   }}
                 >
                   ✕
-                </span>
+                </button>
               )}
 
-              <span className="arrow-icon">▾</span>
+              <span className="arrow-icon" aria-hidden="true">▾</span>
             </div>
 
             {showDropdown && filteredSecurities.length > 0 && (
@@ -346,16 +359,17 @@ function SplitPage() {
 
                 <div className="dropdown-options">
                   {filteredSecurities.map((sec, idx) => (
-                    <div
+                    <button
+                      type="button"
                       key={`${sec.isin || "no-isin"}-${idx}`}
                       className="dropdown-option"
                       onClick={() => handleSelectISIN(sec)}
                     >
-                      <strong>{sec.isin}</strong>
+                      <strong translate="no">{sec.isin}</strong>
                       <div className="ops-option-sub">
                         {sec.securityCode} – {sec.securityName}
                       </div>
-                    </div>
+                    </button>
                   ))}
                 </div>
 
@@ -368,33 +382,43 @@ function SplitPage() {
 
           {/* AUTO FILLED */}
           <div className="split-field">
-            <label>Security Code</label>
-            <input value={securityCode} disabled />
+            <label htmlFor="split-security-code">Security Code</label>
+            <input id="split-security-code" value={securityCode} disabled />
           </div>
 
           <div className="split-field">
-            <label>Security Name</label>
-            <input value={securityName} disabled />
+            <label htmlFor="split-security-name">Security Name</label>
+            <input id="split-security-name" value={securityName} disabled />
           </div>
 
           {/* RATIOS */}
           <div className="split-field">
-            <label>
+            <label htmlFor="split-ratio1">
               Ratio <span className="ratio-hint">(For every)</span>
             </label>
             <input
+              id="split-ratio1"
+              name="ratio1"
               type="number"
+              inputMode="decimal"
+              min="0"
+              step="any"
               value={ratio1}
               onChange={(e) => setRatio1(e.target.value)}
             />
           </div>
 
           <div className="split-field">
-            <label>
+            <label htmlFor="split-ratio2">
               Ratio <span className="ratio-hint">(Investor gets)</span>
             </label>
             <input
+              id="split-ratio2"
+              name="ratio2"
               type="number"
+              inputMode="decimal"
+              min="0"
+              step="any"
               value={ratio2}
               onChange={(e) => setRatio2(e.target.value)}
             />
@@ -402,8 +426,10 @@ function SplitPage() {
 
           {/* DATES — Record Date drives every calculation; Effective Date is stored for reference. */}
           <div className="split-field">
-            <label>Record Date</label>
+            <label htmlFor="split-record-date">Record Date</label>
             <input
+              id="split-record-date"
+              name="recordDate"
               type="date"
               value={recordDate}
               onChange={(e) => setRecordDate(e.target.value)}
@@ -411,29 +437,37 @@ function SplitPage() {
           </div>
 
           <div className="split-field">
-            <label>Effective Date</label>
+            <label htmlFor="split-effective-date">
+              Effective Date <span className="ratio-hint">(Optional)</span>
+            </label>
             <input
+              id="split-effective-date"
+              name="effectiveDate"
               type="date"
               value={effectiveDate}
               min={recordDate || undefined}
+              aria-invalid={datesOutOfOrder || undefined}
+              aria-describedby={datesOutOfOrder ? "split-date-error" : undefined}
               onChange={(e) => setEffectiveDate(e.target.value)}
             />
           </div>
 
           {datesOutOfOrder && (
-            <div className="cm-verdict bad">Effective Date cannot be before the Record Date.</div>
+            <div id="split-date-error" className="cm-verdict bad ops-form-message" role="alert">
+              Effective Date cannot be before the Record Date. Pick a date on or after {recordDate}.
+            </div>
           )}
 
           {/* ACTION - same as Bonus: single "Fetch Affected Accounts" button */}
           <div className="ops-form-actions">
           <button
+            type="button"
             className="cm-primary"
             disabled={
               !isin ||
               !ratio1 ||
               !ratio2 ||
               !recordDate ||
-              !effectiveDate ||
               datesOutOfOrder ||
               Number(ratio1) <= 0 ||
               Number(ratio2) <= 0 ||
@@ -482,15 +516,16 @@ function SplitPage() {
                             }}
                           >
                             <td>
-                              <span className="split-expand-toggle">
+                              <span className="split-expand-toggle" aria-hidden="true">
                                 {isOpen ? "▾" : "▸"}
                               </span>
-                              {group.actualCode || "—"} ({group.children.length})
+                              <span translate="no">{group.actualCode || "—"}</span> ({group.children.length})
                             </td>
-                            <td className="num">{group.currentHolding}</td>
-                            <td className="num">{group.newHolding}</td>
+                            <td className="num">{numberFormat.format(group.currentHolding)}</td>
+                            <td className="num">{numberFormat.format(group.newHolding)}</td>
                             <td className="num positive">
-                              {group.delta > 0 ? `+${group.delta}` : group.delta}
+                              {group.delta > 0 ? "+" : ""}
+                              {numberFormat.format(group.delta)}
                             </td>
                           </tr>
 
@@ -500,17 +535,18 @@ function SplitPage() {
                                 key={`${group.key}-${row.accountCode}-${cIdx}`}
                                 className="is-child"
                               >
-                                <td className="indent">
+                                <td className="indent" translate="no">
                                   {row.accountCode}
                                 </td>
                                 <td className="num">
-                                  {Math.floor(Number(row.currentHolding) || 0)}
+                                  {numberFormat.format(Math.floor(Number(row.currentHolding) || 0))}
                                 </td>
                                 <td className="num">
-                                  {Math.floor(Number(row.newHolding) || 0)}
+                                  {numberFormat.format(Math.floor(Number(row.newHolding) || 0))}
                                 </td>
                                 <td className="num positive">
-                                  {row.delta > 0 ? `+${row.delta}` : row.delta}
+                                  {row.delta > 0 ? "+" : ""}
+                                  {numberFormat.format(row.delta)}
                                 </td>
                               </tr>
                             ))}
@@ -539,6 +575,10 @@ function SplitPage() {
                 </div>
               )}
 
+              {exportError && (
+                <div className="cm-verdict bad" role="alert">{exportError}</div>
+              )}
+
               <div className="bonus-preview-actions">
                 <button
                   type="button"
@@ -548,6 +588,7 @@ function SplitPage() {
                   onClick={async () => {
                     try {
                       setExportLoading(true);
+                      setExportError("");
                       setExportDownloadUrl("");
                       const params = new URLSearchParams({
                         isin,
@@ -568,7 +609,7 @@ function SplitPage() {
                       setExportDownloadUrl(signedUrl);
                     } catch (err) {
                       console.error(err);
-                      alert("Failed to export split preview CSV");
+                      setExportError("Could not export the split preview. Try Export again.");
                     } finally {
                       setExportLoading(false);
                     }
@@ -583,8 +624,9 @@ function SplitPage() {
                   }}
                 />
                 <button
+                  type="button"
                   className="cm-primary"
-                  disabled={loading || !effectiveDate || datesOutOfOrder}
+                  disabled={loading || datesOutOfOrder}
                   onClick={handleSubmit}
                 >
                   {loading ? "Applying…" : "Confirm & Apply Split"}
@@ -593,6 +635,16 @@ function SplitPage() {
             </>
           )}
         </div>
+      )}
+      {showPreview && (
+        <CustodianComparePanel
+          caType="split"
+          isin={isin}
+          securityName={securityName}
+          ratio1={ratio1}
+          ratio2={ratio2}
+          recordDate={recordDate}
+        />
       )}
       </div>
     </MainLayout>
