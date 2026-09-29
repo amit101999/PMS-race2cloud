@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import MainLayout from "../../layouts/MainLayout";
-import { FileGlyph, UploadGlyph } from "../TempTransactionUpload/custody/CustodyMatchPanel";
 import "./DividendPage.css";
 import "../TempTransactionUpload/tokens.css";
 import "../TempTransactionUpload/TempTransaction.css";
@@ -97,14 +96,17 @@ function DividendPage() {
   const [dividendList, setDividendList] = useState([]);
 
   /*
-   * previewData / setPreviewData kept (the /preview response still returns
-   * a `data` array for backward compatibility) but is no longer rendered —
-   * the reconciliation grid is the only preview now.
+   * Step 1 — system report (holding on the record date × rate, per account),
+   * shown by "Fetch Affected Accounts". previewFetched tells an empty report
+   * apart from one not fetched yet.
    */
   const [previewData, setPreviewData] = useState([]);
+  const [previewFetched, setPreviewFetched] = useState(false);
   const [previewEmptyMessage, setPreviewEmptyMessage] = useState("");
   const PAGE_SIZE = 10;
   const [page, setPage] = useState(1);
+  const [systemPage, setSystemPage] = useState(1);
+  const [comparing, setComparing] = useState(false);
 
   /* ===========================
      CUSTODIAN-FILE RECONCILIATION STATE
@@ -123,15 +125,16 @@ function DividendPage() {
   const [applyJobName, setApplyJobName] = useState(null);
   const [applyStatus, setApplyStatus] = useState(null);
 
-  const [custodianFile, setCustodianFile] = useState(null);
-  const [dragActive, setDragActive] = useState(false);
-  const custodianInputRef = useRef(null);
+  /* The newest file from Corporate Actions -> Custodian Upload: { file, rowCount } for this ISIN. */
+  const [custodianInfo, setCustodianInfo] = useState(null);
+  const [custodianError, setCustodianError] = useState("");
 
   const dropdownRef = useRef(null);
 
   const { trackJob } = useJobNotifications();
 
   useEffect(() => setPage(1), [reconEvents, statusFilter, activeEvent]);
+  useEffect(() => setSystemPage(1), [previewData]);
 
   /* Drill-down: which actual-account groups are currently expanded. */
   const [expandedKeys, setExpandedKeys] = useState(() => new Set());
@@ -160,6 +163,16 @@ function DividendPage() {
    * rows are preserved for the drill-down, export and apply.
    */
   const roundTo2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
+
+  const systemTotalPages = Math.max(1, Math.ceil(previewData.length / PAGE_SIZE));
+  const paginatedSystemRows = previewData.slice(
+    (systemPage - 1) * PAGE_SIZE,
+    systemPage * PAGE_SIZE,
+  );
+  const systemTotalAmount = roundTo2(
+    previewData.reduce((sum, row) => sum + (Number(row.dividendAmount) || 0), 0),
+  );
+
   const groupedReconRows = useMemo(() => {
     const rows = activeEventObj?.rows || [];
     const groups = new Map();
@@ -175,8 +188,6 @@ function DividendPage() {
           holdingFile: 0,
           grossSys: 0,
           grossFile: 0,
-          tdsFile: 0,
-          netFile: 0,
           alreadyReceivedGross: 0,
           toReceiveNet: 0,
           rateSys: row.rateSys,
@@ -195,8 +206,6 @@ function DividendPage() {
       g.holdingFile += Number(row.holdingFile) || 0;
       g.grossSys += Number(row.grossSys) || 0;
       g.grossFile += Number(row.grossFile) || 0;
-      g.tdsFile += Number(row.tdsFile) || 0;
-      g.netFile += Number(row.netFile) || 0;
       g.alreadyReceivedGross += Number(row.alreadyReceivedGross) || 0;
       g.toReceiveNet += Number(row.toReceiveNet) || 0;
       if (row.rateSys !== g.rateSys) g.rateSysMixed = true;
@@ -209,8 +218,6 @@ function DividendPage() {
       g.holdingFile = roundTo2(g.holdingFile);
       g.grossSys = roundTo2(g.grossSys);
       g.grossFile = roundTo2(g.grossFile);
-      g.tdsFile = roundTo2(g.tdsFile);
-      g.netFile = roundTo2(g.netFile);
       g.alreadyReceivedGross = roundTo2(g.alreadyReceivedGross);
       g.toReceiveNet = roundTo2(g.toReceiveNet);
       g.holdingDelta = roundTo2(g.holdingFile - g.holdingSys);
@@ -240,6 +247,27 @@ function DividendPage() {
   useEffect(() => {
     fetchAllSecurities();
   }, []);
+
+  // Which custodian file the preview will use, as soon as an ISIN is picked.
+  useEffect(() => {
+    setCustodianInfo(null);
+    setCustodianError("");
+    if (!isin) return undefined;
+
+    let cancelled = false;
+    const params = new URLSearchParams({ caType: "dividend", isin });
+    fetch(`${BASE_URL}/custodian-upload/latest?${params.toString()}`)
+      .then(async (res) => {
+        const body = await res.json().catch(() => ({}));
+        if (cancelled) return;
+        if (!res.ok || !body.success) setCustodianError(body.message || "Could not read the custodian file.");
+        else setCustodianInfo(body);
+      })
+      .catch(() => !cancelled && setCustodianError("Could not reach the server. Check the backend is running."));
+    return () => {
+      cancelled = true;
+    };
+  }, [isin]);
 
   useEffect(() => {
     const handleClickOutside = (e) => {
@@ -291,13 +319,13 @@ function DividendPage() {
           setTimeout(() => {
             setSuccess(false);
             setPreviewData([]);
+            setPreviewFetched(false);
             setPreviewEmptyMessage("");
             setReconEvents(null);
             setReconSummary(null);
             setWarnings([]);
             setStatusFilter("all");
             setActiveEvent(0);
-            setCustodianFile(null);
             setSymbol("");
             setSearchQuery("");
             setCompanyName("");
@@ -366,53 +394,13 @@ function DividendPage() {
       return;
     }
 
-    /*
-     * Custodian file is mandatory. Reconciliation is the source of truth
-     * for dividend Apply, so we don't allow a FIFO-only preview path.
-     */
-    if (!custodianFile) {
-      setError(
-        "Please upload the custodian Benefit Collection Report (CSV) " +
-          "before fetching affected accounts.",
-      );
-      return;
-    }
-
+    setPreviewFetched(false);
     setPreviewLoading(true);
     try {
-      const fd = new FormData();
-      fd.append("isin", isin);
-      fd.append("recordDate", recordDate);
-      fd.append("rate", String(Number(rate)));
-      fd.append("paymentDate", paymentDate);
-      fd.append("file", custodianFile);
-      const res = await fetch(`${BASE_URL}/dividend/preview`, {
-        method: "POST",
-        body: fd,
-      });
-      const data = await res.json();
+      const data = await postPreview(false);
       if (data.success) {
-        const rows = data.data || [];
-        setPreviewData(rows);
-        if (Array.isArray(data.events)) {
-          setReconEvents(data.events);
-          setReconSummary(data.summary || null);
-          setWarnings(Array.isArray(data.warnings) ? data.warnings : []);
-          if (!data.events.length && !rows.length) {
-            setPreviewEmptyMessage(
-              "No accounts found in either system or custodian file.",
-            );
-          }
-        } else {
-          /*
-           * Backend always returns `events` now that the file is mandatory;
-           * this branch only fires for very old API builds and is kept as
-           * a defensive fallback.
-           */
-          setPreviewEmptyMessage(
-            "Backend returned no reconciliation data — please retry.",
-          );
-        }
+        setPreviewData(data.data || []);
+        setPreviewFetched(true);
       } else {
         setError(data.message || "Preview failed");
       }
@@ -422,6 +410,88 @@ function DividendPage() {
     } finally {
       setPreviewLoading(false);
     }
+  };
+
+  /*
+   * Step 2: compare the system report with the custodian file. This is the
+   * only path to Apply — dividends are never applied from the system alone.
+   */
+  const runCompare = async () => {
+    setError(null);
+    setPreviewEmptyMessage("");
+    setReconEvents(null);
+    setReconSummary(null);
+    setWarnings([]);
+    setStatusFilter("all");
+    setActiveEvent(0);
+
+    setComparing(true);
+    try {
+      const data = await postPreview(true);
+      if (data.success && Array.isArray(data.events)) {
+        setReconEvents(data.events);
+        setReconSummary(data.summary || null);
+        setWarnings(Array.isArray(data.warnings) ? data.warnings : []);
+        if (!data.events.length) {
+          setPreviewEmptyMessage(
+            "No accounts found in either system or custodian file.",
+          );
+        }
+      } else {
+        setError(data.message || "Comparison failed");
+      }
+    } catch (err) {
+      console.error(err);
+      setError("Failed to compare with the custodian file");
+    } finally {
+      setComparing(false);
+    }
+  };
+
+  const postPreview = async (compare) => {
+    const res = await fetch(`${BASE_URL}/dividend/preview`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        isin,
+        recordDate,
+        rate: Number(rate),
+        paymentDate,
+        compare,
+      }),
+    });
+    return res.json();
+  };
+
+  /** System report CSV: the rows shown in the Dividend Preview table. */
+  const handleExportSystemCsv = () => {
+    const header = [
+      "Account_Code",
+      "Holding_Record_Date",
+      "Dividend_Rate",
+      "Payment_Date",
+      "Dividend_Amount",
+    ];
+    const lines = [header.join(",")];
+    for (const row of previewData) {
+      lines.push(
+        [
+          row.accountCode,
+          row.holdingAsOnRecordDate,
+          row.rate,
+          row.paymentDate,
+          row.dividendAmount,
+        ]
+          .map(csvEscapeCell)
+          .join(","),
+      );
+    }
+    const safeIsin = String(isin || "isin").replace(/[^\w.-]+/g, "_");
+    const safeDate = String(recordDate || "record").replace(/[^\d-]+/g, "");
+    triggerCsvDownload(
+      `Dividend_preview_${safeIsin}_${safeDate}.csv`,
+      lines.join("\r\n"),
+    );
   };
 
   /**
@@ -455,11 +525,9 @@ function DividendPage() {
       "Rate_File",
       "Gross_PMS",
       "Gross_File",
-      "CA_Tax_Amt",
-      "Net",
       "Already_Received",
       "Cash_Credited",
-      "To_Receive_Net",
+      "To_Receive",
       "Status",
     ];
     const lines = [header.map(csvEscapeCell).join(",")];
@@ -479,8 +547,6 @@ function DividendPage() {
             row.rateFile ?? "",
             row.grossSys ?? "",
             row.grossFile ?? "",
-            row.tdsFile ?? "",
-            row.netFile ?? "",
             row.alreadyReceivedGross ?? "",
             row.alreadyCreditedCash ? "Yes" : "No",
             row.toReceiveNet ?? "",
@@ -777,65 +843,19 @@ function DividendPage() {
             />
           </div>
 
-          {/* Same upload box as Holding Comparison. The file input covers the
-              whole box, so both clicking and dropping a file go through onChange;
-              the drag handlers only toggle the highlight. */}
-          <div className="dividend-field dividend-field-full ops-upload">
-            <label>Custodian File <span className="required-asterisk">*</span></label>
-            <div
-              className={dragActive ? "up-zone is-drag" : "up-zone"}
-              onDragEnter={() => setDragActive(true)}
-              onDragLeave={() => setDragActive(false)}
-              onDrop={() => setDragActive(false)}
-            >
-              <input
-                type="file"
-                accept=".csv,.xlsx,.xls"
-                ref={custodianInputRef}
-                className="up-zone-input"
-                aria-label="Upload custodian file"
-                onChange={(e) => {
-                  setCustodianFile(e.target.files?.[0] || null);
-                  if (e.target) e.target.value = "";
-                }}
-              />
-              <div className="up-zone-visual">
-                <UploadGlyph />
-                <span className="up-zone-title">
-                  {custodianFile ? "Replace custodian file" : "Upload custodian file"}
-                </span>
-                <span className="up-zone-sub">
-                  Drag &amp; drop or <span className="up-zone-browse">Browse</span>
-                </span>
-              </div>
-            </div>
-
-            {custodianFile ? (
-              <div className="up-filelist">
-                <div className="up-file-row">
-                  <FileGlyph />
-                  <div className="up-file-main">
-                    <span className="up-file-name" title={custodianFile.name}>
-                      {custodianFile.name}
-                    </span>
-                  </div>
-                  <button
-                    type="button"
-                    className="up-file-remove"
-                    aria-label={`Remove ${custodianFile.name}`}
-                    title="Remove this file"
-                    onClick={() => setCustodianFile(null)}
-                  >
-                    &times;
-                  </button>
+          {/* The custodian file is uploaded once on Corporate Actions -> Custodian Upload. */}
+          {isin && (
+            <div className="dividend-field dividend-field-full">
+              {custodianError && <div className="cm-verdict bad">{custodianError}</div>}
+              {custodianInfo && (
+                <div className={custodianInfo.rowCount ? "cm-verdict ok" : "cm-verdict warn"}>
+                  Custodian file fetched: <strong>{custodianInfo.file.fileName}</strong> · uploaded{" "}
+                  {new Date(custodianInfo.file.timeMs).toLocaleString()} · {custodianInfo.rowCount} Dividend In
+                  Cash row(s) for <span translate="no">{isin}</span>
                 </div>
-              </div>
-            ) : (
-              <p className="ops-upload-hint">
-                No file selected — required to fetch accounts
-              </p>
-            )}
-          </div>
+              )}
+            </div>
+          )}
 
           <div className="dividend-actions">
             <button
@@ -847,13 +867,7 @@ function DividendPage() {
                 !rate ||
                 Number(rate) <= 0 ||
                 !paymentDate ||
-                !custodianFile ||
                 previewLoading
-              }
-              title={
-                !custodianFile
-                  ? "Upload the custodian Benefit Collection Report (CSV) first."
-                  : ""
               }
               onClick={fetchPreview}
             >
@@ -864,10 +878,107 @@ function DividendPage() {
       </div>
 
       {/* ============================================================
-          RECONCILIATION GRID — the only preview path now. Always renders
-          from a custodian-file upload. The legacy FIFO-only 5-column
-          preview was removed because we never want to apply dividends
-          without the custodian's confirmation.
+          STEP 1 — SYSTEM REPORT. Holding on the record date × rate per
+          account, from the system alone. It cannot be applied from here:
+          Compare first, then apply from the reconciliation grid.
+          ============================================================ */}
+      {previewFetched && (
+        <div className="temp-transaction-card dividend-preview-card">
+          <div className="dividend-recon-header">
+            <h3 className="ops-card-title">Dividend Preview</h3>
+          </div>
+
+          <div className="data-table-wrap">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>Account Code</th>
+                  <th className="num">Holding (Record Date)</th>
+                  <th className="num">Dividend Rate</th>
+                  <th>Payment Date</th>
+                  <th className="num">Dividend Amount</th>
+                </tr>
+              </thead>
+              <tbody>
+                {previewData.length === 0 && (
+                  <tr>
+                    <td colSpan={5} className="empty-cell">
+                      No accounts hold this ISIN on the record date.
+                    </td>
+                  </tr>
+                )}
+                {paginatedSystemRows.map((row) => (
+                  <tr key={row.accountCode}>
+                    <td className="strong">{row.accountCode}</td>
+                    <td className="num">{row.holdingAsOnRecordDate}</td>
+                    <td className="num">{row.rate}</td>
+                    <td>{row.paymentDate ?? "—"}</td>
+                    <td className="num strong">{row.dividendAmount}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          {previewData.length > 0 && (
+            <p className="ops-upload-hint">
+              {previewData.length} account(s) · total dividend ₹{systemTotalAmount}
+            </p>
+          )}
+
+          {systemTotalPages > 1 && (
+            <div className="dividend-pagination">
+              <button
+                type="button"
+                disabled={systemPage === 1}
+                onClick={() => setSystemPage(systemPage - 1)}
+              >
+                Prev
+              </button>
+              <span>
+                Page {systemPage} of {systemTotalPages}
+              </span>
+              <button
+                type="button"
+                disabled={systemPage === systemTotalPages}
+                onClick={() => setSystemPage(systemPage + 1)}
+              >
+                Next
+              </button>
+            </div>
+          )}
+
+          <div className="dividend-preview-actions">
+            <button
+              type="button"
+              className="btn-export"
+              disabled={previewData.length === 0}
+              onClick={handleExportSystemCsv}
+            >
+              Export
+            </button>
+            <button
+              type="button"
+              className="cm-primary"
+              disabled={!custodianInfo || comparing}
+              title={
+                !custodianInfo
+                  ? custodianError ||
+                    "Upload the custodian file on Corporate Actions → Custodian Upload first."
+                  : ""
+              }
+              onClick={runCompare}
+            >
+              {comparing ? "Comparing…" : "Compare with Custodian File"}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ============================================================
+          STEP 2 — RECONCILIATION GRID, shown after "Compare with Custodian
+          File". The only place a dividend can be applied from: we never
+          apply dividends without the custodian's confirmation.
           ============================================================ */}
       {reconEvents && (
         <div className="temp-transaction-card dividend-preview-card">
@@ -974,17 +1085,15 @@ function DividendPage() {
                   <th className="num">Holding<br />PMS / File / Diff</th>
                   <th className="num">Rate<br />PMS / File</th>
                   <th className="num">Gross<br />PMS / File / Diff</th>
-                  <th className="num">CA Tax Amt</th>
-                  <th className="num">Net</th>
                   <th className="num">Already<br />Received</th>
-                  <th className="num">To Receive<br />(Net)</th>
+                  <th className="num">To Receive</th>
                   <th className="status">Status</th>
                 </tr>
               </thead>
               <tbody>
                 {paginatedGroups.length === 0 && (
                   <tr>
-                    <td colSpan={9} className="empty-cell">
+                    <td colSpan={7} className="empty-cell">
                       No rows in this filter.
                     </td>
                   </tr>
@@ -1033,8 +1142,6 @@ function DividendPage() {
                             {group.grossDelta || 0}
                           </span>
                         </td>
-                        <td className="num">{group.tdsFile}</td>
-                        <td className="num">{group.netFile}</td>
                         <td className="num">{group.alreadyReceivedGross || 0}</td>
                         <td className="num">{group.toReceiveNet}</td>
                         <td className="status">
@@ -1086,10 +1193,6 @@ function DividendPage() {
                                 {row.grossDelta > 0 ? "+" : ""}
                                 {row.grossDelta || 0}
                               </span>
-                            </td>
-                            <td className="num">{row.tdsFile ?? "—"}</td>
-                            <td className="num strong">
-                              {row.netFile ?? "—"}
                             </td>
                             <td
                               className="num"

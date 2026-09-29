@@ -33,14 +33,21 @@ async function request(path, options) {
 const when = (ms) => new Date(ms).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
 
 /**
- * Corporate Actions -> Custodian Upload.
+ * One custodian file: its upload box, the file stored for the date, and its
+ * Field Mapping popup.
  *
  * As on Holding Comparison, picking a file does not upload it: the Field
  * Mapping popup opens first, and the file is sent from the popup's Upload
- * button once the mapping is saved. The file is only stored for now.
+ * button once the mapping is saved.
+ *
+ * @param {"entitlement"|"allocation"} kind   which file (the backend's folder and mapping)
+ * @param {string} title                       e.g. "CA Custodian Entitlement File"
+ * @param {string} listHeading                 heading over the stored file
+ * @param {string} profileType                 the mapping type the popup edits
+ * @param {string} businessDate                yyyy-mm-dd from the page's Date picker
+ * @param {(kind: string, busy: boolean) => void} onBusyChange  lets the page lock the Date picker
  */
-const CustodianUploadPage = () => {
-    const [businessDate, setBusinessDate] = useState(todayIso);
+const CustodianFileCard = ({ kind, title, listHeading, profileType, businessDate, onBusyChange }) => {
     const [storedFile, setStoredFile] = useState(null);
     const [loading, setLoading] = useState(false);
     const [uploading, setUploading] = useState(false);
@@ -51,20 +58,26 @@ const CustodianUploadPage = () => {
     const [note, setNote] = useState("");
     const [error, setError] = useState(null);
 
+    const busy = uploading || removing;
+
+    useEffect(() => {
+        onBusyChange(kind, busy);
+    }, [kind, busy, onBusyChange]);
+
     useEffect(() => {
         let cancelled = false;
         setStoredFile(null);
         setNote("");
         setError(null);
         setLoading(true);
-        request(`/day/${businessDate}`)
+        request(`/day/${businessDate}?kind=${kind}`)
             .then((res) => !cancelled && setStoredFile(res.file))
             .catch((err) => !cancelled && setError({ message: err.message, detail: err.detail }))
             .finally(() => !cancelled && setLoading(false));
         return () => {
             cancelled = true;
         };
-    }, [businessDate]);
+    }, [businessDate, kind]);
 
     const removeStoredFile = async () => {
         if (!window.confirm(`Remove ${storedFile.fileName} (${storedFile.businessDate})?`)) return;
@@ -94,6 +107,7 @@ const CustodianUploadPage = () => {
             const form = new FormData();
             form.append("file", mappingFile);
             form.append("businessDate", businessDate);
+            form.append("kind", kind);
             const res = await request("/file", { method: "POST", body: form });
             setStoredFile(res.file);
             setNote(`${res.message} ${res.rowCount.toLocaleString()} row(s) read.`);
@@ -103,7 +117,120 @@ const CustodianUploadPage = () => {
         }
     };
 
-    const busy = uploading || removing;
+    return (
+        <div className="temp-transaction-card cm-filecard up-card">
+            <h3>Upload {title}</h3>
+
+            <div
+                className={dragActive ? "up-zone is-drag" : "up-zone"}
+                onDragEnter={(e) => {
+                    e.preventDefault();
+                    if (!busy) setDragActive(true);
+                }}
+                onDragOver={(e) => e.preventDefault()}
+                onDragLeave={() => setDragActive(false)}
+                onDrop={(e) => {
+                    e.preventDefault();
+                    setDragActive(false);
+                    if (busy) return;
+                    const file = e.dataTransfer.files && e.dataTransfer.files[0];
+                    if (file) handleFilePicked(file);
+                }}
+            >
+                <input
+                    type="file"
+                    accept=".csv"
+                    className="up-zone-input"
+                    aria-label={`Upload ${title}`}
+                    disabled={busy}
+                    onChange={(e) => {
+                        const file = e.target.files[0];
+                        e.target.value = "";
+                        if (file) handleFilePicked(file);
+                    }}
+                />
+                <div className="up-zone-visual">
+                    <UploadGlyph />
+                    {busy ? (
+                        <span className="up-zone-title">{uploading ? "Uploading…" : "Removing…"}</span>
+                    ) : (
+                        <span className="up-zone-sub">
+                            Drag &amp; drop or <span className="up-zone-browse">Browse</span>
+                            {storedFile ? " to replace" : ""}
+                        </span>
+                    )}
+                </div>
+            </div>
+
+            {/* The stored file comes straight after the box and the messages after it,
+                so the two cards' file rows line up whatever length the messages are. */}
+            {storedFile ? (
+                <div className="up-filelist-wrap">
+                    <div className="up-filelist-head">{listHeading}</div>
+                    <div className="up-filelist">
+                        <div className="up-file-row">
+                            <FileGlyph />
+                            <div className="up-file-main">
+                                <span className="up-file-name" title={storedFile.fileName}>
+                                    {storedFile.fileName}
+                                </span>
+                                <span className="up-file-meta">
+                                    {storedFile.businessDate} · {formatBytes(storedFile.sizeBytes)} · Uploaded{" "}
+                                    {when(storedFile.timeMs)}
+                                </span>
+                            </div>
+                            <StatusBadge tone={STATUS.OK}>Ready</StatusBadge>
+                            <button
+                                type="button"
+                                className="up-file-remove"
+                                onClick={removeStoredFile}
+                                disabled={busy}
+                                aria-label={`Remove ${storedFile.fileName}`}
+                                title="Remove this file"
+                            >
+                                &times;
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            ) : loading ? (
+                <p className="cm-empty">Loading…</p>
+            ) : null}
+
+            {note ? <p className="cm-sub">{note}</p> : null}
+            {error ? <UploadErrorDetails message={error.message} detail={error.detail} /> : null}
+
+            <FieldMappingPanel
+                open={Boolean(mappingFile)}
+                file={mappingFile}
+                requestedType={profileType}
+                types={[profileType]}
+                autofill
+                showHints={false}
+                onUpload={uploadMappedFile}
+                onClose={() => setMappingFile(null)}
+            />
+        </div>
+    );
+};
+
+/**
+ * Corporate Actions -> Custodian Upload.
+ *
+ * Two custodian files per date, each mapped and stored on its own:
+ *   - Entitlement ("EX Entitlement Vs Benefit Collection combo"), read by Split / Bonus / Dividend.
+ *   - Allocation ("Corporate Benefit Collection"), stored for the modules to read.
+ */
+const CustodianUploadPage = () => {
+    const [businessDate, setBusinessDate] = useState(todayIso);
+    /* Which cards are mid-upload / mid-remove; the Date picker is locked while any is. */
+    const [busyKinds, setBusyKinds] = useState({});
+
+    const onBusyChange = React.useCallback(
+        (kind, busy) => setBusyKinds((prev) => (prev[kind] === busy ? prev : { ...prev, [kind]: busy })),
+        [],
+    );
+    const anyBusy = Object.values(busyKinds).some(Boolean);
 
     return (
         <MainLayout title="Custodian Upload">
@@ -115,104 +242,35 @@ const CustodianUploadPage = () => {
                             type="date"
                             value={businessDate}
                             onChange={(e) => e.target.value && setBusinessDate(e.target.value)}
-                            disabled={busy}
+                            disabled={anyBusy}
                         />
                     </label>
                 </div>
 
-                <div className="temp-transaction-card cm-filecard up-card">
-                    <div
-                        className={dragActive ? "up-zone is-drag" : "up-zone"}
-                        onDragEnter={(e) => {
-                            e.preventDefault();
-                            if (!busy) setDragActive(true);
-                        }}
-                        onDragOver={(e) => e.preventDefault()}
-                        onDragLeave={() => setDragActive(false)}
-                        onDrop={(e) => {
-                            e.preventDefault();
-                            setDragActive(false);
-                            if (busy) return;
-                            const file = e.dataTransfer.files && e.dataTransfer.files[0];
-                            if (file) handleFilePicked(file);
-                        }}
-                    >
-                        <input
-                            type="file"
-                            accept=".csv"
-                            className="up-zone-input"
-                            aria-label="Upload custodian corporate actions file"
-                            disabled={busy}
-                            onChange={(e) => {
-                                const file = e.target.files[0];
-                                e.target.value = "";
-                                if (file) handleFilePicked(file);
-                            }}
+                {/* Each card in its own column, as on Transaction Upload, so the
+                    card-after-card top margin does not push the right one down. */}
+                <div className="cm-split">
+                    <div className="cm-col">
+                        <CustodianFileCard
+                            kind="entitlement"
+                            title="CA Custodian Entitlement File"
+                            listHeading="Custodian entitlement file"
+                            profileType={PROFILE_TYPE.CUSTODY_CORP_ACTION}
+                            businessDate={businessDate}
+                            onBusyChange={onBusyChange}
                         />
-                        <div className="up-zone-visual">
-                            <UploadGlyph />
-                            <span className="up-zone-title">
-                                {uploading
-                                    ? "Uploading…"
-                                    : removing
-                                      ? "Removing…"
-                                      : storedFile
-                                        ? "Replace custodian file"
-                                        : "Upload CA Custodian File"}
-                            </span>
-                            <span className="up-zone-sub">
-                                Drag &amp; drop or <span className="up-zone-browse">Browse</span>
-                            </span>
-                        </div>
                     </div>
-
-                    {note ? <p className="cm-sub">{note}</p> : null}
-                    {error ? <UploadErrorDetails message={error.message} detail={error.detail} /> : null}
-
-                    {storedFile ? (
-                        <div className="up-filelist-wrap">
-                            <div className="up-filelist-head">Custodian file</div>
-                            <div className="up-filelist">
-                                <div className="up-file-row">
-                                    <FileGlyph />
-                                    <div className="up-file-main">
-                                        <span className="up-file-name" title={storedFile.fileName}>
-                                            {storedFile.fileName}
-                                        </span>
-                                        <span className="up-file-meta">
-                                            {storedFile.businessDate} · {formatBytes(storedFile.sizeBytes)} · Uploaded{" "}
-                                            {when(storedFile.timeMs)}
-                                        </span>
-                                    </div>
-                                    <StatusBadge tone={STATUS.OK}>Ready</StatusBadge>
-                                    <button
-                                        type="button"
-                                        className="up-file-remove"
-                                        onClick={removeStoredFile}
-                                        disabled={busy}
-                                        aria-label={`Remove ${storedFile.fileName}`}
-                                        title="Remove this file"
-                                    >
-                                        &times;
-                                    </button>
-                                </div>
-                            </div>
-                        </div>
-                    ) : loading ? (
-                        <p className="cm-empty">Loading…</p>
-                    ) : null}
+                    <div className="cm-col">
+                        <CustodianFileCard
+                            kind="allocation"
+                            title="CA Custodian Allocation File"
+                            listHeading="Custodian allocation file (Corporate Benefit Collection)"
+                            profileType={PROFILE_TYPE.CUSTODY_CORP_ALLOCATION}
+                            businessDate={businessDate}
+                            onBusyChange={onBusyChange}
+                        />
+                    </div>
                 </div>
-
-                <FieldMappingPanel
-                    open={Boolean(mappingFile)}
-                    file={mappingFile}
-                    requestedType={PROFILE_TYPE.CUSTODY_CORP_ACTION}
-                    types={[PROFILE_TYPE.CUSTODY_CORP_ACTION]}
-                    autofill
-                    showHints={false}
-                    onUpload={uploadMappedFile}
-                    onClose={() => setMappingFile(null)}
-                />
             </div>
         </MainLayout>
     );

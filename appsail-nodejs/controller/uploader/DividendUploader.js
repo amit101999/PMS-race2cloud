@@ -2,7 +2,7 @@ import {
   fetchHoldingsRowsByAccountForIsin,
   recomputeHoldingsSnapshot,
 } from "../../util/analytics/holdingsFromTable.js";
-import { parseCustodianCsv } from "../../util/custodian/parseCustodianCsv.js";
+import { readLatestCorpActionRows } from "../corporateAction/CustodianUploadController.js";
 import { buildVirtualToActualMap } from "../../util/mapVirtualToActualCodes.js";
 
 const ACCOUNT_LOOKUP_BATCH = 50;
@@ -194,14 +194,15 @@ export const getAllSecuritiesISINs = async (req, res) => {
   /**
    * POST /api/dividend/preview
    *
-   * Accepts either:
-   *   - JSON body { isin, recordDate, rate, paymentDate }, OR
-   *   - multipart/form-data with the same fields plus an optional `file`
-   *     custodian CSV (Benefit Collection Report).
+   * JSON body { isin, recordDate, rate, paymentDate, compare? }.
    *
-   * Always returns the legacy `data` array (FIFO-based) so the existing
-   * preview rendering keeps working. When a file is uploaded, it ALSO
-   * returns:
+   * Always returns the system report as `data` (holding on the record date
+   * × rate, per account). The page shows it first.
+   *
+   * With `compare: true` it also reconciles against the custodian side: the
+   * newest file uploaded on Corporate Actions -> Custodian Upload, limited to
+   * its "Dividend In Cash" rows for this ISIN. It then ALSO returns:
+   *   - custodianFile — which uploaded file was used.
    *   - events[]  — file rows grouped by (CARefNo, Rate) with reconciled
    *                 per-account rows merging FIFO + file + already-paid
    *                 history.
@@ -218,6 +219,7 @@ export const getAllSecuritiesISINs = async (req, res) => {
       }
 
       const { isin, recordDate, rate, paymentDate } = req.body || {};
+      const compare = req.body?.compare === true;
       const rateNum = Number(rate);
 
       if (!Number.isFinite(rateNum) || rateNum <= 0) {
@@ -242,43 +244,50 @@ export const getAllSecuritiesISINs = async (req, res) => {
       const paymentDateISO = paymentDateObj.toISOString().split("T")[0];
 
       /* ======================================================
-         STEP 0: REQUIRE + PARSE THE CUSTODIAN FILE
-         A custodian file is now mandatory — preview without a file is
-         disabled so we never silently apply dividends from FIFO alone
-         when the custodian's view is the source of truth.
+         STEP 0: READ THE CUSTODIAN FILE (compare only)
+         Needed for the comparison, which is the only place dividends can be
+         applied from — we never apply from FIFO alone. It is the newest file
+         from the Custodian Upload page; only its "Dividend In Cash" rows for
+         this ISIN are used. The system report alone does not need it.
          ====================================================== */
       const warnings = [];
+      let custodian = null;
       let fileParsed = null;
-      const uploaded = req.files?.file;
+      if (compare) {
+        try {
+          custodian = await readLatestCorpActionRows(req.catalystApp, {
+            caType: "dividend",
+            isin,
+          });
+        } catch (fileErr) {
+          if (!fileErr.code) throw fileErr;
+          return res.status(409).json({
+            success: false,
+            code: fileErr.code,
+            message: fileErr.message,
+          });
+        }
 
-      if (!uploaded) {
-        return res.status(400).json({
-          success: false,
-          message:
-            "Custodian file is required. Please attach the Benefit " +
-            "Collection Report (CSV) before fetching affected accounts.",
-        });
-      }
-
-      const name = (uploaded.name || "").toLowerCase();
-      if (!name.endsWith(".csv")) {
-        return res.status(400).json({
-          success: false,
-          message:
-            "Only CSV files are supported. Open the file in Excel and " +
-            "use 'Save As → CSV (Comma delimited)' before uploading.",
-        });
-      }
-      try {
-        fileParsed = await parseCustodianCsv(uploaded.data);
-      } catch (parseErr) {
-        return res.status(400).json({
-          success: false,
-          message: `Failed to parse custodian CSV: ${parseErr.message}`,
-        });
-      }
-      if (!fileParsed.rows.length) {
-        warnings.push("Custodian file had headers but no data rows.");
+        // Same row shape the reconciliation below was written for. The common
+        // custodian file has no TDS or Net amount columns.
+        fileParsed = {
+          rows: custodian.rows.map((r) => ({
+            accountCode: r.accountCode,
+            clientName: r.clientName,
+            isin: r.isin,
+            isinName: r.isinName,
+            caRef: r.caRefNo,
+            exDate: r.exDate,
+            recordDate: r.recordDate,
+            paymentDate: r.paymentDate,
+            rate: r.dividendRate,
+            holding: r.holdingQty,
+            gross: r.caAmt,
+            tds: null,
+            net: null,
+            caType: "Dividend In Cash",
+          })),
+        };
       }
 
       const zcql = req.catalystApp.zcql();
@@ -633,6 +642,7 @@ export const getAllSecuritiesISINs = async (req, res) => {
       }
 
       const response = { success: true, data: preview };
+      if (custodian) response.custodianFile = custodian.file;
       if (events) response.events = events;
       if (summary) response.summary = summary;
       if (warnings.length) response.warnings = warnings;

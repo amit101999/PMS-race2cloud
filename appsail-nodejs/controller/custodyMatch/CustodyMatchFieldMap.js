@@ -190,8 +190,10 @@ const supersedeStoredDates = async (app) => {
  * the three custody-matching types.
  */
 const supersedeForType = async (app, type) => {
-  // The corporate actions file is only stored, so no run was read under its mapping.
-  if (type === PROFILE_TYPE.CUSTODY_CORP_ACTION) return { superseded: [], supersedeErrors: [] };
+  // The custodian corporate action files are not custody-match runs, so no run was read under their mapping.
+  if (type === PROFILE_TYPE.CUSTODY_CORP_ACTION || type === PROFILE_TYPE.CUSTODY_CORP_ALLOCATION) {
+    return { superseded: [], supersedeErrors: [] };
+  }
   if (type !== PROFILE_TYPE.CUSTODY_HOLDINGS) return supersedeStoredDates(app);
   try {
     const { runIds } = await supersedeHoldingComparisonRuns(app);
@@ -420,7 +422,8 @@ export const previewHeaders = async (req, res) => {
     if (
       asked !== PROFILE_TYPE.FA &&
       asked !== PROFILE_TYPE.CUSTODY_HOLDINGS &&
-      asked !== PROFILE_TYPE.CUSTODY_CORP_ACTION
+      asked !== PROFILE_TYPE.CUSTODY_CORP_ACTION &&
+      asked !== PROFILE_TYPE.CUSTODY_CORP_ALLOCATION
     ) {
       try {
         /*

@@ -1,11 +1,15 @@
 /**
  * Corporate Actions -> Custodian Upload.
  *
- * Stores the custodian's corporate actions file for a date, once its columns
- * have been mapped on the Field Mapping popup. Nothing is applied yet: the file
- * is kept as uploaded, and a later step will read it through the saved mapping.
+ * Stores two custodian files for a date, once their columns have been mapped
+ * on the Field Mapping popup. Modules read them through the saved mapping.
  *
- *   Custodian-CorpAction/<date>/<ms>-<name>.csv   (bucket "temporary-files")
+ *   entitlement ("EX Entitlement Vs Benefit Collection combo"):
+ *     Custodian-CorpAction/<date>/<ms>-<name>.csv
+ *   allocation ("Corporate Benefit Collection"):
+ *     Custodian-CorpAllocation/<date>/<ms>-<name>.csv
+ *
+ * Both in bucket "temporary-files".
  */
 
 import { Readable } from "stream";
@@ -15,16 +19,27 @@ import { computeBonusPreviewRows } from "../../util/analytics/bonusPreviewCalc.j
 import { computeSplitPreviewRows } from "../../util/analytics/splitPreviewCalc.js";
 import { checkEvent, compareHoldings, comparisonToCsv } from "../../util/corporateAction/compareCustodian.js";
 import { parseDate, num, stripIsinSuffix } from "../../util/custodian/parseCustodianCsv.js";
-import { PROFILE_TYPE } from "../../util/custodyMatch/fieldMap.js";
+import { FIELD_CATALOG, PROFILE_TYPE } from "../../util/custodyMatch/fieldMap.js";
 import { STRATUS_GET_URL_OPTS, stratusSignedUrlToString } from "../../util/stratusSignedUrl.js";
 import { DATE_PATTERN } from "../../util/holdingComparison/constants.js";
 import { normHeader } from "../../util/holdingComparison/parse.js";
 import { getBucket, getBuffer, listAll, readFieldMapProfile } from "../../util/holdingComparison/storage.js";
 
-const FOLDER = "Custodian-CorpAction";
-const KEY_PATTERN = /^Custodian-CorpAction\/(\d{4}-\d{2}-\d{2})\/(\d+)-([^/]+)$/;
+/** The two custodian files this page stores: where each lives and which mapping reads it. */
+const FILE_KINDS = {
+  entitlement: { folder: "Custodian-CorpAction", profileType: PROFILE_TYPE.CUSTODY_CORP_ACTION },
+  allocation: { folder: "Custodian-CorpAllocation", profileType: PROFILE_TYPE.CUSTODY_CORP_ALLOCATION },
+};
+const KEY_PATTERN = /^(Custodian-CorpAction|Custodian-CorpAllocation)\/(\d{4}-\d{2}-\d{2})\/(\d+)-([^/]+)$/;
 
 const fail = (res, status, body) => res.status(status).json({ success: false, ...body });
+
+/** The requested file kind; the entitlement file when none is given, as before the allocation file existed. */
+const kindFrom = (value) => {
+  const kind = String(value || "entitlement").trim().toLowerCase();
+  if (!FILE_KINDS[kind]) throw Object.assign(new Error(`Unknown custodian file kind "${kind}".`), { code: "BAD_KIND" });
+  return kind;
+};
 
 /** Keep a file name safe to use inside an object key. */
 const safeFileName = (name) =>
@@ -35,7 +50,9 @@ const safeFileName = (name) =>
 
 const parseKey = (key) => {
   const m = KEY_PATTERN.exec(key);
-  return m ? { key, businessDate: m[1], timeMs: Number(m[2]), fileName: m[3] } : null;
+  if (!m) return null;
+  const kind = Object.keys(FILE_KINDS).find((k) => FILE_KINDS[k].folder === m[1]);
+  return { key, kind, businessDate: m[2], timeMs: Number(m[3]), fileName: m[4] };
 };
 
 /** Every row as a positional array, header row first. */
@@ -88,10 +105,12 @@ const checkFile = async (buffer, profile) => {
 };
 
 /**
- * POST /api/custodian-upload/file  (multipart: file, businessDate)
+ * POST /api/custodian-upload/file  (multipart: file, businessDate, kind = entitlement|allocation)
  */
 export const uploadCustodianFile = async (req, res) => {
   try {
+    const kind = kindFrom(req.body?.kind);
+    const { folder, profileType } = FILE_KINDS[kind];
     const file = req.files?.file;
     if (!file) {
       return fail(res, 400, { code: "NO_FILE", message: "CSV file is required. Send it as form-data with key 'file'." });
@@ -107,7 +126,7 @@ export const uploadCustodianFile = async (req, res) => {
 
     const bucket = getBucket(req.catalystApp);
     // The popup will not offer Upload until a mapping is saved, so none means the screen was bypassed.
-    const profile = await readFieldMapProfile(bucket, PROFILE_TYPE.CUSTODY_CORP_ACTION);
+    const profile = await readFieldMapProfile(bucket, profileType);
     if (!profile) {
       return fail(res, 400, { code: "NO_MAPPING", message: "Map and save this file's columns before uploading it." });
     }
@@ -121,7 +140,7 @@ export const uploadCustodianFile = async (req, res) => {
       return fail(res, 400, { code: "NO_ROWS", message: `${file.name} has no data rows.` });
     }
 
-    const key = `${FOLDER}/${businessDate}/${Date.now()}-${safeFileName(file.name)}`;
+    const key = `${folder}/${businessDate}/${Date.now()}-${safeFileName(file.name)}`;
     await bucket.putObject(key, file.data, { contentType: "text/csv", overwrite: true });
 
     return res.status(201).json({
@@ -132,6 +151,7 @@ export const uploadCustodianFile = async (req, res) => {
       rowCount,
     });
   } catch (error) {
+    if (error.code === "BAD_KIND") return fail(res, 400, { code: error.code, message: error.message });
     console.error("[CustodianUpload] uploadCustodianFile:", error);
     return fail(res, 500, { message: error.message || "Could not upload the custodian file." });
   }
@@ -144,11 +164,27 @@ export const uploadCustodianFile = async (req, res) => {
 const CA_TYPE_DESCR = {
   split: ["split"],
   bonus: ["bonus"],
+  dividend: ["dividend in cash"],
 };
 
-/** The columns the Split / Bonus comparison reads (see CORP_ACTION_REQUIRED_FIELDS in fieldMap.js). */
-const COMPARE_FIELDS = ["clientUccCode", "clientName", "isin", "isinName", "caTypeDescr", "recordDate", "ratio", "holdingQty"];
-const OPTIONAL_COMPARE_FIELDS = ["clientName", "isinName"];
+/** Columns only the Dividend reconciliation reads. Optional for Split / Bonus. */
+const DIVIDEND_FIELDS = ["caRefNo", "exDate", "tentativePaymentDate", "dividendRate", "caAmt"];
+/** Without a rate and an amount the Dividend reconciliation would compare against zeros. */
+const DIVIDEND_REQUIRED_FIELDS = ["dividendRate", "caAmt"];
+
+/** The columns the Split / Bonus comparison reads (see CORP_ACTION_REQUIRED_FIELDS in fieldMap.js), plus Dividend's. */
+const COMPARE_FIELDS = [
+  "clientUccCode",
+  "clientName",
+  "isin",
+  "isinName",
+  "caTypeDescr",
+  "recordDate",
+  "ratio",
+  "holdingQty",
+  ...DIVIDEND_FIELDS,
+];
+const OPTIONAL_COMPARE_FIELDS = ["clientName", "isinName", ...DIVIDEND_FIELDS];
 
 const MONTHS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
 
@@ -166,9 +202,9 @@ const toIsoDate = (value) => {
   return parseDate(value);
 };
 
-/** The newest custodian corporate actions file across every date that still exists, or null. */
-const newestCorpActionFile = async (bucket) => {
-  const items = (await listAll(bucket, `${FOLDER}/`))
+/** The newest custodian file of one kind across every date that still exists, or null. */
+const newestCorpActionFile = async (bucket, kind = "entitlement") => {
+  const items = (await listAll(bucket, `${FILE_KINDS[kind].folder}/`))
     .map((item) => {
       const parsed = parseKey(item.key);
       return parsed ? { ...parsed, sizeBytes: item.sizeBytes } : null;
@@ -190,9 +226,10 @@ const newestCorpActionFile = async (bucket) => {
  * return it to the screen as-is.
  *
  * @param {object} catalystApp
- * @param {{ caType: "split"|"bonus", isin: string }} filter
+ * @param {{ caType: "split"|"bonus"|"dividend", isin: string }} filter
  * @returns {Promise<{ file: object, rows: Array<{
- *   accountCode, clientName, isin, isinName, recordDate, ratio, holdingQty }> }>}
+ *   accountCode, clientName, isin, isinName, recordDate, ratio, holdingQty,
+ *   caRefNo, exDate, paymentDate, dividendRate, caAmt }> }>}
  */
 export const readLatestCorpActionRows = async (catalystApp, { caType, isin }) => {
   const wantedTypes = CA_TYPE_DESCR[caType];
@@ -219,7 +256,8 @@ export const readLatestCorpActionRows = async (catalystApp, { caType, isin }) =>
     if (source?.by === "name") index = normHeaders.indexOf(normHeader(source.name));
     if (source?.by === "index") index = Number(source.index);
     if (index < 0 || index >= headers.length) {
-      if (OPTIONAL_COMPARE_FIELDS.includes(field)) continue;
+      const required = caType === "dividend" && DIVIDEND_REQUIRED_FIELDS.includes(field);
+      if (OPTIONAL_COMPARE_FIELDS.includes(field) && !required) continue;
       throw Object.assign(
         new Error(`The custodian file ${file.fileName} has no column mapped for "${field}". Re-map and upload it again.`),
         { code: "FIELD_NOT_MAPPED" },
@@ -243,6 +281,11 @@ export const readLatestCorpActionRows = async (catalystApp, { caType, isin }) =>
       recordDate: toIsoDate(cell(cells, "recordDate")),
       ratio: cell(cells, "ratio"),
       holdingQty: num(cell(cells, "holdingQty")),
+      caRefNo: cell(cells, "caRefNo"),
+      exDate: toIsoDate(cell(cells, "exDate")),
+      paymentDate: toIsoDate(cell(cells, "tentativePaymentDate")),
+      dividendRate: num(cell(cells, "dividendRate")),
+      caAmt: num(cell(cells, "caAmt")),
     });
   }
 
@@ -250,19 +293,87 @@ export const readLatestCorpActionRows = async (catalystApp, { caType, isin }) =>
 };
 
 /**
- * GET /api/custodian-upload/latest?caType=split|bonus&isin=...
- * Which custodian file the Split / Bonus page will compare with, and how many of its rows apply.
+ * The newest "Corporate Benefit Collection" (allocation) file's rows for one
+ * ISIN, read through its saved field mapping. Each row carries every mapped
+ * field as trimmed text, keyed by field name (see CORP_ALLOCATION_COLUMNS in
+ * fieldMap.js); unmapped fields are left out. Callers convert what they use.
+ *
+ * Throws an Error with `code` when the file cannot be used, like readLatestCorpActionRows.
+ *
+ * @param {object} catalystApp
+ * @param {{ isin: string }} filter
+ * @returns {Promise<{ file: object, rows: Array<Record<string, string>> }>}
+ */
+export const readLatestAllocationRows = async (catalystApp, { isin }) => {
+  const bucket = getBucket(catalystApp);
+  const file = await newestCorpActionFile(bucket, "allocation");
+  if (!file) {
+    throw Object.assign(new Error("No Corporate Benefit Collection file has been uploaded on the Custodian Upload page."), {
+      code: "NO_FILE",
+    });
+  }
+
+  const profile = await readFieldMapProfile(bucket, PROFILE_TYPE.CUSTODY_CORP_ALLOCATION);
+  if (!profile) {
+    throw Object.assign(new Error("The Corporate Benefit Collection file's columns have not been mapped."), {
+      code: "NO_MAPPING",
+    });
+  }
+
+  const buffer = await getBuffer(bucket, file.key);
+  const [headers = [], ...dataRows] = await readRows(buffer);
+  const normHeaders = headers.map(normHeader);
+
+  // Where each mapped field sits in this file.
+  const columnOf = {};
+  for (const { field } of FIELD_CATALOG[PROFILE_TYPE.CUSTODY_CORP_ALLOCATION]) {
+    const source = profile[field];
+    let index = -1;
+    if (source?.by === "name") index = normHeaders.indexOf(normHeader(source.name));
+    if (source?.by === "index") index = Number(source.index);
+    if (index >= 0 && index < headers.length) columnOf[field] = index;
+  }
+  if (columnOf.isin === undefined) {
+    throw Object.assign(
+      new Error(`The Corporate Benefit Collection file ${file.fileName} has no column mapped for "isin". Re-map and upload it again.`),
+      { code: "FIELD_NOT_MAPPED" },
+    );
+  }
+
+  const wantedIsin = stripIsinSuffix(isin).toUpperCase();
+  const rows = [];
+  for (const cells of dataRows) {
+    if (stripIsinSuffix(cells[columnOf.isin]).toUpperCase() !== wantedIsin) continue;
+    const row = {};
+    for (const [field, index] of Object.entries(columnOf)) row[field] = String(cells[index] ?? "").trim();
+    rows.push(row);
+  }
+
+  return { file, rows };
+};
+
+/**
+ * GET /api/custodian-upload/latest?caType=split|bonus|dividend&isin=...
+ * GET /api/custodian-upload/latest?kind=allocation&isin=...
+ * Which custodian file a module will use, and how many of its rows apply.
  */
 export const getLatestForCorpAction = async (req, res) => {
   try {
+    const kind = kindFrom(req.query?.kind);
     const caType = String(req.query?.caType || "").trim().toLowerCase();
     const isin = String(req.query?.isin || "").trim();
     if (!isin) return fail(res, 400, { code: "BAD_ISIN", message: "isin is required." });
 
-    const { file, rows } = await readLatestCorpActionRows(req.catalystApp, { caType, isin });
+    const { file, rows } =
+      kind === "allocation"
+        ? await readLatestAllocationRows(req.catalystApp, { isin })
+        : await readLatestCorpActionRows(req.catalystApp, { caType, isin });
     return res.json({ success: true, file, rowCount: rows.length });
   } catch (error) {
-    if (error.code) return fail(res, error.code === "BAD_TYPE" ? 400 : 404, { code: error.code, message: error.message });
+    if (error.code) {
+      const status = error.code === "BAD_TYPE" || error.code === "BAD_KIND" ? 400 : 404;
+      return fail(res, status, { code: error.code, message: error.message });
+    }
     console.error("[CustodianUpload] getLatestForCorpAction:", error);
     return fail(res, 500, { message: error.message || "Could not read the custodian file." });
   }
@@ -350,9 +461,9 @@ export const compareWithCustodian = (caType) => async (req, res) => {
   }
 };
 
-/** Every upload for a date, newest first. */
-const listForDate = async (bucket, date) =>
-  (await listAll(bucket, `${FOLDER}/${date}/`))
+/** Every upload of one kind for a date, newest first. */
+const listForDate = async (bucket, kind, date) =>
+  (await listAll(bucket, `${FILE_KINDS[kind].folder}/${date}/`))
     .map((item) => {
       const parsed = parseKey(item.key);
       return parsed ? { ...parsed, sizeBytes: item.sizeBytes } : null;
@@ -361,10 +472,11 @@ const listForDate = async (bucket, date) =>
     .sort((a, b) => b.timeMs - a.timeMs);
 
 /**
- * GET /api/custodian-upload/day/:date — the newest file uploaded for a date, or null.
+ * GET /api/custodian-upload/day/:date?kind=entitlement|allocation — the newest file of that kind uploaded for a date, or null.
  */
 export const getDay = async (req, res) => {
   try {
+    const kind = kindFrom(req.query?.kind);
     const date = String(req.params.date || "");
     if (!DATE_PATTERN.test(date)) {
       return fail(res, 400, { code: "BAD_DATE", message: "date must be yyyy-mm-dd." });
@@ -373,13 +485,14 @@ export const getDay = async (req, res) => {
     const bucket = getBucket(req.catalystApp);
     // Stratus keeps listing a deleted object for about twenty seconds, so the
     // listed file is confirmed to still exist before it is shown.
-    for (const item of await listForDate(bucket, date)) {
+    for (const item of await listForDate(bucket, kind, date)) {
       if (await bucket.headObject(item.key, { throwErr: false })) {
         return res.json({ success: true, file: item });
       }
     }
     return res.json({ success: true, file: null });
   } catch (error) {
+    if (error.code === "BAD_KIND") return fail(res, 400, { code: error.code, message: error.message });
     console.error("[CustodianUpload] getDay:", error);
     return fail(res, 500, { message: error.message || "Could not read the uploaded files." });
   }
@@ -388,9 +501,10 @@ export const getDay = async (req, res) => {
 /**
  * DELETE /api/custodian-upload/file?key=...
  *
- * For a file uploaded by mistake. Every upload for that date is deleted, not
- * just this one, so an earlier upload does not quietly take its place: after
- * removal the date has no file until the correct one is uploaded.
+ * For a file uploaded by mistake. Every upload of the same kind for that date
+ * is deleted, not just this one, so an earlier upload does not quietly take its
+ * place: after removal the date has no file of that kind until the correct one
+ * is uploaded. The other kind's file is left alone.
  */
 export const deleteCustodianFile = async (req, res) => {
   try {
@@ -400,7 +514,10 @@ export const deleteCustodianFile = async (req, res) => {
     }
 
     const bucket = getBucket(req.catalystApp);
-    const keys = new Set([parsed.key, ...(await listForDate(bucket, parsed.businessDate)).map((i) => i.key)]);
+    const keys = new Set([
+      parsed.key,
+      ...(await listForDate(bucket, parsed.kind, parsed.businessDate)).map((i) => i.key),
+    ]);
     for (const key of keys) {
       // Already gone (pressed twice, or a listing that lags a delete) is fine: the outcome is the same.
       if (await bucket.headObject(key, { throwErr: false })) await bucket.deleteObject(key);
