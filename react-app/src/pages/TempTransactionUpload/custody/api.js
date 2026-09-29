@@ -187,6 +187,7 @@ export const PROFILE_TYPE = {
   CUSTODY_MUTUAL_FUND: "CUSTODY_MUTUAL_FUND",
   CUSTODY_HOLDINGS: "CUSTODY_HOLDINGS",
   CUSTODY_CORP_ACTION: "CUSTODY_CORP_ACTION",
+  CUSTODY_CORP_ALLOCATION: "CUSTODY_CORP_ALLOCATION",
 };
 
 export const PROFILE_LABEL = {
@@ -197,6 +198,7 @@ export const PROFILE_LABEL = {
   CUSTODY_MUTUAL_FUND: "Custodian — Mutual Funds",
   CUSTODY_HOLDINGS: "Custodian — Consolidated Holdings",
   CUSTODY_CORP_ACTION: "Custodian — Corporate Actions",
+  CUSTODY_CORP_ALLOCATION: "Custodian — Corporate Benefit Collection",
 };
 
 export const PROFILE_HELP = {
@@ -211,6 +213,8 @@ export const PROFILE_HELP = {
     "The custodian's consolidated holdings file. Its column names differ from the standard 29-column template, so tell us which column holds each field.",
   CUSTODY_CORP_ACTION:
     "The custodian's corporate actions file. Tell us which column holds each field; every field is optional.",
+  CUSTODY_CORP_ALLOCATION:
+    "The custodian's Corporate Benefit Collection file. Tell us which column holds each field; every field is optional.",
 };
 
 /** Which transaction file is being uploaded. A day may hold one of each. */

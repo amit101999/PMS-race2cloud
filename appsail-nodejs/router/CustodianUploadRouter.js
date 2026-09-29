@@ -26,16 +26,19 @@ router.use(
   }),
 );
 
-// GET /api/custodian-upload/day/:date — the newest file uploaded for the date
+// `kind` = entitlement (default) | allocation picks which of the two custodian files.
+
+// GET /api/custodian-upload/day/:date?kind= — the newest file of that kind uploaded for the date
 router.get("/day/:date", getDay);
 
-// GET /api/custodian-upload/latest?caType=split|bonus&isin= — newest file + its matching row count
+// GET /api/custodian-upload/latest?caType=split|bonus|dividend&isin= — newest entitlement file + its matching row count
+// GET /api/custodian-upload/latest?kind=allocation&isin= — newest allocation file + its row count for the ISIN
 router.get("/latest", getLatestForCorpAction);
 
-// POST /api/custodian-upload/file — check against the saved mapping and store
+// POST /api/custodian-upload/file (form field kind) — check against the saved mapping and store
 router.post("/file", uploadCustodianFile);
 
-// DELETE /api/custodian-upload/file?key=... — remove the file (every upload for its date)
+// DELETE /api/custodian-upload/file?key=... — remove the file (every upload of its kind for its date)
 router.delete("/file", deleteCustodianFile);
 
 export default router;

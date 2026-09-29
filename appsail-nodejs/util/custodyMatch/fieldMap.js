@@ -55,6 +55,12 @@ export const PROFILE_TYPE = {
    * mapping screen; custody matching never reads it.
    */
   CUSTODY_CORP_ACTION: "CUSTODY_CORP_ACTION",
+  /*
+   * The custodian "Corporate Benefit Collection" file, uploaded next to the
+   * corporate actions file on Custodian Upload. Here only for the mapping
+   * screen; custody matching never reads it.
+   */
+  CUSTODY_CORP_ALLOCATION: "CUSTODY_CORP_ALLOCATION",
 };
 
 export const PROFILE_TYPES = Object.values(PROFILE_TYPE);
@@ -196,6 +202,62 @@ const CORP_ACTION_COLUMNS = [
   ["bankAcNo", "Bank AC NO"],
   ["bankName", "Bank Name"],
   ["brName", "BR Name"],
+  ["custodyBankAccountFlag", "Custody Bank Account Flag"],
+];
+
+/**
+ * The custodian "Corporate Benefit Collection" template: [field, standard header].
+ * Every field is optional text: the file is stored and can be read by any
+ * module, but none requires a column yet.
+ */
+const CORP_ALLOCATION_COLUMNS = [
+  ["parentClientName", "Parent Client Name"],
+  ["clientUccCode", "Client UCC Code"],
+  ["clientName", "Client Name"],
+  ["uccStatus", "UCC Status"],
+  ["bankAccountType", "Bank Account Type"],
+  ["bankAcNo", "Bank AC NO"],
+  ["bankName", "Bank Name"],
+  ["brName", "BR Name"],
+  ["dematClientId", "Demat Client ID"],
+  ["dpName", "DP Name"],
+  ["dpId", "DP ID"],
+  ["depositoryName", "DepositoryName"],
+  ["isin", "ISIN"],
+  ["isinName", "ISIN Name"],
+  ["caRefNo", "CA Ref. No."],
+  ["participatedCurrency", "Participated Currency"],
+  ["exDate", "Ex-Date"],
+  ["bookClosureFromDate", "Book Closure From Date"],
+  ["bookClosureToDate", "Book Closure To Date"],
+  ["recordDate", "Record Date"],
+  ["caType", "CA Type"],
+  ["eventType", "Event Type"],
+  ["caTypeDescription", "CA Type Description"],
+  ["faceValue", "Face Value"],
+  ["ratio", "Ratio (Propose : Held)"],
+  ["dividendRate", "Dividend Rate"],
+  ["holdingQty", "Holding Qty"],
+  ["poolHoldingQty", "Pool Holding Qty"],
+  ["newIsin", "New ISIN"],
+  ["newIsinName", "New ISIN Name"],
+  ["newIsinFaceValue", "New ISIN FaceValue"],
+  ["caAmount", "CA Amount"],
+  ["poolCaAmount", "Pool CA Amount"],
+  ["caQty", "CA Qty"],
+  ["poolCaQty", "Pool CA Qty"],
+  ["fractionQty", "Fraction Qty"],
+  ["poolFractionQty", "Pool Fraction Qty"],
+  ["remarks", "Remarks"],
+  ["receivedDate", "Received Date"],
+  ["receivedAmount", "Received Amount"],
+  ["balanceAmount", "Balance Amount"],
+  ["receivedQty", "Received Quantity"],
+  ["balanceQty", "Balance Qty"],
+  ["caTaxAmt", "CA TaxAmt"],
+  ["eventStatus", "Event Status"],
+  ["fundStrategy", "Fund Strategy"],
+  ["tentativePaymentDate", "Tentative Payment Date"],
   ["custodyBankAccountFlag", "Custody Bank Account Flag"],
 ];
 
@@ -398,6 +460,13 @@ export const FIELD_CATALOG = {
     required: CORP_ACTION_REQUIRED_FIELDS.includes(field),
     matchKey: CORP_ACTION_REQUIRED_FIELDS.includes(field),
   })),
+  [PROFILE_TYPE.CUSTODY_CORP_ALLOCATION]: CORP_ALLOCATION_COLUMNS.map(([field, header]) => ({
+    field,
+    label: header,
+    kind: "text",
+    required: false,
+    matchKey: false,
+  })),
 };
 
 /** Custodian layout -> profile type, so callers holding a CUSTODY_FORMAT can find the profile. */
@@ -526,6 +595,9 @@ export const DEFAULT_PROFILES = {
   ),
   [PROFILE_TYPE.CUSTODY_CORP_ACTION]: Object.fromEntries(
     CORP_ACTION_COLUMNS.map(([field, header]) => [field, byName(header)]),
+  ),
+  [PROFILE_TYPE.CUSTODY_CORP_ALLOCATION]: Object.fromEntries(
+    CORP_ALLOCATION_COLUMNS.map(([field, header]) => [field, byName(header)]),
   ),
 };
 
