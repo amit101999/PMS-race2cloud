@@ -5,6 +5,7 @@ import {
 } from "./holdingsFromTable.js";
 
 const HOLDINGS_BATCH = 250;
+const round4 = (n) => Math.round(n * 10000) / 10000;
 
 /** Exclusive next-day cutoff, stepped in UTC so the local zone cannot shift it. */
 const nextISODate = (isoDate) => {
@@ -31,7 +32,7 @@ const nextISODate = (isoDate) => {
  * and is also what `recomputeHoldingsSnapshot` orders by internally.
  *
  * Split logic:
- *   newHolding   = floor(currentHolding × ratio2 / ratio1)
+ *   newHolding   = currentHolding × ratio2 / ratio1 (fractions kept, 4 dp)
  *   holdingValue = unchanged (same total cost)
  *   newWAP       = holdingValue / newHolding (price per share changes)
  */
@@ -118,7 +119,8 @@ export async function computeSplitPreviewRows(zcql, { isin, r1, r2, recordDateIS
     const holdingValue = Number(h.HOLDING_VALUE) || 0;
     const currentWAP = Number(h.WAP) || 0;
 
-    const newHolding = Math.floor(currentHolding * splitMultiplier);
+    // Fractions are kept (3 shares on 2:3 = 4.5), same as the holdings rebuild.
+    const newHolding = round4(currentHolding * splitMultiplier);
     if (newHolding <= 0) continue;
 
     // Cost is unchanged — more shares at same total cost → WAP goes down
@@ -134,7 +136,7 @@ export async function computeSplitPreviewRows(zcql, { isin, r1, r2, recordDateIS
       holdingValue,
       newHolding,
       newWAP,
-      delta: newHolding - currentHolding,
+      delta: round4(newHolding - currentHolding),
     });
   }
 
