@@ -4,30 +4,24 @@
  * Split impact handler for ExportCorpActionReport.
  *
  * Reports how every split in a date range affected every client. Source of
- * truth is the APPLIED data, read from two tables:
- *   1. `Split`    — the authoritative list of splits that happened (ratio +
- *                   metadata). Same table addStockSplit writes and the
- *                   "All Corporate Actions" export reads.
- *   2. `Holdings` — the per-client effect the rebuild materialised as
- *                   TYPE='SPLIT' rows (TRANSACTION_DATE = the split's
- *                   Record_Date, or Issue_Date for splits saved before
- *                   Record_Date existed). HOLDING/WAP on those rows are the running
- *                   post-split balance; the row with the greatest HOLDING for an
- *                   account is its final post-split total (running holdings
- *                   increases across the per-lot SPLIT rows the rebuild emits,
- *                   see functions/RebuildHoldingtable/holdingsRebuildFromSources.js).
+ * truth is the APPLIED data, read from two tables (same shape as the bonus report):
+ *   1. `Split`         — the authoritative list of splits that happened (ratio +
+ *                        metadata). Same table addStockSplit writes and the
+ *                        "All Corporate Actions" export reads.
+ *   2. `Split_Account` — one row per client per split, written by the holdings
+ *                        rebuild (functions/RebuildHoldingtable/holdingsRebuildFromSources.js)
+ *                        together with Holdings, so it always matches Holdings.
+ *                        Record_Date = the split's Record_Date, or Issue_Date for
+ *                        splits saved before Record_Date existed.
  *
- * SHARES_ALLOCATED is read straight off the affected SPLIT transactions. The
- * pre-split lots are treated as gone; a split replaces them with a fresh count.
- * Each SPLIT row is one post-split lot (QUANTITY = new lot qty, TOTAL_AMOUNT =
- * lot cost); summing QUANTITY per account gives the post-split holding:
- *   SHARES_ALLOCATED = sum(QUANTITY) over the account's SPLIT rows
+ *   SHARES_ALLOCATED = Split_Account.New_Holding (holding just after the split,
+ *                      fractions kept, e.g. 3 shares on 2:3 = 4.5)
  */
 
 const { buildVirtualToActualMap } = require("../virtualToActual.js");
 
 const MANIFEST_BATCH = 270;
-const HOLDINGS_BATCH = 250;
+const SPLIT_ACCOUNT_BATCH = 250;
 
 const esc = (s) => String(s ?? "").replace(/'/g, "''");
 const isIsoDate = (s) => /^\d{4}-\d{2}-\d{2}$/.test(String(s || "").trim());
@@ -91,8 +85,8 @@ async function buildManifest(zcql, fromDate, toDate) {
 
 /**
  * All CSV rows for ONE split event (one row per affected account).
- * Returns "" when the split has no applied Holdings rows (e.g. no holders, or
- * the rebuild hasn't materialised the SPLIT rows yet).
+ * Returns "" when the split has no Split_Account rows (e.g. no holders, or
+ * the rebuild hasn't run for its accounts yet).
  */
 async function buildEventCsv({ zcql, event, generatedAt, fromDate, toDate, csvCell }) {
   // A manifest frozen before this change carries only `issueDate`, which then
@@ -107,67 +101,51 @@ async function buildEventCsv({ zcql, event, generatedAt, fromDate, toDate, csvCe
   const multiplier = r2 / r1;
   if (!Number.isFinite(multiplier) || multiplier <= 0) return "";
 
-  /* ---- Sum each account's SPLIT transaction rows directly ----
-     One SPLIT row per post-split lot: QUANTITY = new lot qty,
-     TOTAL_AMOUNT = lot cost (falls back to QUANTITY * PRICE). Summing is
-     order-independent, so we never depend on a running-balance/last row. */
-  const byAccount = new Map(); // account -> { qty, cost }
+  /* ---- One Split_Account row per affected account for this split ----
+     The rebuild writes New_Holding = the account's holding just after the
+     split (fractions kept), so it is read directly — no summing of lots. */
+  const newHoldingByAccount = new Map(); // account -> New_Holding
   // ZCQL's OFFSET is 1-based, so each page repeats the previous page's last
-  // row; skip it so that trade is not counted twice.
-  const seenRowIds = new Set();
+  // row; the Map keyed by account makes that repeat harmless.
   let offset = 0;
   const isinEsc = esc(isin);
-  // The rebuild dates SPLIT rows by the split's record date.
+  // The rebuild stores the split's record date (Issue_Date for old splits).
   const dateEsc = esc(recordDate);
 
   while (true) {
     const rows = await zcql.executeZCQLQuery(`
-      SELECT ROWID, WS_Account_code, QUANTITY, PRICE, TOTAL_AMOUNT
-      FROM Holdings
-      WHERE ISIN = '${isinEsc}' AND TYPE = 'SPLIT' AND TRANSACTION_DATE = '${dateEsc}'
-      ORDER BY CREATEDTIME ASC, ROWID ASC
-      LIMIT ${HOLDINGS_BATCH} OFFSET ${offset}
+      SELECT ROWID, WS_Account_code, New_Holding
+      FROM Split_Account
+      WHERE ISIN = '${isinEsc}' AND Record_Date = '${dateEsc}'
+      ORDER BY ROWID ASC
+      LIMIT ${SPLIT_ACCOUNT_BATCH} OFFSET ${offset}
     `);
 
     if (!rows || rows.length === 0) break;
 
     for (const r of rows) {
-      const h = r.Holdings || r;
-      if (h.ROWID != null) {
-        if (seenRowIds.has(h.ROWID)) continue;
-        seenRowIds.add(h.ROWID);
-      }
-      const acc = String(h.WS_Account_code || "").trim();
+      const s = r.Split_Account || r;
+      const acc = String(s.WS_Account_code || "").trim();
       if (!acc) continue;
-      const qty = Number(h.QUANTITY) || 0;
-      let cost = Number(h.TOTAL_AMOUNT);
-      if (!Number.isFinite(cost)) cost = qty * (Number(h.PRICE) || 0);
-      const cur = byAccount.get(acc) || { qty: 0, cost: 0 };
-      cur.qty += qty;
-      cur.cost += cost;
-      byAccount.set(acc, cur);
+      newHoldingByAccount.set(acc, Number(s.New_Holding) || 0);
     }
 
-    if (rows.length < HOLDINGS_BATCH) break;
-    offset += HOLDINGS_BATCH;
+    if (rows.length < SPLIT_ACCOUNT_BATCH) break;
+    offset += SPLIT_ACCOUNT_BATCH;
   }
 
-  if (byAccount.size === 0) return "";
+  if (newHoldingByAccount.size === 0) return "";
 
-  const accounts = [...byAccount.keys()];
+  const accounts = [...newHoldingByAccount.keys()];
   const virtualToActual = await buildVirtualToActualMap(zcql, accounts);
 
   const ratioLabel = `${r1}:${r2}`;
   let text = "";
 
-  for (const [acc, agg] of byAccount) {
-    const postQty = agg.qty;
-    if (postQty <= 1e-6) continue; // dust / fully-closed
+  for (const [acc, newHolding] of newHoldingByAccount) {
+    if (newHolding <= 1e-6) continue; // dust / fully-closed
 
-    // Post-split holding for this account. The pre-split lots are treated as
-    // gone; this is the fresh quantity the split allocated, summed straight off
-    // the SPLIT rows.
-    const sharesAllocated = round4(postQty);
+    const sharesAllocated = round4(newHolding);
     const actual = virtualToActual.get(acc) || "";
 
     text +=

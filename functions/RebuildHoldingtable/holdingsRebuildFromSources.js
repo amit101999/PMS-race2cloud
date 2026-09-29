@@ -264,6 +264,9 @@ async function fetchSplitsForIsins(zcql, isins, asOnDate) {
     // The split takes effect in holdings on its record date. Splits saved
     // before Record_Date existed only have Issue_Date, which served that role.
     issueDate: s.Record_Date || s.Issue_Date,
+    effectiveDate: s.Issue_Date || "",
+    securityCode: s.Security_Code || "",
+    securityName: s.Security_Name || "",
     isin: s.ISIN || "",
   }));
 }
@@ -290,6 +293,7 @@ function runFifoEngine(
   card = false,
   demergers = [],
   mergers = [],
+  splitLog = null, // optional: receives one entry per split applied (for Split_Account)
 ) {
   const activeIsin =
     transactions[0]?.ISIN ||
@@ -378,6 +382,9 @@ function runFifoEngine(
           ratio1: s.ratio1,
           ratio2: s.ratio2,
           issueDate: s.issueDate,
+          effectiveDate: s.effectiveDate,
+          securityCode: s.securityCode,
+          securityName: s.securityName,
           isin: s.isin,
         },
       })),
@@ -635,6 +642,19 @@ function runFifoEngine(
         });
       }
 
+      if (splitLog) {
+        splitLog.push({
+          ratio1,
+          ratio2,
+          recordDate: splitDate,
+          effectiveDate: e.data.effectiveDate || splitDate,
+          securityCode: e.data.securityCode,
+          securityName: e.data.securityName,
+          oldHolding: holdings,
+          newHolding: runningHoldings,
+        });
+      }
+
       holdings = runningHoldings;
     }
 
@@ -831,6 +851,43 @@ async function insertHoldingsRow(zcql, accountCode, row, displayIsin) {
   `);
 }
 
+/* ============================== SPLIT_ACCOUNT WRITER ==============================
+   Split_Account = one row per (account, ISIN, split applied): holding just before
+   and just after the split. It is rewritten from scratch with the Holdings rows,
+   so it always matches Holdings (a back-dated trade re-sizes it automatically).
+   The split impact report reads it instead of summing Holdings SPLIT rows. */
+
+const round4 = (n) => Math.round((Number(n) || 0) * 10000) / 10000;
+
+async function replaceSplitAccountRows(zcql, accountCode, isin, splitLog) {
+  await zcql.executeZCQLQuery(`
+    DELETE FROM Split_Account
+    WHERE WS_Account_code = '${esc(accountCode)}' AND ISIN = '${esc(isin)}'
+  `);
+
+  for (const s of splitLog) {
+    const recordDate = sqlDate(s.recordDate);
+    const effectiveDate = sqlDate(s.effectiveDate) || recordDate;
+    await zcql.executeZCQLQuery(`
+      INSERT INTO Split_Account (
+        ISIN, WS_Account_code, Security_Code, Security_Name, Ratio1, Ratio2,
+        Record_Date, Issue_Date, Old_Holding, New_Holding
+      ) VALUES (
+        '${esc(isin)}',
+        '${esc(accountCode)}',
+        '${esc(s.securityCode)}',
+        '${esc(s.securityName)}',
+        ${Number(s.ratio1) || 0},
+        ${Number(s.ratio2) || 0},
+        ${recordDate ? `'${recordDate}'` : "NULL"},
+        ${effectiveDate ? `'${effectiveDate}'` : "NULL"},
+        ${round4(s.oldHolding)},
+        ${round4(s.newHolding)}
+      )
+    `);
+  }
+}
+
 /* ============================== PER-ACCOUNT REBUILD ============================== */
 
 async function rebuildHoldingsForAccount(
@@ -929,6 +986,7 @@ async function rebuildHoldingsForAccount(
     counters.pairs++;
 
     let fifoRows;
+    const splitLog = [];
     try {
       fifoRows = runFifoEngine(
         txByIsin[isin] || [],
@@ -937,6 +995,7 @@ async function rebuildHoldingsForAccount(
         false,
         demergerByIsin[isin] || [],
         mergerByIsin[isin] || [],
+        splitLog,
       );
     } catch (err) {
       console.error(`[${accountCode}/${isin}] FIFO failed:`, err.message);
@@ -961,17 +1020,25 @@ async function rebuildHoldingsForAccount(
         console.error(`[${accountCode}/${isin}] delete (empty) failed:`, err.message);
         counters.errors++;
       }
-      continue;
+    } else {
+      try {
+        await deleteHoldingsForPair(zcql, accountCode, isin);
+        for (const r of fifoRows) {
+          await insertHoldingsRow(zcql, accountCode, r, isin);
+        }
+        counters.rows += rowCount;
+      } catch (err) {
+        console.error(`[${accountCode}/${isin}] rebuild failed:`, err.message);
+        counters.errors++;
+      }
     }
 
+    // Separate try: a Split_Account failure must not undo a good Holdings
+    // rebuild, but it still counts as an error so the job reports it.
     try {
-      await deleteHoldingsForPair(zcql, accountCode, isin);
-      for (const r of fifoRows) {
-        await insertHoldingsRow(zcql, accountCode, r, isin);
-      }
-      counters.rows += rowCount;
+      await replaceSplitAccountRows(zcql, accountCode, isin, splitLog);
     } catch (err) {
-      console.error(`[${accountCode}/${isin}] rebuild failed:`, err.message);
+      console.error(`[${accountCode}/${isin}] Split_Account write failed:`, err.message);
       counters.errors++;
     }
   }

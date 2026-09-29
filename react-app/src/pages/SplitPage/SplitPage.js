@@ -80,8 +80,8 @@ function SplitPage() {
      account can hold shares under many virtual codes AND directly under its
      actual code, so we fold every code that resolves to the same actual
      account into one cumulative row and keep the underlying rows as children
-     for the drill-down. Group totals use the same Math.floor the table
-     displays, so a group total equals the visible sum of its children.
+     for the drill-down. Splits keep fractions (3 shares on 2:3 = 4.5), so
+     nothing is rounded down here; numberFormat shows up to 4 decimals.
      =========================== */
   const groupedData = useMemo(() => {
     const groups = new Map();
@@ -101,8 +101,8 @@ function SplitPage() {
         groups.set(key, g);
       }
       if (!g.actualCode && actual) g.actualCode = actual;
-      g.currentHolding += Math.floor(Number(row.currentHolding) || 0);
-      g.newHolding += Math.floor(Number(row.newHolding) || 0);
+      g.currentHolding += Number(row.currentHolding) || 0;
+      g.newHolding += Number(row.newHolding) || 0;
       g.children.push(row);
     }
     for (const g of groups.values()) {
@@ -539,10 +539,10 @@ function SplitPage() {
                                   {row.accountCode}
                                 </td>
                                 <td className="num">
-                                  {numberFormat.format(Math.floor(Number(row.currentHolding) || 0))}
+                                  {numberFormat.format(Number(row.currentHolding) || 0)}
                                 </td>
                                 <td className="num">
-                                  {numberFormat.format(Math.floor(Number(row.newHolding) || 0))}
+                                  {numberFormat.format(Number(row.newHolding) || 0)}
                                 </td>
                                 <td className="num positive">
                                   {row.delta > 0 ? "+" : ""}

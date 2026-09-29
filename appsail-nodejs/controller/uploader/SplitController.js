@@ -5,6 +5,7 @@ import { recomputeHoldingsSnapshot } from "../../util/analytics/holdingsFromTabl
 import { readCaJobProgress, insertCaTrackPiece } from "../../util/caJobProgress.js";
 
 const HOLDINGS_BATCH = 250;
+const round4 = (n) => Math.round(n * 10000) / 10000;
 
 /**
  * The date a Holdings row takes effect for an as-on-date view.
@@ -227,7 +228,7 @@ export const previewStockSplit = async (req, res) => {
        computed by FIFO. No need to re-run FIFO engine.
 
        Split logic:
-         newHolding      = floor(currentHolding × ratio2 / ratio1)
+         newHolding      = currentHolding × ratio2 / ratio1 (fractions kept, 4 dp)
          holdingValue    = unchanged (same total cost)
          newWAP          = holdingValue / newHolding (price per share halves)
        ====================================================== */
@@ -245,7 +246,8 @@ export const previewStockSplit = async (req, res) => {
       const holdingValue = Number(h.HOLDING_VALUE) || 0;
       const currentWAP   = Number(h.WAP) || 0;
 
-      const newHolding = Math.floor(currentHolding * splitMultiplier);
+      // Fractions are kept (3 shares on 2:3 = 4.5), same as the holdings rebuild.
+      const newHolding = round4(currentHolding * splitMultiplier);
       if (newHolding <= 0) continue;
 
       // Cost is unchanged — more shares at same total cost → WAP goes down
@@ -262,7 +264,7 @@ export const previewStockSplit = async (req, res) => {
         holdingValue,
         newHolding,
         newWAP,
-        delta: newHolding - currentHolding,
+        delta: round4(newHolding - currentHolding),
       });
     }
 
