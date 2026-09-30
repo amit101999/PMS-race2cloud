@@ -12,11 +12,21 @@ const bytes = (n) => (n >= 1024 * 1024 ? `${(n / (1024 * 1024)).toFixed(2)} MB` 
  * The last 10 files of one kind, for download.
  *
  * Used for all three history lists (custodian uploads, FA holdings, difference
- * reports) — they differ only in title and which endpoint lists them.
+ * reports) — they differ only in title and which endpoint lists them. The Split
+ * page reuses it with its own download endpoint and date label.
  *
- * @param {{ title: string, load: () => Promise<{items: object[]}>, emptyText: string, refreshToken: any, hiddenKeys?: Set<string> }} props
+ * @param {{ title: string, load: () => Promise<{items: object[]}>, emptyText: string, refreshToken: any,
+ *   hiddenKeys?: Set<string>, getDownloadUrl?: (key: string) => Promise<{downloadUrl: string}>, dateLabel?: string }} props
  */
-const PreviousFiles = ({ title, load, emptyText, refreshToken, hiddenKeys }) => {
+const PreviousFiles = ({
+    title,
+    load,
+    emptyText,
+    refreshToken,
+    hiddenKeys,
+    getDownloadUrl = api.getDownloadUrl,
+    dateLabel = "Business date",
+}) => {
     const [items, setItems] = useState([]);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState("");
@@ -43,7 +53,7 @@ const PreviousFiles = ({ title, load, emptyText, refreshToken, hiddenKeys }) => 
         setBusyKey(item.key);
         setError("");
         try {
-            const res = await api.getDownloadUrl(item.key);
+            const res = await getDownloadUrl(item.key);
             window.open(res.downloadUrl, "_blank", "noopener,noreferrer");
         } catch (err) {
             setError(err.message);
@@ -67,7 +77,7 @@ const PreviousFiles = ({ title, load, emptyText, refreshToken, hiddenKeys }) => 
                     <thead>
                         <tr>
                             <th className="date">Created on</th>
-                            <th className="date">Business date</th>
+                            <th className="date">{dateLabel}</th>
                             <th className="truncate">File name</th>
                             <th className="num">Size</th>
                             <th className="action">Download</th>

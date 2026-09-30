@@ -5,7 +5,78 @@ import {
 } from "./holdingsFromTable.js";
 
 const HOLDINGS_BATCH = 250;
+const SPLIT_ACCOUNT_BATCH = 250;
 const round4 = (n) => Math.round(n * 10000) / 10000;
+const escSql = (v) => String(v ?? "").replace(/'/g, "''");
+
+/** Split_Account.Status values set by the Split page's custodian reconciliation. */
+export const SPLIT_STATUS = {
+  RECEIVABLE: "RECEIVABLE",
+  RECEIVED: "RECEIVED",
+};
+
+/**
+ * Every Split_Account row of one split event (ISIN + record date + ratio), one
+ * per virtual account code.
+ *
+ * Rows appear in two ways: "Send as Receivable" inserts them (Status
+ * RECEIVABLE) before the split is applied, and the holdings rebuild writes them
+ * for applied splits, keeping any Status / Received_Date already there.
+ *
+ * @returns {Promise<Array<{ rowId, accountCode, oldHolding, newHolding, status, receivedDate }>>}
+ */
+export async function readSplitAccountRows(zcql, { isin, recordDateISO, r1, r2 }) {
+  const rows = [];
+  // ZCQL's OFFSET is 1-based, so each page repeats the previous page's last row.
+  const seenRowIds = new Set();
+  let offset = 0;
+
+  while (true) {
+    const batch = await zcql.executeZCQLQuery(`
+      SELECT ROWID, WS_Account_code, Old_Holding, New_Holding, Status, Received_Date
+      FROM Split_Account
+      WHERE ISIN = '${escSql(isin)}'
+        AND Record_Date = '${escSql(recordDateISO)}'
+        AND Ratio1 = ${Number(r1)}
+        AND Ratio2 = ${Number(r2)}
+      ORDER BY ROWID ASC
+      LIMIT ${SPLIT_ACCOUNT_BATCH} OFFSET ${offset}
+    `);
+    if (!batch || batch.length === 0) break;
+
+    for (const row of batch) {
+      const s = row.Split_Account || row;
+      if (seenRowIds.has(s.ROWID)) continue;
+      seenRowIds.add(s.ROWID);
+      rows.push({
+        rowId: s.ROWID,
+        accountCode: String(s.WS_Account_code || "").trim(),
+        oldHolding: Number(s.Old_Holding) || 0,
+        newHolding: Number(s.New_Holding) || 0,
+        status: String(s.Status || "").trim().toUpperCase(),
+        receivedDate: String(s.Received_Date || "").slice(0, 10),
+      });
+    }
+
+    if (batch.length < SPLIT_ACCOUNT_BATCH) break;
+    offset += SPLIT_ACCOUNT_BATCH;
+  }
+
+  return rows;
+}
+
+/**
+ * Where a split event is in the custodian reconciliation:
+ *   NEW        — not yet compared with the Ex-Entitlement file (stage 1)
+ *   RECEIVABLE — sent as receivable, waiting for the Benefit Collection file (stage 2)
+ *   RECEIVED   — confirmed and applied. Rows with no Status belong to a split
+ *                applied before this reconciliation existed, so they count too.
+ */
+export function splitStage(splitAccountRows) {
+  if (splitAccountRows.some((r) => r.status === SPLIT_STATUS.RECEIVABLE)) return "RECEIVABLE";
+  if (splitAccountRows.length > 0) return "RECEIVED";
+  return "NEW";
+}
 
 /** Exclusive next-day cutoff, stepped in UTC so the local zone cannot shift it. */
 const nextISODate = (isoDate) => {

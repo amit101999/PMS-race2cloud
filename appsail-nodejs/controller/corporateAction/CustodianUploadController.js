@@ -16,8 +16,16 @@ import { Readable } from "stream";
 import csvParser from "csv-parser";
 
 import { computeBonusPreviewRows } from "../../util/analytics/bonusPreviewCalc.js";
-import { computeSplitPreviewRows } from "../../util/analytics/splitPreviewCalc.js";
-import { checkEvent, compareHoldings, comparisonToCsv } from "../../util/corporateAction/compareCustodian.js";
+import { computeSplitPreviewRows, readSplitAccountRows, SPLIT_STATUS } from "../../util/analytics/splitPreviewCalc.js";
+import {
+  checkEvent,
+  checkRecordDate,
+  compareHoldings,
+  compareReceipts,
+  comparisonToCsv,
+  receiptsToCsv,
+} from "../../util/corporateAction/compareCustodian.js";
+import { buildVirtualToActualMap } from "../../util/mapVirtualToActualCodes.js";
 import { parseDate, num, stripIsinSuffix } from "../../util/custodian/parseCustodianCsv.js";
 import { FIELD_CATALOG, PROFILE_TYPE } from "../../util/custodyMatch/fieldMap.js";
 import { STRATUS_GET_URL_OPTS, stratusSignedUrlToString } from "../../util/stratusSignedUrl.js";
@@ -171,6 +179,8 @@ const CA_TYPE_DESCR = {
 const DIVIDEND_FIELDS = ["caRefNo", "exDate", "tentativePaymentDate", "dividendRate", "caAmt"];
 /** Without a rate and an amount the Dividend reconciliation would compare against zeros. */
 const DIVIDEND_REQUIRED_FIELDS = ["dividendRate", "caAmt"];
+/** Split compares the CA quantity too; without it every client would show as a break. */
+const SPLIT_REQUIRED_FIELDS = ["caQty"];
 
 /** The columns the Split / Bonus comparison reads (see CORP_ACTION_REQUIRED_FIELDS in fieldMap.js), plus Dividend's. */
 const COMPARE_FIELDS = [
@@ -182,9 +192,10 @@ const COMPARE_FIELDS = [
   "recordDate",
   "ratio",
   "holdingQty",
+  "caQty",
   ...DIVIDEND_FIELDS,
 ];
-const OPTIONAL_COMPARE_FIELDS = ["clientName", "isinName", ...DIVIDEND_FIELDS];
+const OPTIONAL_COMPARE_FIELDS = ["clientName", "isinName", "caQty", ...DIVIDEND_FIELDS];
 
 const MONTHS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
 
@@ -228,7 +239,7 @@ const newestCorpActionFile = async (bucket, kind = "entitlement") => {
  * @param {object} catalystApp
  * @param {{ caType: "split"|"bonus"|"dividend", isin: string }} filter
  * @returns {Promise<{ file: object, rows: Array<{
- *   accountCode, clientName, isin, isinName, recordDate, ratio, holdingQty,
+ *   accountCode, clientName, isin, isinName, recordDate, ratio, holdingQty, caQty,
  *   caRefNo, exDate, paymentDate, dividendRate, caAmt }> }>}
  */
 export const readLatestCorpActionRows = async (catalystApp, { caType, isin }) => {
@@ -256,7 +267,9 @@ export const readLatestCorpActionRows = async (catalystApp, { caType, isin }) =>
     if (source?.by === "name") index = normHeaders.indexOf(normHeader(source.name));
     if (source?.by === "index") index = Number(source.index);
     if (index < 0 || index >= headers.length) {
-      const required = caType === "dividend" && DIVIDEND_REQUIRED_FIELDS.includes(field);
+      const required =
+        (caType === "dividend" && DIVIDEND_REQUIRED_FIELDS.includes(field)) ||
+        (caType === "split" && SPLIT_REQUIRED_FIELDS.includes(field));
       if (OPTIONAL_COMPARE_FIELDS.includes(field) && !required) continue;
       throw Object.assign(
         new Error(`The custodian file ${file.fileName} has no column mapped for "${field}". Re-map and upload it again.`),
@@ -281,6 +294,7 @@ export const readLatestCorpActionRows = async (catalystApp, { caType, isin }) =>
       recordDate: toIsoDate(cell(cells, "recordDate")),
       ratio: cell(cells, "ratio"),
       holdingQty: num(cell(cells, "holdingQty")),
+      caQty: num(cell(cells, "caQty")),
       caRefNo: cell(cells, "caRefNo"),
       exDate: toIsoDate(cell(cells, "exDate")),
       paymentDate: toIsoDate(cell(cells, "tentativePaymentDate")),
@@ -353,6 +367,48 @@ export const readLatestAllocationRows = async (catalystApp, { isin }) => {
 };
 
 /**
+ * The newest Corporate Benefit Collection file's Split rows for one ISIN, with
+ * the quantities and dates the Split stage-2 comparison reads.
+ *
+ * Throws an Error with `code` when the file cannot be used, like readLatestCorpActionRows.
+ *
+ * @returns {Promise<{ file: object, rows: Array<{ accountCode, isinName, caRefNo, recordDate,
+ *   caQty, receivedQty, balanceQty, receivedDate, eventStatus }> }>}
+ */
+export const readLatestSplitReceiptRows = async (catalystApp, { isin }) => {
+  const { file, rows } = await readLatestAllocationRows(catalystApp, { isin });
+
+  // The file lists every corporate action type; without these every row would be a guess.
+  const sample = rows[0] || {};
+  for (const field of ["clientUccCode", "caTypeDescription", "recordDate", "receivedQty"]) {
+    if (rows.length > 0 && sample[field] === undefined) {
+      throw Object.assign(
+        new Error(
+          `The Corporate Benefit Collection file ${file.fileName} has no column mapped for "${field}". Re-map and upload it again.`,
+        ),
+        { code: "FIELD_NOT_MAPPED" },
+      );
+    }
+  }
+
+  const splitRows = rows
+    .filter((row) => CA_TYPE_DESCR.split.includes(String(row.caTypeDescription || "").toLowerCase()))
+    .map((row) => ({
+      accountCode: String(row.clientUccCode || "").toUpperCase(),
+      isinName: row.isinName || "",
+      caRefNo: row.caRefNo || "",
+      recordDate: toIsoDate(row.recordDate),
+      caQty: num(row.caQty),
+      receivedQty: num(row.receivedQty),
+      balanceQty: num(row.balanceQty),
+      receivedDate: toIsoDate(row.receivedDate) || "",
+      eventStatus: row.eventStatus || "",
+    }));
+
+  return { file, rows: splitRows };
+};
+
+/**
  * GET /api/custodian-upload/latest?caType=split|bonus|dividend&isin=...
  * GET /api/custodian-upload/latest?kind=allocation&isin=...
  * Which custodian file a module will use, and how many of its rows apply.
@@ -381,6 +437,21 @@ export const getLatestForCorpAction = async (req, res) => {
 
 const PREVIEW_ROWS = 10;
 const DIFFERENCE_FOLDER = "CA-Differences";
+
+/**
+ * Split keeps one history per reconciliation stage, listed on the Split page:
+ *   <folder>/<record date>/<ms>-<ISIN>.csv
+ */
+export const SPLIT_DIFFERENCE_FOLDERS = {
+  entitlement: `${DIFFERENCE_FOLDER}/split-entitlement`,
+  benefit: `${DIFFERENCE_FOLDER}/split-benefit`,
+};
+
+/** Store a differential CSV and return a signed URL to download it. */
+const saveDifferenceFile = async (bucket, key, csv) => {
+  await bucket.putObject(key, csv, { contentType: "text/csv", overwrite: true });
+  return stratusSignedUrlToString(await bucket.generatePreSignedUrl(key, "GET", STRATUS_GET_URL_OPTS));
+};
 
 /**
  * POST /api/split/compare-custodian and /api/bonus/compare-custodian
@@ -431,20 +502,22 @@ export const compareWithCustodian = (caType) => async (req, res) => {
     const { error, warnings } = checkEvent({ custodyRows, recordDateISO, pageRatio, pageRatioLabel });
     if (error) return fail(res, 409, { code: "RECORD_DATE_MISMATCH", file, message: error });
 
+    // Split also compares the CA quantity (total shares after the split).
+    const withCaQty = caType === "split";
     const { rows, counts } = compareHoldings({
       previewRows,
       custodyRows,
       isin,
       isinName: String(req.body?.securityName || ""),
       recordDateISO,
+      withCaQty,
     });
 
     const bucket = getBucket(catalystApp);
-    const reportKey = `${DIFFERENCE_FOLDER}/${safeFileName(isin)}/${caType}-${Date.now()}.csv`;
-    await bucket.putObject(reportKey, comparisonToCsv(rows), { contentType: "text/csv", overwrite: true });
-    const downloadUrl = stratusSignedUrlToString(
-      await bucket.generatePreSignedUrl(reportKey, "GET", STRATUS_GET_URL_OPTS),
-    );
+    const reportKey = withCaQty
+      ? `${SPLIT_DIFFERENCE_FOLDERS.entitlement}/${recordDateISO}/${Date.now()}-${safeFileName(isin)}.csv`
+      : `${DIFFERENCE_FOLDER}/${safeFileName(isin)}/${caType}-${Date.now()}.csv`;
+    const downloadUrl = await saveDifferenceFile(bucket, reportKey, comparisonToCsv(rows, { withCaQty }));
 
     return res.json({
       success: true,
@@ -458,6 +531,84 @@ export const compareWithCustodian = (caType) => async (req, res) => {
     if (error.code) return fail(res, 409, { code: error.code, message: error.message });
     console.error(`[CustodianUpload] compareWithCustodian(${caType}):`, error);
     return fail(res, 500, { message: error.message || "Could not compare with the custodian file." });
+  }
+};
+
+/**
+ * POST /api/split/compare-benefit
+ * body: { isin, ratio1, ratio2, recordDate, securityName }
+ *
+ * Split stage 2: the accounts marked Receivable for this split vs the newest
+ * Corporate Benefit Collection file. Only reachable once stage 1 (Send as
+ * Receivable) has run for the same ISIN, record date and ratio.
+ */
+export const compareSplitWithBenefit = async (req, res) => {
+  try {
+    const isin = String(req.body?.isin || "").trim();
+    const recordDateISO = String(req.body?.recordDate || "").trim().slice(0, 10);
+    const r1 = Number(req.body?.ratio1);
+    const r2 = Number(req.body?.ratio2);
+    if (!isin || !DATE_PATTERN.test(recordDateISO) || !(r1 > 0) || !(r2 > 0)) {
+      return fail(res, 400, { code: "BAD_INPUT", message: "ISIN, ratio and a yyyy-mm-dd record date are required." });
+    }
+
+    const catalystApp = req.catalystApp;
+    const zcql = catalystApp.zcql();
+
+    const splitAccountRows = await readSplitAccountRows(zcql, { isin, recordDateISO, r1, r2 });
+    const receivable = splitAccountRows.filter((r) => r.status === SPLIT_STATUS.RECEIVABLE);
+    if (receivable.length === 0) {
+      return fail(res, 409, {
+        code: "NOT_RECEIVABLE",
+        message:
+          `Record Date mismatch: ${isin} with Record Date ${recordDateISO} has not been compared with the ` +
+          "Ex-Entitlement file yet. Compare with the entitlement file and send it as receivable first, then do this step.",
+      });
+    }
+
+    const { file, rows: allocationRows } = await readLatestSplitReceiptRows(catalystApp, { isin });
+    if (allocationRows.length === 0) {
+      return fail(res, 409, {
+        code: "NO_CUSTODIAN_ROWS",
+        file,
+        message: `The Corporate Benefit Collection file ${file.fileName} has no Split rows for ${isin}.`,
+      });
+    }
+
+    const dateError = checkRecordDate(allocationRows, recordDateISO);
+    if (dateError) return fail(res, 409, { code: "RECORD_DATE_MISMATCH", file, message: dateError });
+
+    // Split_Account is per virtual code; the custodian knows the actual (UCC) code.
+    const virtualToActual = await buildVirtualToActualMap(
+      zcql,
+      receivable.map((r) => r.accountCode),
+    );
+    const { rows, counts } = compareReceipts({
+      receivableRows: receivable.map((r) => ({
+        accountCode: virtualToActual.get(r.accountCode) || r.accountCode,
+        newHolding: r.newHolding,
+      })),
+      allocationRows,
+      isin,
+      isinName: String(req.body?.securityName || ""),
+      recordDateISO,
+    });
+
+    const reportKey = `${SPLIT_DIFFERENCE_FOLDERS.benefit}/${recordDateISO}/${Date.now()}-${safeFileName(isin)}.csv`;
+    const downloadUrl = await saveDifferenceFile(getBucket(catalystApp), reportKey, receiptsToCsv(rows));
+
+    return res.json({
+      success: true,
+      file,
+      counts,
+      warnings: [],
+      rows: rows.slice(0, PREVIEW_ROWS),
+      downloadUrl,
+    });
+  } catch (error) {
+    if (error.code) return fail(res, 409, { code: error.code, message: error.message });
+    console.error("[CustodianUpload] compareSplitWithBenefit:", error);
+    return fail(res, 500, { message: error.message || "Could not compare with the Corporate Benefit Collection file." });
   }
 };
 

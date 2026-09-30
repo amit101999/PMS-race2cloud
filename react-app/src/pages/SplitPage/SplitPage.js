@@ -3,7 +3,8 @@
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import MainLayout from "../../layouts/MainLayout";
 import DownloadButton from "../../components/common/DownloadButton";
-import CustodianComparePanel from "../CustodianUploadPage/CustodianComparePanel";
+import PreviousFiles from "../HoldingComparison/holdingComparison/PreviousFiles";
+import SplitReconcilePanel from "./SplitReconcilePanel";
 import "./SplitPage.css";
 import "../TempTransactionUpload/tokens.css";
 import "../TempTransactionUpload/TempTransaction.css";
@@ -13,6 +14,22 @@ import { BASE_URL } from "../../constant";
 import { useJobNotifications } from "../../notifications/JobNotificationContext";
 
 const numberFormat = new Intl.NumberFormat(undefined, { maximumFractionDigits: 4 });
+
+/** Split_Account.Status as shown in the preview. Blank = not yet sent (or applied before statuses existed). */
+const STATUS_LABEL = { RECEIVABLE: "Receivable", RECEIVED: "Received" };
+const statusLabel = (status) => STATUS_LABEL[status] || "—";
+
+/** GET a split endpoint, throwing the server's message on failure (PreviousFiles shows it). */
+const getSplitJson = async (path) => {
+  const res = await fetch(`${BASE_URL}/split/${path}`);
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok || !body.success) throw new Error(body.message || `Request failed (${res.status}).`);
+  return body;
+};
+// Module-level so PreviousFiles does not reload on every render.
+const loadEntitlementHistory = () => getSplitJson("history?stage=entitlement");
+const loadBenefitHistory = () => getSplitJson("history?stage=benefit");
+const getHistoryDownloadUrl = (key) => getSplitJson(`history/download?key=${encodeURIComponent(key)}`);
 
 /** Maps GET /split/job-status → the notification system's vocabulary. */
 function parseSplitStatus(d) {
@@ -46,6 +63,9 @@ function SplitPage() {
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewData, setPreviewData] = useState([]);
   const [showPreview, setShowPreview] = useState(false);
+  // Custodian reconciliation stage of the previewed split: NEW | RECEIVABLE | RECEIVED.
+  const [stage, setStage] = useState("NEW");
+  const [historyToken, setHistoryToken] = useState(0);
 
   const [exportLoading, setExportLoading] = useState(false);
   const [exportDownloadUrl, setExportDownloadUrl] = useState("");
@@ -70,6 +90,10 @@ function SplitPage() {
   const { trackJob, reportJob } = useJobNotifications();
 
   useEffect(() => setPage(1), [previewData]);
+
+  // The preview, its status and the reconciliation panel describe the inputs
+  // they were fetched with; changing one means fetching again.
+  useEffect(() => setShowPreview(false), [isin, ratio1, ratio2, recordDate]);
 
   // yyyy-mm-dd strings compare correctly as text.
   const datesOutOfOrder = Boolean(recordDate && effectiveDate && effectiveDate < recordDate);
@@ -96,6 +120,8 @@ function SplitPage() {
           currentHolding: 0,
           newHolding: 0,
           delta: 0,
+          statuses: new Set(),
+          receivedDate: "",
           children: [],
         };
         groups.set(key, g);
@@ -103,10 +129,13 @@ function SplitPage() {
       if (!g.actualCode && actual) g.actualCode = actual;
       g.currentHolding += Number(row.currentHolding) || 0;
       g.newHolding += Number(row.newHolding) || 0;
+      g.statuses.add(statusLabel(row.status));
+      if (row.receivedDate && row.receivedDate > g.receivedDate) g.receivedDate = row.receivedDate;
       g.children.push(row);
     }
     for (const g of groups.values()) {
       g.delta = g.newHolding - g.currentHolding;
+      g.statusText = [...g.statuses].join(" / ");
     }
     return [...groups.values()];
   }, [previewData]);
@@ -160,6 +189,7 @@ function SplitPage() {
       const data = await res.json();
 
       setPreviewData(data.data || []);
+      setStage(data.stage || "NEW");
       setShowPreview(true);
     } catch (err) {
       setError(err.message);
@@ -496,6 +526,8 @@ function SplitPage() {
                       <th className="num">Current Holding</th>
                       <th className="num">New Holding</th>
                       <th className="num">Δ Change</th>
+                      <th>Status</th>
+                      <th>Received Date</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -527,6 +559,8 @@ function SplitPage() {
                               {group.delta > 0 ? "+" : ""}
                               {numberFormat.format(group.delta)}
                             </td>
+                            <td>{group.statusText}</td>
+                            <td>{group.receivedDate || "—"}</td>
                           </tr>
 
                           {isOpen &&
@@ -548,6 +582,8 @@ function SplitPage() {
                                   {row.delta > 0 ? "+" : ""}
                                   {numberFormat.format(row.delta)}
                                 </td>
+                                <td>{statusLabel(row.status)}</td>
+                                <td>{row.receivedDate || "—"}</td>
                               </tr>
                             ))}
                         </React.Fragment>
@@ -623,29 +659,43 @@ function SplitPage() {
                     if (exportDownloadUrl) window.open(exportDownloadUrl, "_blank");
                   }}
                 />
-                <button
-                  type="button"
-                  className="cm-primary"
-                  disabled={loading || datesOutOfOrder}
-                  onClick={handleSubmit}
-                >
-                  {loading ? "Applying…" : "Confirm & Apply Split"}
-                </button>
               </div>
             </>
           )}
         </div>
       )}
-      {showPreview && (
-        <CustodianComparePanel
-          caType="split"
+      {showPreview && previewData.length > 0 && (
+        <SplitReconcilePanel
+          stage={stage}
           isin={isin}
+          securityCode={securityCode}
           securityName={securityName}
           ratio1={ratio1}
           ratio2={ratio2}
           recordDate={recordDate}
+          effectiveDate={effectiveDate}
+          confirming={loading}
+          onConfirm={handleSubmit}
+          onReceivableSent={handlePreview}
+          onCompared={() => setHistoryToken((t) => t + 1)}
         />
       )}
+      <PreviousFiles
+        title="Stage 1 · Ex-Entitlement Comparison History"
+        load={loadEntitlementHistory}
+        getDownloadUrl={getHistoryDownloadUrl}
+        dateLabel="Record date"
+        emptyText="No Ex-Entitlement comparisons yet."
+        refreshToken={historyToken}
+      />
+      <PreviousFiles
+        title="Stage 2 · Corporate Benefit Collection Comparison History"
+        load={loadBenefitHistory}
+        getDownloadUrl={getHistoryDownloadUrl}
+        dateLabel="Record date"
+        emptyText="No Corporate Benefit Collection comparisons yet."
+        refreshToken={historyToken}
+      />
       </div>
     </MainLayout>
 
