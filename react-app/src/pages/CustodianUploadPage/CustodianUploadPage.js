@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
 
+import DownloadButton from "../../components/common/DownloadButton";
 import { BASE_URL } from "../../constant";
 import MainLayout from "../../layouts/MainLayout";
 import { ApiError, PROFILE_TYPE, formatBytes, todayIso } from "../TempTransactionUpload/custody/api";
@@ -46,8 +47,9 @@ const when = (ms) => new Date(ms).toLocaleString(undefined, { dateStyle: "medium
  * @param {string} profileType                 the mapping type the popup edits
  * @param {string} businessDate                yyyy-mm-dd from the page's Date picker
  * @param {(kind: string, busy: boolean) => void} onBusyChange  lets the page lock the Date picker
+ * @param {(kind: string, change: {added?: object, removed?: object}) => void} onFileChange  keeps Previous Uploads current
  */
-const CustodianFileCard = ({ kind, title, listHeading, profileType, businessDate, onBusyChange }) => {
+const CustodianFileCard = ({ kind, title, listHeading, profileType, businessDate, onBusyChange, onFileChange }) => {
     const [storedFile, setStoredFile] = useState(null);
     const [loading, setLoading] = useState(false);
     const [uploading, setUploading] = useState(false);
@@ -86,6 +88,7 @@ const CustodianFileCard = ({ kind, title, listHeading, profileType, businessDate
         setNote("");
         try {
             await request(`/file?key=${encodeURIComponent(storedFile.key)}`, { method: "DELETE" });
+            onFileChange(kind, { removed: storedFile });
             setStoredFile(null);
         } catch (err) {
             setError({ message: err.message, detail: err.detail });
@@ -110,6 +113,7 @@ const CustodianFileCard = ({ kind, title, listHeading, profileType, businessDate
             form.append("kind", kind);
             const res = await request("/file", { method: "POST", body: form });
             setStoredFile(res.file);
+            onFileChange(kind, { added: res.file });
             setNote(`${res.message} ${res.rowCount.toLocaleString()} row(s) read.`);
             return res;
         } finally {
@@ -215,6 +219,106 @@ const CustodianFileCard = ({ kind, title, listHeading, profileType, businessDate
 };
 
 /**
+ * The last 10 uploads of one custodian file kind, for download.
+ *
+ * `change` is the card's latest upload or removal. Stratus's listing lags a
+ * write or delete by around twenty seconds, so it is applied to the list here
+ * rather than re-fetching straight away.
+ */
+const PreviousUploads = ({ kind, title, change }) => {
+    const [items, setItems] = useState([]);
+    const [loading, setLoading] = useState(false);
+    const [error, setError] = useState("");
+    const [busyKey, setBusyKey] = useState("");
+
+    useEffect(() => {
+        let cancelled = false;
+        setLoading(true);
+        request(`/history?kind=${kind}`)
+            .then((res) => !cancelled && setItems(res.items || []))
+            .catch((err) => !cancelled && setError(err.message))
+            .finally(() => !cancelled && setLoading(false));
+        return () => {
+            cancelled = true;
+        };
+    }, [kind]);
+
+    useEffect(() => {
+        if (change?.added) {
+            setItems((prev) => [change.added, ...prev.filter((i) => i.key !== change.added.key)].slice(0, 10));
+        }
+        if (change?.removed) {
+            // Removing a file deletes every upload of this kind for its date.
+            setItems((prev) => prev.filter((i) => i.businessDate !== change.removed.businessDate));
+        }
+    }, [change]);
+
+    const download = async (item) => {
+        setBusyKey(item.key);
+        setError("");
+        try {
+            const res = await request(`/download?key=${encodeURIComponent(item.key)}`);
+            window.open(res.downloadUrl, "_blank", "noopener,noreferrer");
+        } catch (err) {
+            setError(err.message);
+        } finally {
+            setBusyKey("");
+        }
+    };
+
+    return (
+        <div className="temp-transaction-card upload-history-card">
+            <h3>{title}</h3>
+
+            {error ? (
+                <p className="upload-history-error" role="alert">
+                    {error}
+                </p>
+            ) : null}
+
+            <div className="data-table-wrap">
+                <table className="data-table data-table--spread">
+                    <thead>
+                        <tr>
+                            <th className="date">Uploaded on</th>
+                            <th className="date">Business date</th>
+                            <th className="truncate">File name</th>
+                            <th className="num">Size</th>
+                            <th className="action">Download</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {loading && items.length === 0 ? (
+                            <tr>
+                                <td colSpan={5} className="empty-cell">Loading…</td>
+                            </tr>
+                        ) : items.length === 0 ? (
+                            <tr>
+                                <td colSpan={5} className="empty-cell">{error ? "—" : "No files uploaded yet."}</td>
+                            </tr>
+                        ) : (
+                            items.map((item) => (
+                                <tr key={item.key}>
+                                    <td className="date">{when(item.timeMs)}</td>
+                                    <td className="date">{item.businessDate}</td>
+                                    <td className="truncate mono" title={item.fileName}>
+                                        {item.fileName}
+                                    </td>
+                                    <td className="num">{formatBytes(item.sizeBytes)}</td>
+                                    <td className="action">
+                                        <DownloadButton onClick={() => download(item)} busy={busyKey === item.key} />
+                                    </td>
+                                </tr>
+                            ))
+                        )}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    );
+};
+
+/**
  * Corporate Actions -> Custodian Upload.
  *
  * Two custodian files per date, each mapped and stored on its own:
@@ -231,6 +335,10 @@ const CustodianUploadPage = () => {
         [],
     );
     const anyBusy = Object.values(busyKinds).some(Boolean);
+
+    /* Each card's latest upload or removal, passed to its Previous Uploads table. */
+    const [fileChanges, setFileChanges] = useState({});
+    const onFileChange = React.useCallback((kind, change) => setFileChanges((prev) => ({ ...prev, [kind]: change })), []);
 
     return (
         <MainLayout title="Custodian Upload">
@@ -258,6 +366,7 @@ const CustodianUploadPage = () => {
                             profileType={PROFILE_TYPE.CUSTODY_CORP_ACTION}
                             businessDate={businessDate}
                             onBusyChange={onBusyChange}
+                            onFileChange={onFileChange}
                         />
                     </div>
                     <div className="cm-col">
@@ -268,9 +377,21 @@ const CustodianUploadPage = () => {
                             profileType={PROFILE_TYPE.CUSTODY_CORP_ALLOCATION}
                             businessDate={businessDate}
                             onBusyChange={onBusyChange}
+                            onFileChange={onFileChange}
                         />
                     </div>
                 </div>
+
+                <PreviousUploads
+                    kind="entitlement"
+                    title="Previous CA Custodian Entitlement File Uploads"
+                    change={fileChanges.entitlement}
+                />
+                <PreviousUploads
+                    kind="allocation"
+                    title="Previous CA Custodian Allocation File Uploads"
+                    change={fileChanges.allocation}
+                />
             </div>
         </MainLayout>
     );

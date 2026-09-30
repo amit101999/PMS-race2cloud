@@ -3,8 +3,10 @@ import fileUpload from "express-fileupload";
 
 import {
   deleteCustodianFile,
+  downloadCustodianFile,
   getDay,
   getLatestForCorpAction,
+  listHistory,
   uploadCustodianFile,
 } from "../controller/corporateAction/CustodianUploadController.js";
 
@@ -34,6 +36,12 @@ router.get("/day/:date", getDay);
 // GET /api/custodian-upload/latest?caType=split|bonus|dividend&isin= — newest entitlement file + its matching row count
 // GET /api/custodian-upload/latest?kind=allocation&isin= — newest allocation file + its row count for the ISIN
 router.get("/latest", getLatestForCorpAction);
+
+// GET /api/custodian-upload/history?kind= — the last 10 uploads of that kind, for Previous Uploads
+router.get("/history", listHistory);
+
+// GET /api/custodian-upload/download?key=... — presigned URL for one uploaded file
+router.get("/download", downloadCustodianFile);
 
 // POST /api/custodian-upload/file (form field kind) — check against the saved mapping and store
 router.post("/file", uploadCustodianFile);

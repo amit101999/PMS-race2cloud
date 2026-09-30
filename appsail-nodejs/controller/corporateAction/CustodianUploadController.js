@@ -498,6 +498,52 @@ export const getDay = async (req, res) => {
   }
 };
 
+const HISTORY_LIMIT = 5;
+
+/**
+ * GET /api/custodian-upload/history?kind=entitlement|allocation
+ * The newest uploads of one kind across every date, newest first, for download.
+ * Replaced uploads for a date are listed too; removed ones are gone from storage.
+ */
+export const listHistory = async (req, res) => {
+  try {
+    const kind = kindFrom(req.query?.kind);
+    const items = (await listAll(getBucket(req.catalystApp), `${FILE_KINDS[kind].folder}/`))
+      .map((item) => {
+        const parsed = parseKey(item.key);
+        return parsed ? { ...parsed, sizeBytes: item.sizeBytes } : null;
+      })
+      .filter(Boolean)
+      .sort((a, b) => b.timeMs - a.timeMs)
+      .slice(0, HISTORY_LIMIT);
+    return res.json({ success: true, items });
+  } catch (error) {
+    if (error.code === "BAD_KIND") return fail(res, 400, { code: error.code, message: error.message });
+    console.error("[CustodianUpload] listHistory:", error);
+    return fail(res, 500, { message: error.message || "Could not list previous uploads." });
+  }
+};
+
+/** GET /api/custodian-upload/download?key=... — one-hour presigned URL */
+export const downloadCustodianFile = async (req, res) => {
+  try {
+    const parsed = parseKey(String(req.query?.key || "").trim());
+    // Only this page's own files, so the endpoint cannot hand out arbitrary objects.
+    if (!parsed) {
+      return fail(res, 400, { code: "BAD_KEY", message: "That file cannot be downloaded here." });
+    }
+    const raw = await getBucket(req.catalystApp).generatePreSignedUrl(parsed.key, "GET", STRATUS_GET_URL_OPTS);
+    const downloadUrl = stratusSignedUrlToString(raw);
+    if (!downloadUrl) {
+      return fail(res, 404, { code: "NOT_FOUND", message: "Could not prepare the download." });
+    }
+    return res.json({ success: true, key: parsed.key, downloadUrl });
+  } catch (error) {
+    console.error("[CustodianUpload] downloadCustodianFile:", error);
+    return fail(res, 500, { message: error.message || "Could not prepare the download." });
+  }
+};
+
 /**
  * DELETE /api/custodian-upload/file?key=...
  *
