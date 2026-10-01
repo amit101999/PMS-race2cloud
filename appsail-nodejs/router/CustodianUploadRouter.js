@@ -6,6 +6,7 @@ import {
   downloadCustodianFile,
   getDay,
   getLatestForCorpAction,
+  importMissingFiles,
   listHistory,
   uploadCustodianFile,
 } from "../controller/corporateAction/CustodianUploadController.js";
@@ -30,11 +31,10 @@ router.use(
 
 // `kind` = entitlement (default) | allocation picks which of the two custodian files.
 
-// GET /api/custodian-upload/day/:date?kind= — the newest file of that kind uploaded for the date
+// GET /api/custodian-upload/day/:date?kind= — the newest file of that kind uploaded for the date, with its import status
 router.get("/day/:date", getDay);
 
-// GET /api/custodian-upload/latest?caType=split|bonus|dividend&isin= — newest entitlement file + its matching row count
-// GET /api/custodian-upload/latest?kind=allocation&isin= — newest allocation file + its row count for the ISIN
+// GET /api/custodian-upload/latest?kind=&caType=split|bonus|dividend&isin=&recordDate= — the uploaded file holding that event + its row count
 router.get("/latest", getLatestForCorpAction);
 
 // GET /api/custodian-upload/history?kind= — the last 5 uploads of that kind, for Previous Uploads
@@ -43,8 +43,11 @@ router.get("/history", listHistory);
 // GET /api/custodian-upload/download?key=... — presigned URL for one uploaded file
 router.get("/download", downloadCustodianFile);
 
-// POST /api/custodian-upload/file (form field kind) — check against the saved mapping and store
+// POST /api/custodian-upload/file (form fields kind, replace) — check against the saved mapping, store and import
 router.post("/file", uploadCustodianFile);
+
+// POST /api/custodian-upload/import-missing — import stored files that have no table import yet
+router.post("/import-missing", importMissingFiles);
 
 // DELETE /api/custodian-upload/file?key=... — remove the file (every upload of its kind for its date)
 router.delete("/file", deleteCustodianFile);

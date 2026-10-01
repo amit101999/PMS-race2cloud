@@ -33,6 +33,15 @@ async function request(path, options) {
 
 const when = (ms) => new Date(ms).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
 
+/** A stored file's table import, as a badge. Modules can read the file only once it is Ready. */
+const IMPORT_BADGE = {
+    DONE: [STATUS.OK, "Ready"],
+    IMPORTING: [STATUS.PROCESSING, "Importing…"],
+    FAILED: [STATUS.BAD, "Import failed"],
+};
+const NOT_IMPORTED_BADGE = [STATUS.WARN, "Not imported"];
+const IMPORT_POLL_MS = 10000;
+
 /**
  * One custodian file: its upload box, the file stored for the date, and its
  * Field Mapping popup.
@@ -81,6 +90,21 @@ const CustodianFileCard = ({ kind, title, listHeading, profileType, businessDate
         };
     }, [businessDate, kind]);
 
+    // The rows are imported in the background after an upload; ask again until it finishes.
+    const importing = storedFile?.importStatus === "IMPORTING";
+    useEffect(() => {
+        if (!importing) return undefined;
+        const timer = setInterval(() => {
+            request(`/day/${businessDate}?kind=${kind}`)
+                .then((res) =>
+                    // The listing lags a fresh upload, so only take news about the file shown.
+                    setStoredFile((prev) => (res.file && prev && res.file.key === prev.key ? res.file : prev)),
+                )
+                .catch(() => {});
+        }, IMPORT_POLL_MS);
+        return () => clearInterval(timer);
+    }, [importing, businessDate, kind]);
+
     const removeStoredFile = async () => {
         if (!window.confirm(`Remove ${storedFile.fileName} (${storedFile.businessDate})?`)) return;
         setRemoving(true);
@@ -103,14 +127,19 @@ const CustodianFileCard = ({ kind, title, listHeading, profileType, businessDate
         setMappingFile(file);
     };
 
-    /** Called by the popup. Throws on failure so the popup shows the error and stays open. */
-    const uploadMappedFile = async () => {
+    /**
+     * Called by the popup. Throws on failure so the popup shows the error and
+     * stays open; for the same file uploaded before (DUPLICATE_FILE) the popup
+     * asks, and calls again with replace = true.
+     */
+    const uploadMappedFile = async ({ replace } = {}) => {
         setUploading(true);
         try {
             const form = new FormData();
             form.append("file", mappingFile);
             form.append("businessDate", businessDate);
             form.append("kind", kind);
+            if (replace) form.append("replace", "true");
             const res = await request("/file", { method: "POST", body: form });
             setStoredFile(res.file);
             onFileChange(kind, { added: res.file });
@@ -183,7 +212,9 @@ const CustodianFileCard = ({ kind, title, listHeading, profileType, businessDate
                                     {when(storedFile.timeMs)}
                                 </span>
                             </div>
-                            <StatusBadge tone={STATUS.OK}>Ready</StatusBadge>
+                            <StatusBadge tone={(IMPORT_BADGE[storedFile.importStatus] || NOT_IMPORTED_BADGE)[0]}>
+                                {(IMPORT_BADGE[storedFile.importStatus] || NOT_IMPORTED_BADGE)[1]}
+                            </StatusBadge>
                             <button
                                 type="button"
                                 className="up-file-remove"
@@ -202,6 +233,9 @@ const CustodianFileCard = ({ kind, title, listHeading, profileType, businessDate
             ) : null}
 
             {note ? <p className="cm-sub">{note}</p> : null}
+            {storedFile?.importStatus === "FAILED" ? (
+                <UploadErrorDetails message={storedFile.importError || "The file's rows could not be imported. Remove it and upload it again."} />
+            ) : null}
             {error ? <UploadErrorDetails message={error.message} detail={error.detail} /> : null}
 
             <FieldMappingPanel

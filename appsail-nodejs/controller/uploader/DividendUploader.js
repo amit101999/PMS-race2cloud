@@ -200,8 +200,9 @@ export const getAllSecuritiesISINs = async (req, res) => {
    * × rate, per account). The page shows it first.
    *
    * With `compare: true` it also reconciles against the custodian side: the
-   * newest file uploaded on Corporate Actions -> Custodian Upload, limited to
-   * its "Dividend In Cash" rows for this ISIN. It then ALSO returns:
+   * Ex-Entitlement rows uploaded on Corporate Actions -> Custodian Upload,
+   * limited to "Dividend In Cash" rows for this ISIN and record date (from the
+   * latest uploaded report that has them). It then ALSO returns:
    *   - custodianFile — which uploaded file was used.
    *   - events[]  — file rows grouped by (CARefNo, Rate) with reconciled
    *                 per-account rows merging FIFO + file + already-paid
@@ -246,9 +247,9 @@ export const getAllSecuritiesISINs = async (req, res) => {
       /* ======================================================
          STEP 0: READ THE CUSTODIAN FILE (compare only)
          Needed for the comparison, which is the only place dividends can be
-         applied from — we never apply from FIFO alone. It is the newest file
-         from the Custodian Upload page; only its "Dividend In Cash" rows for
-         this ISIN are used. The system report alone does not need it.
+         applied from — we never apply from FIFO alone. Only the "Dividend In
+         Cash" rows for this ISIN and record date are used, from the latest
+         report uploaded on the Custodian Upload page that has them. The system report alone does not need it.
          ====================================================== */
       const warnings = [];
       let custodian = null;
@@ -258,6 +259,7 @@ export const getAllSecuritiesISINs = async (req, res) => {
           custodian = await readLatestCorpActionRows(req.catalystApp, {
             caType: "dividend",
             isin,
+            recordDateISO,
           });
         } catch (fileErr) {
           if (!fileErr.code) throw fileErr;

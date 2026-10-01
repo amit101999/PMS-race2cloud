@@ -248,14 +248,14 @@ function DividendPage() {
     fetchAllSecurities();
   }, []);
 
-  // Which custodian file the preview will use, as soon as an ISIN is picked.
+  // Which uploaded custodian file holds this dividend (ISIN + record date), once both are picked.
   useEffect(() => {
     setCustodianInfo(null);
     setCustodianError("");
-    if (!isin) return undefined;
+    if (!isin || !recordDate) return undefined;
 
     let cancelled = false;
-    const params = new URLSearchParams({ caType: "dividend", isin });
+    const params = new URLSearchParams({ kind: "entitlement", caType: "dividend", isin, recordDate });
     fetch(`${BASE_URL}/custodian-upload/latest?${params.toString()}`)
       .then(async (res) => {
         const body = await res.json().catch(() => ({}));
@@ -267,7 +267,7 @@ function DividendPage() {
     return () => {
       cancelled = true;
     };
-  }, [isin]);
+  }, [isin, recordDate]);
 
   useEffect(() => {
     const handleClickOutside = (e) => {
@@ -849,9 +849,10 @@ function DividendPage() {
               {custodianError && <div className="cm-verdict bad">{custodianError}</div>}
               {custodianInfo && (
                 <div className={custodianInfo.rowCount ? "cm-verdict ok" : "cm-verdict warn"}>
-                  Custodian file fetched: <strong>{custodianInfo.file.fileName}</strong> · uploaded{" "}
-                  {new Date(custodianInfo.file.timeMs).toLocaleString()} · {custodianInfo.rowCount} Dividend In
-                  Cash row(s) for <span translate="no">{isin}</span>
+                  Custodian file fetched: <strong>{custodianInfo.file.fileName}</strong> · report date{" "}
+                  {custodianInfo.file.businessDate} · uploaded {new Date(custodianInfo.file.timeMs).toLocaleString()} ·{" "}
+                  {custodianInfo.rowCount} Dividend In Cash row(s) for <span translate="no">{isin}</span> with Record
+                  Date {recordDate}
                 </div>
               )}
             </div>
@@ -964,7 +965,9 @@ function DividendPage() {
               title={
                 !custodianInfo
                   ? custodianError ||
-                    "Upload the custodian file on Corporate Actions → Custodian Upload first."
+                    (recordDate
+                      ? "Upload the custodian file on Corporate Actions → Custodian Upload first."
+                      : "Enter the record date first.")
                   : ""
               }
               onClick={runCompare}

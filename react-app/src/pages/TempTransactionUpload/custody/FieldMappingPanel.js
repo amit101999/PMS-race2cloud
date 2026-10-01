@@ -788,10 +788,11 @@ export default function FieldMappingPanel({
             // The page below now owns the result; this panel is done.
             onClose();
         } catch (err) {
-            // The file is already stored for this date. Asked and answered here
-            // rather than back on the page, so the user is not bounced out of
-            // the modal half way through an upload they started in it.
-            if (err.detail?.code === "FILE_ALREADY_EXISTS") setConflict(err.detail);
+            // The file is already stored (for this date, or the same file
+            // uploaded before). Asked and answered here rather than back on the
+            // page, so the user is not bounced out of the modal half way
+            // through an upload they started in it.
+            if (["FILE_ALREADY_EXISTS", "DUPLICATE_FILE"].includes(err.detail?.code)) setConflict(err.detail);
             else setUploadError({ message: err.message, detail: err.detail });
         } finally {
             setUploading(false);

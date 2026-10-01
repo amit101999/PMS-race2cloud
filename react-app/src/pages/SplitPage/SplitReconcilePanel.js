@@ -57,14 +57,18 @@ const SplitReconcilePanel = ({
     const [result, setResult] = useState(null);
     const [compareError, setCompareError] = useState("");
 
-    // Which custodian file this stage will use.
+    // Which uploaded custodian file holds this split (ISIN + record date) for this stage.
     useEffect(() => {
         setFileInfo(null);
         setFileError("");
-        if (!isin || stage === "RECEIVED") return undefined;
+        if (!isin || !recordDate || stage === "RECEIVED") return undefined;
 
         let cancelled = false;
-        const params = new URLSearchParams(isBenefitStage ? { kind: "allocation", isin } : { caType: "split", isin });
+        const params = new URLSearchParams(
+            isBenefitStage
+                ? { kind: "allocation", caType: "split", isin, recordDate }
+                : { kind: "entitlement", caType: "split", isin, recordDate },
+        );
         fetch(`${BASE_URL}/custodian-upload/latest?${params.toString()}`)
             .then(async (res) => {
                 const body = await res.json().catch(() => ({}));
@@ -76,7 +80,7 @@ const SplitReconcilePanel = ({
         return () => {
             cancelled = true;
         };
-    }, [isin, stage, isBenefitStage, fileLabel]);
+    }, [isin, recordDate, stage, isBenefitStage, fileLabel]);
 
     // A result only describes the inputs and stage it was run with.
     useEffect(() => {
@@ -188,9 +192,10 @@ const SplitReconcilePanel = ({
                 {fileInfo ? (
                     <div className={fileInfo.rowCount ? "cm-verdict ok" : "cm-verdict warn"}>
                         {fileLabel} fetched: <strong className="cc-file-name">{fileInfo.file.fileName}</strong> ·
-                        uploaded {dateTimeFormat.format(new Date(fileInfo.file.timeMs))} ·{" "}
-                        {numberFormat.format(fileInfo.rowCount)} row(s) for <span translate="no">{isin}</span>
-                        {fileInfo.rowCount ? "" : ". Upload a file that includes this security to compare."}
+                        report date {fileInfo.file.businessDate} · uploaded{" "}
+                        {dateTimeFormat.format(new Date(fileInfo.file.timeMs))} ·{" "}
+                        {numberFormat.format(fileInfo.rowCount)} row(s) for <span translate="no">{isin}</span> with
+                        Record Date {recordDate}
                     </div>
                 ) : null}
             </div>

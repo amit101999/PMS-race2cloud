@@ -9,7 +9,6 @@ import {
   splitStage,
   SPLIT_STATUS,
 } from "../../util/analytics/splitPreviewCalc.js";
-import { checkRecordDate } from "../../util/corporateAction/compareCustodian.js";
 import {
   readLatestCorpActionRows,
   readLatestSplitReceiptRows,
@@ -373,16 +372,11 @@ const updateSplitAccountRows = async (zcql, rowIds, assignments) => {
 const planSplitReceipt = async (app, zcql, { isin, recordDateISO, receivable }) => {
   let allocationRows;
   try {
-    ({ rows: allocationRows } = await readLatestSplitReceiptRows(app, { isin }));
+    ({ rows: allocationRows } = await readLatestSplitReceiptRows(app, { isin, recordDateISO }));
   } catch (err) {
     if (err.code) return { code: err.code, error: err.message };
     throw err;
   }
-  if (allocationRows.length === 0) {
-    return { code: "NO_CUSTODIAN_ROWS", error: `The Corporate Benefit Collection file has no Split rows for ${isin}.` };
-  }
-  const dateError = checkRecordDate(allocationRows, recordDateISO);
-  if (dateError) return { code: "RECORD_DATE_MISMATCH", error: dateError };
 
   // The latest date is when the last of a client's shares arrived.
   const receivedDateByActual = new Map();
@@ -423,7 +417,7 @@ const markSplitReceived = async (zcql, rowIdsByDate) => {
  *
  * Stage 1 → 2: store every account of the split preview in Split_Account with
  * Status RECEIVABLE. The rows are recomputed here rather than taken from the
- * browser, and the Ex-Entitlement file must describe the same record date.
+ * browser, and an uploaded Ex-Entitlement file must have this split (ISIN + record date).
  */
 export const sendSplitReceivable = async (req, res) => {
   try {
@@ -452,16 +446,8 @@ export const sendSplitReceivable = async (req, res) => {
       });
     }
 
-    const { rows: custodyRows, file } = await readLatestCorpActionRows(app, { caType: "split", isin });
-    if (custodyRows.length === 0) {
-      return res.status(409).json({
-        success: false,
-        code: "NO_CUSTODIAN_ROWS",
-        message: `The Ex-Entitlement file ${file.fileName} has no Split rows for ${isin}.`,
-      });
-    }
-    const dateError = checkRecordDate(custodyRows, recordDateISO);
-    if (dateError) return res.status(409).json({ success: false, code: "RECORD_DATE_MISMATCH", message: dateError });
+    // Throws NO_CUSTODIAN_ROWS (caught below) when no uploaded file has this split.
+    await readLatestCorpActionRows(app, { caType: "split", isin, recordDateISO });
 
     const previewRows = await computeSplitPreviewRows(zcql, { isin, r1, r2, recordDateISO });
     if (previewRows.length === 0) {
