@@ -219,7 +219,7 @@ const CustodianFileCard = ({ kind, title, listHeading, profileType, businessDate
 };
 
 /**
- * The last 10 uploads of one custodian file kind, for download.
+ * The last 5 uploads of one custodian file kind, for download (HISTORY_LIMIT on the server).
  *
  * `change` is the card's latest upload or removal. Stratus's listing lags a
  * write or delete by around twenty seconds, so it is applied to the list here
@@ -245,7 +245,7 @@ const PreviousUploads = ({ kind, title, change }) => {
 
     useEffect(() => {
         if (change?.added) {
-            setItems((prev) => [change.added, ...prev.filter((i) => i.key !== change.added.key)].slice(0, 10));
+            setItems((prev) => [change.added, ...prev.filter((i) => i.key !== change.added.key)].slice(0, 5));
         }
         if (change?.removed) {
             // Removing a file deletes every upload of this kind for its date.

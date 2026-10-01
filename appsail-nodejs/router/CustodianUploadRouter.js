@@ -37,7 +37,7 @@ router.get("/day/:date", getDay);
 // GET /api/custodian-upload/latest?kind=allocation&isin= — newest allocation file + its row count for the ISIN
 router.get("/latest", getLatestForCorpAction);
 
-// GET /api/custodian-upload/history?kind= — the last 10 uploads of that kind, for Previous Uploads
+// GET /api/custodian-upload/history?kind= — the last 5 uploads of that kind, for Previous Uploads
 router.get("/history", listHistory);
 
 // GET /api/custodian-upload/download?key=... — presigned URL for one uploaded file
