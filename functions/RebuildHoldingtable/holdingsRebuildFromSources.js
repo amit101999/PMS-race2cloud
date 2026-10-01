@@ -853,15 +853,18 @@ async function insertHoldingsRow(zcql, accountCode, row, displayIsin) {
 
 /* ============================== SPLIT_ACCOUNT WRITER ==============================
    Split_Account = one row per (account, ISIN, split applied): holding just before
-   and just after the split. It is rewritten from scratch with the Holdings rows,
-   so it always matches Holdings (a back-dated trade re-sizes it automatically).
+   and just after the split. It is kept in step with the Holdings rows, so it
+   always matches Holdings (a back-dated trade re-sizes it automatically).
    The split impact report reads it instead of summing Holdings SPLIT rows.
 
-   The Split page's custodian reconciliation also stores Status / Received_Date
-   here, so the rewrite must not lose them:
-     - RECEIVABLE rows of a split not applied yet (not in splitLog) are left
-       alone — the Split page inserted them and is waiting to confirm them.
-     - Every rewritten row keeps the Status / Received_Date its old row had. */
+   The Split page's custodian reconciliation stores Status / Received_Date on
+   the same rows. Each side owns its own columns:
+     - this writer owns the holding columns and never writes Status /
+       Received_Date. Existing rows are UPDATEd in place (not deleted and
+       re-inserted), so a status can never be lost half-way through a rebuild.
+     - a row is deleted only when the account no longer has that split (or it
+       is a duplicate). RECEIVABLE rows of a split not applied yet (not in
+       splitLog) are left alone — the Split page is waiting to confirm them. */
 
 const round4 = (n) => Math.round((Number(n) || 0) * 10000) / 10000;
 
@@ -869,25 +872,31 @@ const round4 = (n) => Math.round((Number(n) || 0) * 10000) / 10000;
 const splitEventKey = (recordDate, ratio1, ratio2) =>
   `${sqlDate(recordDate)}|${Number(ratio1) || 0}|${Number(ratio2) || 0}`;
 
-async function replaceSplitAccountRows(zcql, accountCode, isin, splitLog) {
+async function writeSplitAccountRows(zcql, accountCode, isin, splitLog) {
   // An account holds very few splits of one ISIN, so one page is enough.
   const existing = (
     (await zcql.executeZCQLQuery(`
-      SELECT ROWID, Record_Date, Ratio1, Ratio2, Status, Received_Date
+      SELECT ROWID, Record_Date, Ratio1, Ratio2, Status
       FROM Split_Account
       WHERE WS_Account_code = '${esc(accountCode)}' AND ISIN = '${esc(isin)}'
     `)) || []
   ).map((row) => row.Split_Account || row);
+  const statusOf = (row) => String(row.Status || "").trim().toUpperCase();
+  // If an event somehow has two rows, keep the one that carries a status.
+  existing.sort((a, b) => (statusOf(b) ? 1 : 0) - (statusOf(a) ? 1 : 0));
 
-  const appliedKeys = new Set(splitLog.map((s) => splitEventKey(s.recordDate, s.ratio1, s.ratio2)));
-  const keptByKey = new Map(); // event key → { status, receivedDate } to carry over
+  const loggedKeys = new Set(splitLog.map((s) => splitEventKey(s.recordDate, s.ratio1, s.ratio2)));
+  const rowIdByKey = new Map(); // event key → the row to update
   const rowIdsToDelete = [];
   for (const row of existing) {
     const key = splitEventKey(row.Record_Date, row.Ratio1, row.Ratio2);
-    const status = String(row.Status || "").trim().toUpperCase();
-    if (status === "RECEIVABLE" && !appliedKeys.has(key)) continue;
-    if (status) keptByKey.set(key, { status, receivedDate: sqlDate(row.Received_Date) });
-    rowIdsToDelete.push(row.ROWID);
+    if (loggedKeys.has(key)) {
+      if (rowIdByKey.has(key)) rowIdsToDelete.push(row.ROWID); // duplicate
+      else rowIdByKey.set(key, row.ROWID);
+      continue;
+    }
+    if (statusOf(row) === "RECEIVABLE") continue; // split not applied yet
+    rowIdsToDelete.push(row.ROWID); // the account no longer has this split
   }
 
   if (rowIdsToDelete.length > 0) {
@@ -899,11 +908,23 @@ async function replaceSplitAccountRows(zcql, accountCode, isin, splitLog) {
   for (const s of splitLog) {
     const recordDate = sqlDate(s.recordDate);
     const effectiveDate = sqlDate(s.effectiveDate) || recordDate;
-    const kept = keptByKey.get(splitEventKey(s.recordDate, s.ratio1, s.ratio2));
+    const rowId = rowIdByKey.get(splitEventKey(s.recordDate, s.ratio1, s.ratio2));
+    if (rowId) {
+      await zcql.executeZCQLQuery(`
+        UPDATE Split_Account SET
+          Security_Code = '${esc(s.securityCode)}',
+          Security_Name = '${esc(s.securityName)}',
+          Issue_Date = ${effectiveDate ? `'${effectiveDate}'` : "NULL"},
+          Old_Holding = ${round4(s.oldHolding)},
+          New_Holding = ${round4(s.newHolding)}
+        WHERE ROWID = ${rowId}
+      `);
+      continue;
+    }
     await zcql.executeZCQLQuery(`
       INSERT INTO Split_Account (
         ISIN, WS_Account_code, Security_Code, Security_Name, Ratio1, Ratio2,
-        Record_Date, Issue_Date, Old_Holding, New_Holding, Status, Received_Date
+        Record_Date, Issue_Date, Old_Holding, New_Holding
       ) VALUES (
         '${esc(isin)}',
         '${esc(accountCode)}',
@@ -914,9 +935,7 @@ async function replaceSplitAccountRows(zcql, accountCode, isin, splitLog) {
         ${recordDate ? `'${recordDate}'` : "NULL"},
         ${effectiveDate ? `'${effectiveDate}'` : "NULL"},
         ${round4(s.oldHolding)},
-        ${round4(s.newHolding)},
-        ${kept ? `'${esc(kept.status)}'` : "NULL"},
-        ${kept?.receivedDate ? `'${kept.receivedDate}'` : "NULL"}
+        ${round4(s.newHolding)}
       )
     `);
   }
@@ -1070,7 +1089,7 @@ async function rebuildHoldingsForAccount(
     // Separate try: a Split_Account failure must not undo a good Holdings
     // rebuild, but it still counts as an error so the job reports it.
     try {
-      await replaceSplitAccountRows(zcql, accountCode, isin, splitLog);
+      await writeSplitAccountRows(zcql, accountCode, isin, splitLog);
     } catch (err) {
       console.error(`[${accountCode}/${isin}] Split_Account write failed:`, err.message);
       counters.errors++;

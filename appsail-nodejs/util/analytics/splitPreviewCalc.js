@@ -21,7 +21,8 @@ export const SPLIT_STATUS = {
  *
  * Rows appear in two ways: "Send as Receivable" inserts them (Status
  * RECEIVABLE) before the split is applied, and the holdings rebuild writes them
- * for applied splits, keeping any Status / Received_Date already there.
+ * for applied splits. The rebuild only updates the holding columns in place;
+ * Status / Received_Date are written by the Split page alone.
  *
  * @returns {Promise<Array<{ rowId, accountCode, oldHolding, newHolding, status, receivedDate }>>}
  */
@@ -66,15 +67,18 @@ export async function readSplitAccountRows(zcql, { isin, recordDateISO, r1, r2 }
 }
 
 /**
- * Where a split event is in the custodian reconciliation:
- *   NEW        — not yet compared with the Ex-Entitlement file (stage 1)
- *   RECEIVABLE — sent as receivable, waiting for the Benefit Collection file (stage 2)
- *   RECEIVED   — confirmed and applied. Rows with no Status belong to a split
- *                applied before this reconciliation existed, so they count too.
+ * Where a split event is in the custodian reconciliation. Whether the split is
+ * applied comes from the Split table (`isApplied`), never from row statuses:
+ *   RECEIVABLE — some accounts are still Receivable (stage 2). This includes a
+ *                split that is applied but whose Confirm stopped before every
+ *                account was marked Received, so Confirm can be run again.
+ *   RECEIVED   — applied, nothing left Receivable. Splits applied before this
+ *                reconciliation existed (blank statuses) land here too.
+ *   NEW        — not applied and not sent as receivable yet (stage 1).
  */
-export function splitStage(splitAccountRows) {
+export function splitStage(splitAccountRows, isApplied) {
   if (splitAccountRows.some((r) => r.status === SPLIT_STATUS.RECEIVABLE)) return "RECEIVABLE";
-  if (splitAccountRows.length > 0) return "RECEIVED";
+  if (isApplied) return "RECEIVED";
   return "NEW";
 }
 
