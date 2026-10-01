@@ -28,7 +28,10 @@ import {
   receiptsToCsv,
 } from "../../util/corporateAction/compareCustodian.js";
 import { buildVirtualToActualMap } from "../../util/mapVirtualToActualCodes.js";
-import { parseDate, num, stripIsinSuffix } from "../../util/custodian/parseCustodianCsv.js";
+import { num, stripIsinSuffix } from "../../util/custodian/parseCustodianCsv.js";
+// Every date cell becomes yyyy-mm-dd from its own day / month / year — never via
+// new Date(), which reads local midnight and shifts the day back in IST.
+import { parseDate } from "../../util/custodyMatch/normalize.js";
 import { FIELD_CATALOG, PROFILE_TYPE } from "../../util/custodyMatch/fieldMap.js";
 import { STRATUS_GET_URL_OPTS, stratusSignedUrlToString } from "../../util/stratusSignedUrl.js";
 import { DATE_PATTERN } from "../../util/holdingComparison/constants.js";
@@ -202,22 +205,6 @@ const COMPARE_FIELDS = [
 ];
 const OPTIONAL_COMPARE_FIELDS = ["clientName", "isinName", "caQty", ...DIVIDEND_FIELDS];
 
-const MONTHS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
-
-/**
- * yyyy-mm-dd from a custodian date cell, or null.
- * "10-Mar-2026" is read here directly: parseDate's Date() fallback would read it
- * as local midnight and can land on the previous day ahead of UTC.
- */
-const toIsoDate = (value) => {
-  const m = /^(\d{1,2})[-/ ]([A-Za-z]{3})[A-Za-z]*[-/ ](\d{4})$/.exec(String(value || "").trim());
-  if (m) {
-    const month = MONTHS.indexOf(m[2].toLowerCase()) + 1;
-    if (month > 0) return `${m[3]}-${String(month).padStart(2, "0")}-${m[1].padStart(2, "0")}`;
-  }
-  return parseDate(value);
-};
-
 /** The newest custodian file of one kind across every date that still exists, or null. */
 const newestCorpActionFile = async (bucket, kind = "entitlement") => {
   const items = (await listAll(bucket, `${FILE_KINDS[kind].folder}/`))
@@ -296,13 +283,13 @@ export const readLatestCorpActionRows = async (catalystApp, { caType, isin }) =>
       clientName: cell(cells, "clientName"),
       isin: wantedIsin,
       isinName: cell(cells, "isinName"),
-      recordDate: toIsoDate(cell(cells, "recordDate")),
+      recordDate: parseDate(cell(cells, "recordDate")),
       ratio: cell(cells, "ratio"),
       holdingQty: num(cell(cells, "holdingQty")),
       caQty: num(cell(cells, "caQty")),
       caRefNo: cell(cells, "caRefNo"),
-      exDate: toIsoDate(cell(cells, "exDate")),
-      paymentDate: toIsoDate(cell(cells, "tentativePaymentDate")),
+      exDate: parseDate(cell(cells, "exDate")),
+      paymentDate: parseDate(cell(cells, "tentativePaymentDate")),
       dividendRate: num(cell(cells, "dividendRate")),
       caAmt: num(cell(cells, "caAmt")),
     });
@@ -402,11 +389,11 @@ export const readLatestSplitReceiptRows = async (catalystApp, { isin }) => {
       accountCode: String(row.clientUccCode || "").toUpperCase(),
       isinName: row.isinName || "",
       caRefNo: row.caRefNo || "",
-      recordDate: toIsoDate(row.recordDate),
+      recordDate: parseDate(row.recordDate),
       caQty: num(row.caQty),
       receivedQty: num(row.receivedQty),
       balanceQty: num(row.balanceQty),
-      receivedDate: toIsoDate(row.receivedDate) || "",
+      receivedDate: parseDate(row.receivedDate) || "",
       eventStatus: row.eventStatus || "",
     }));
 

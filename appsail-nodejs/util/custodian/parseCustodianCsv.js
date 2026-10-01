@@ -1,6 +1,8 @@
 import { Readable } from "stream";
 import csvParser from "csv-parser";
 
+import { parseDate } from "../custodyMatch/normalize.js";
+
 /**
  * Custodian Benefit Collection Report parser.
  *
@@ -73,29 +75,13 @@ export const stripIsinSuffix = (s) => {
   return dashIdx > 0 ? str.slice(0, dashIdx) : str;
 };
 
-export const parseDate = (s) => {
-  if (s == null) return null;
-  const str = String(s).trim();
-  if (!str) return null;
-
-  // ISO-like: 2026-01-17 or 2026-01-17 00:00:00
-  const isoMatch = str.match(/^(\d{4})-(\d{2})-(\d{2})/);
-  if (isoMatch) return `${isoMatch[1]}-${isoMatch[2]}-${isoMatch[3]}`;
-
-  // dd/mm/yyyy or dd-mm-yyyy
-  const dmyMatch = str.match(/^(\d{1,2})[/\-](\d{1,2})[/\-](\d{4})/);
-  if (dmyMatch) {
-    const [, d, m, y] = dmyMatch;
-    return `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
-  }
-
-  // Last resort: Date.parse
-  const dt = new Date(str);
-  if (!Number.isNaN(dt.getTime())) {
-    return dt.toISOString().split("T")[0];
-  }
-  return null;
-};
+/*
+ * Dates are read by the shared custody parser, which builds yyyy-mm-dd from the
+ * cell's own day / month / year (03-Jul-2026, 03/07/2026, 2026-07-03, with or
+ * without a time). The old `new Date(text).toISOString()` fallback read local
+ * midnight and moved the date back a day in IST (03-Jul came out as 02-Jul).
+ */
+export { parseDate };
 
 export const num = (s) => {
   if (s == null || s === "") return 0;
