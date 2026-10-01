@@ -5,11 +5,13 @@
  * on the Field Mapping popup. Modules read them through the saved mapping.
  *
  *   entitlement ("EX Entitlement Vs Benefit Collection combo"):
- *     Custodian-CorpAction/<date>/<ms>-<name>.csv
+ *     CA-Ex-Entitlement/<date>/<ms>-<name>.csv
  *   allocation ("Corporate Benefit Collection"):
- *     Custodian-CorpAllocation/<date>/<ms>-<name>.csv
+ *     CA-Benefit-Collection/<date>/<ms>-<name>.csv
  *
- * Both in bucket "temporary-files".
+ * Both in bucket "custodian-ca-files". Their field mappings stay in
+ * "temporary-files" with every other mapping (saved by the Field Mapping
+ * popup), and so do the Split / Bonus difference reports.
  */
 
 import { Readable } from "stream";
@@ -35,10 +37,14 @@ import { getBucket, getBuffer, listAll, readFieldMapProfile } from "../../util/h
 
 /** The two custodian files this page stores: where each lives and which mapping reads it. */
 const FILE_KINDS = {
-  entitlement: { folder: "Custodian-CorpAction", profileType: PROFILE_TYPE.CUSTODY_CORP_ACTION },
-  allocation: { folder: "Custodian-CorpAllocation", profileType: PROFILE_TYPE.CUSTODY_CORP_ALLOCATION },
+  entitlement: { folder: "CA-Ex-Entitlement", profileType: PROFILE_TYPE.CUSTODY_CORP_ACTION },
+  allocation: { folder: "CA-Benefit-Collection", profileType: PROFILE_TYPE.CUSTODY_CORP_ALLOCATION },
 };
-const KEY_PATTERN = /^(Custodian-CorpAction|Custodian-CorpAllocation)\/(\d{4}-\d{2}-\d{2})\/(\d+)-([^/]+)$/;
+/** Bucket holding the uploaded Entitlement and Allocation files. */
+const FILES_BUCKET = "custodian-ca-files";
+const filesBucket = (catalystApp) => getBucket(catalystApp, FILES_BUCKET);
+
+const KEY_PATTERN = /^(CA-Ex-Entitlement|CA-Benefit-Collection)\/(\d{4}-\d{2}-\d{2})\/(\d+)-([^/]+)$/;
 
 const fail = (res, status, body) => res.status(status).json({ success: false, ...body });
 
@@ -132,9 +138,8 @@ export const uploadCustodianFile = async (req, res) => {
       return fail(res, 400, { code: "BAD_DATE", message: "businessDate must be yyyy-mm-dd." });
     }
 
-    const bucket = getBucket(req.catalystApp);
     // The popup will not offer Upload until a mapping is saved, so none means the screen was bypassed.
-    const profile = await readFieldMapProfile(bucket, profileType);
+    const profile = await readFieldMapProfile(getBucket(req.catalystApp), profileType);
     if (!profile) {
       return fail(res, 400, { code: "NO_MAPPING", message: "Map and save this file's columns before uploading it." });
     }
@@ -149,7 +154,7 @@ export const uploadCustodianFile = async (req, res) => {
     }
 
     const key = `${folder}/${businessDate}/${Date.now()}-${safeFileName(file.name)}`;
-    await bucket.putObject(key, file.data, { contentType: "text/csv", overwrite: true });
+    await filesBucket(req.catalystApp).putObject(key, file.data, { contentType: "text/csv", overwrite: true });
 
     return res.status(201).json({
       success: true,
@@ -246,13 +251,13 @@ export const readLatestCorpActionRows = async (catalystApp, { caType, isin }) =>
   const wantedTypes = CA_TYPE_DESCR[caType];
   if (!wantedTypes) throw Object.assign(new Error(`Unknown corporate action type "${caType}".`), { code: "BAD_TYPE" });
 
-  const bucket = getBucket(catalystApp);
+  const bucket = filesBucket(catalystApp);
   const file = await newestCorpActionFile(bucket);
   if (!file) {
     throw Object.assign(new Error("No custodian file has been uploaded on the Custodian Upload page."), { code: "NO_FILE" });
   }
 
-  const profile = await readFieldMapProfile(bucket, PROFILE_TYPE.CUSTODY_CORP_ACTION);
+  const profile = await readFieldMapProfile(getBucket(catalystApp), PROFILE_TYPE.CUSTODY_CORP_ACTION);
   if (!profile) throw Object.assign(new Error("The custodian file's columns have not been mapped."), { code: "NO_MAPPING" });
 
   const buffer = await getBuffer(bucket, file.key);
@@ -319,7 +324,7 @@ export const readLatestCorpActionRows = async (catalystApp, { caType, isin }) =>
  * @returns {Promise<{ file: object, rows: Array<Record<string, string>> }>}
  */
 export const readLatestAllocationRows = async (catalystApp, { isin }) => {
-  const bucket = getBucket(catalystApp);
+  const bucket = filesBucket(catalystApp);
   const file = await newestCorpActionFile(bucket, "allocation");
   if (!file) {
     throw Object.assign(new Error("No Corporate Benefit Collection file has been uploaded on the Custodian Upload page."), {
@@ -327,7 +332,7 @@ export const readLatestAllocationRows = async (catalystApp, { isin }) => {
     });
   }
 
-  const profile = await readFieldMapProfile(bucket, PROFILE_TYPE.CUSTODY_CORP_ALLOCATION);
+  const profile = await readFieldMapProfile(getBucket(catalystApp), PROFILE_TYPE.CUSTODY_CORP_ALLOCATION);
   if (!profile) {
     throw Object.assign(new Error("The Corporate Benefit Collection file's columns have not been mapped."), {
       code: "NO_MAPPING",
@@ -633,7 +638,7 @@ export const getDay = async (req, res) => {
       return fail(res, 400, { code: "BAD_DATE", message: "date must be yyyy-mm-dd." });
     }
 
-    const bucket = getBucket(req.catalystApp);
+    const bucket = filesBucket(req.catalystApp);
     // Stratus keeps listing a deleted object for about twenty seconds, so the
     // listed file is confirmed to still exist before it is shown.
     for (const item of await listForDate(bucket, kind, date)) {
@@ -659,7 +664,7 @@ const HISTORY_LIMIT = 5;
 export const listHistory = async (req, res) => {
   try {
     const kind = kindFrom(req.query?.kind);
-    const items = (await listAll(getBucket(req.catalystApp), `${FILE_KINDS[kind].folder}/`))
+    const items = (await listAll(filesBucket(req.catalystApp), `${FILE_KINDS[kind].folder}/`))
       .map((item) => {
         const parsed = parseKey(item.key);
         return parsed ? { ...parsed, sizeBytes: item.sizeBytes } : null;
@@ -683,7 +688,7 @@ export const downloadCustodianFile = async (req, res) => {
     if (!parsed) {
       return fail(res, 400, { code: "BAD_KEY", message: "That file cannot be downloaded here." });
     }
-    const raw = await getBucket(req.catalystApp).generatePreSignedUrl(parsed.key, "GET", STRATUS_GET_URL_OPTS);
+    const raw = await filesBucket(req.catalystApp).generatePreSignedUrl(parsed.key, "GET", STRATUS_GET_URL_OPTS);
     const downloadUrl = stratusSignedUrlToString(raw);
     if (!downloadUrl) {
       return fail(res, 404, { code: "NOT_FOUND", message: "Could not prepare the download." });
@@ -710,7 +715,7 @@ export const deleteCustodianFile = async (req, res) => {
       return fail(res, 400, { code: "BAD_KEY", message: "key must name an uploaded custodian file." });
     }
 
-    const bucket = getBucket(req.catalystApp);
+    const bucket = filesBucket(req.catalystApp);
     const keys = new Set([
       parsed.key,
       ...(await listForDate(bucket, parsed.kind, parsed.businessDate)).map((i) => i.key),
