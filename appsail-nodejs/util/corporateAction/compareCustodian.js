@@ -81,36 +81,19 @@ const ratioValue = (text) => {
 };
 
 /**
- * The record date must match: otherwise the file is describing a different
- * event and every client would show as a break.
- *
- * @param {object[]} custodyRows    rows carrying `recordDate` as yyyy-mm-dd
- * @param {string}   recordDateISO  entered on the page
- * @returns {string|null} the error to show, or null when every row matches
- */
-export const checkRecordDate = (custodyRows, recordDateISO) => {
-  const custodyDates = [...new Set(custodyRows.map((r) => r.recordDate || "(blank or unreadable)"))];
-  if (custodyDates.every((d) => d === recordDateISO)) return null;
-  return `Record Date does not match. You entered ${recordDateISO}; the custodian file has ${custodyDates.join(", ")}.`;
-};
-
-/**
  * Checks that apply to the whole event rather than to one client.
  *
- * The record date must match (see checkRecordDate). The ratio does not affect
- * the holdings being compared, so a different ratio is only a warning — but it
- * would give clients the wrong shares on Apply, so it is shown.
+ * The rows are already for the entered record date (custodianTables.js reads
+ * one event). The ratio does not affect the holdings being compared, so a
+ * different ratio is only a warning — but it would give clients the wrong
+ * shares on Apply, so it is shown.
  *
  * @param {object[]} custodyRows       from readLatestCorpActionRows
- * @param {string}   recordDateISO     entered on the page
  * @param {number}   pageRatio         the page's ratio as "propose / held"
  * @param {string}   pageRatioLabel    the page's ratio as shown to the user
- * @returns {{ error: string|null, warnings: string[] }}
+ * @returns {{ warnings: string[] }}
  */
-export const checkEvent = ({ custodyRows, recordDateISO, pageRatio, pageRatioLabel }) => {
-  const error = checkRecordDate(custodyRows, recordDateISO);
-  if (error) return { error, warnings: [] };
-
+export const checkEvent = ({ custodyRows, pageRatio, pageRatioLabel }) => {
   const warnings = [];
   for (const rawRatio of new Set(custodyRows.map((r) => r.ratio))) {
     const value = ratioValue(rawRatio);
@@ -123,7 +106,7 @@ export const checkEvent = ({ custodyRows, recordDateISO, pageRatio, pageRatioLab
       );
     }
   }
-  return { error: null, warnings };
+  return { warnings };
 };
 
 /** Differences first (largest gap first), then matched clients by account code. */

@@ -18,7 +18,8 @@ const qty = (v) => (v === null || v === undefined ? "—" : numberFormat.format(
 
 /**
  * Split / Bonus pages: compares the page's preview (holding on the record date)
- * with the newest file uploaded on Corporate Actions -> Custodian Upload.
+ * with the custodian rows for the same ISIN and record date, from the latest
+ * report uploaded on Corporate Actions -> Custodian Upload that has them.
  * The pages render it only once the affected accounts have been fetched.
  *
  * @param {"split"|"bonus"} caType  which rows of the custodian file apply
@@ -30,14 +31,14 @@ const CustodianComparePanel = ({ caType, isin, securityName, ratio1, ratio2, rec
     const [result, setResult] = useState(null);
     const [compareError, setCompareError] = useState("");
 
-    // Which custodian file applies, as soon as an ISIN is picked.
+    // Which uploaded custodian file holds this event, once the ISIN and record date are picked.
     useEffect(() => {
         setFileInfo(null);
         setFileError("");
-        if (!isin) return undefined;
+        if (!isin || !recordDate) return undefined;
 
         let cancelled = false;
-        const params = new URLSearchParams({ caType, isin });
+        const params = new URLSearchParams({ kind: "entitlement", caType, isin, recordDate });
         fetch(`${BASE_URL}/custodian-upload/latest?${params.toString()}`)
             .then(async (res) => {
                 const body = await res.json().catch(() => ({}));
@@ -49,7 +50,7 @@ const CustodianComparePanel = ({ caType, isin, securityName, ratio1, ratio2, rec
         return () => {
             cancelled = true;
         };
-    }, [caType, isin]);
+    }, [caType, isin, recordDate]);
 
     // A result only describes the inputs it was run with.
     useEffect(() => {
@@ -103,10 +104,10 @@ const CustodianComparePanel = ({ caType, isin, securityName, ratio1, ratio2, rec
                 {fileInfo ? (
                     <div className={fileInfo.rowCount ? "cm-verdict ok" : "cm-verdict warn"}>
                         Custodian file fetched: <strong className="cc-file-name">{fileInfo.file.fileName}</strong> ·
-                        uploaded {dateTimeFormat.format(new Date(fileInfo.file.timeMs))} ·{" "}
+                        report date {fileInfo.file.businessDate} · uploaded{" "}
+                        {dateTimeFormat.format(new Date(fileInfo.file.timeMs))} ·{" "}
                         {numberFormat.format(fileInfo.rowCount)} {typeLabel} row(s) for{" "}
-                        <span translate="no">{isin}</span>
-                        {fileInfo.rowCount ? "" : ". Upload a file that includes this security to compare."}
+                        <span translate="no">{isin}</span> with Record Date {recordDate}
                     </div>
                 ) : null}
             </div>
