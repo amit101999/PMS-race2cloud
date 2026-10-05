@@ -105,7 +105,8 @@ async function buildEventCsv({ zcql, event, generatedAt, fromDate, toDate, csvCe
   /* ---- Read each account's dividend effect directly ----
      One `Dividend_Record` row per affected account per event; Holding, Rate and
      Dividend_Amount are all applied values. Summing defensively in case of any
-     duplicate rows. */
+     duplicate rows. RECEIVABLE rows (sent as Receivable on the Dividend page,
+     cash not credited yet) are not applied, so they are skipped. */
   const byAccount = new Map(); // account -> { holding, cash, rate }
   // ZCQL's OFFSET is 1-based, so each page repeats the previous page's last
   // row; skip it so the same row is not reported twice.
@@ -119,6 +120,7 @@ async function buildEventCsv({ zcql, event, generatedAt, fromDate, toDate, csvCe
       SELECT ROWID, WS_Account_code, Holding, Rate, Dividend_Amount
       FROM Dividend_Record
       WHERE ISIN = '${isinEsc}' AND RecordDate = '${dateEsc}'
+        AND (Status IS NULL OR Status <> 'RECEIVABLE')
       ORDER BY ROWID ASC
       LIMIT ${DIVIDEND_BATCH} OFFSET ${offset}
     `);

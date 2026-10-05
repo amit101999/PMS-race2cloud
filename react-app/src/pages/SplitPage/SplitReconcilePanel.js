@@ -3,16 +3,20 @@ import React, { useEffect, useState } from "react";
 import { BASE_URL } from "../../constant";
 import "../CustodianUploadPage/CustodianComparePanel.css";
 
-/** Status → badge colour and the label shown on screen. The CSV keeps the raw status. */
+/**
+ * Comparison result → badge colour and the label shown on screen. The CSV keeps the raw status.
+ * "Matched" is only the comparison's verdict; an account becomes Received (its
+ * saved status) on Confirm & Apply.
+ */
 const STATUS_VIEW = {
     MATCHED: { badge: "badge--ok", label: "Matched" },
-    RECEIVED: { badge: "badge--ok", label: "Received" },
     QTY_MISMATCH: { badge: "badge--bad", label: "Qty Mismatch" },
+    AMOUNT_MISMATCH: { badge: "badge--bad", label: "Amount Mismatch" },
     MISSING_IN_CUSTODY: { badge: "badge--warn", label: "Missing in Custodian" },
     NOT_IN_BENEFIT_FILE: { badge: "badge--warn", label: "Not in Benefit File" },
     MISSING_IN_FA: { badge: "badge--warn", label: "Missing in FA" },
 };
-const MATCHED_STATUSES = ["MATCHED", "RECEIVED"];
+const MATCHED_STATUSES = ["MATCHED"];
 
 const numberFormat = new Intl.NumberFormat(undefined, { maximumFractionDigits: 4 });
 const dateTimeFormat = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" });
@@ -34,7 +38,11 @@ const StatusBadge = ({ status }) => {
  *
  * `stage` comes from the preview, so re-fetching the preview moves the panel on.
  *
- * @param {"split"|"bonus"} caType  which page; its API is /api/<caType>/...
+ * The Dividend page uses only the RECEIVABLE / RECEIVED stages (its stage 1 is
+ * its own reconciliation grid). A dividend is paid in cash, so its stage 2
+ * compares amounts instead of quantities.
+ *
+ * @param {"split"|"bonus"|"dividend"} caType  which page; its API is /api/<caType>/...
  */
 const SplitReconcilePanel = ({
     caType = "split",
@@ -52,6 +60,7 @@ const SplitReconcilePanel = ({
     onCompared,
 }) => {
     const isBenefitStage = stage === "RECEIVABLE";
+    const isDividend = caType === "dividend";
     const fileLabel = isBenefitStage ? "Corporate Benefit Collection file" : "Ex-Entitlement file";
 
     const [fileInfo, setFileInfo] = useState(null); // { file, rowCount }
@@ -111,13 +120,12 @@ const SplitReconcilePanel = ({
         setResult(null);
         setCompareError("");
         try {
-            const body = await postJson(isBenefitStage ? "compare-benefit" : "compare-custodian", {
-                isin,
-                securityName,
-                ratio1: Number(ratio1),
-                ratio2: Number(ratio2),
-                recordDate,
-            });
+            const body = await postJson(
+                isBenefitStage ? "compare-benefit" : "compare-custodian",
+                isDividend
+                    ? { isin, securityName, recordDate }
+                    : { isin, securityName, ratio1: Number(ratio1), ratio2: Number(ratio2), recordDate },
+            );
             setResult(body);
             onCompared();
         } catch (err) {
@@ -168,8 +176,10 @@ const SplitReconcilePanel = ({
     if (counts && isBenefitStage) {
         summary = [
             { key: "total", label: "Total", value: counts.total, badge: "badge--neutral" },
-            { key: "received", label: "Received", value: counts.received, badge: "badge--ok" },
-            { key: "qty", label: "Qty Mismatch", value: counts.qtyMismatch, badge: "badge--bad" },
+            { key: "matched", label: "Matched", value: counts.matched, badge: "badge--ok" },
+            isDividend
+                ? { key: "amount", label: "Amount Mismatch", value: counts.amountMismatch, badge: "badge--bad" }
+                : { key: "qty", label: "Qty Mismatch", value: counts.qtyMismatch, badge: "badge--bad" },
             { key: "notInFile", label: "Not in Benefit File", value: counts.notInBenefitFile, badge: "badge--warn" },
             { key: "fa", label: "Missing in FA", value: counts.missingInFa, badge: "badge--warn" },
         ];
@@ -246,7 +256,17 @@ const SplitReconcilePanel = ({
                             <div className="data-table-wrap">
                                 <table className="data-table cc-table">
                                     <thead>
-                                        {isBenefitStage ? (
+                                        {isBenefitStage && isDividend ? (
+                                            <tr>
+                                                <th scope="col">Account Code</th>
+                                                <th scope="col">CA Ref No</th>
+                                                <th scope="col" className="num">FA Amount</th>
+                                                <th scope="col" className="num">Received Amount</th>
+                                                <th scope="col">Received Date</th>
+                                                <th scope="col" className="num">Difference</th>
+                                                <th scope="col">Status</th>
+                                            </tr>
+                                        ) : isBenefitStage ? (
                                             <tr>
                                                 <th scope="col">Account Code</th>
                                                 <th scope="col">CA Ref No</th>
@@ -276,6 +296,21 @@ const SplitReconcilePanel = ({
                                             const isBreak = !MATCHED_STATUSES.includes(r.status);
                                             const diff = Math.max(r.difference, r.caQtyDifference || 0);
                                             const diffClass = isBreak ? "num cc-diff" : "num cc-diff-zero";
+                                            if (isBenefitStage && isDividend) {
+                                                return (
+                                                    <tr key={r.accountCode} className={isBreak ? "cc-row-break" : undefined}>
+                                                        <td translate="no">{r.accountCode}</td>
+                                                        <td>{r.caRefNo || "—"}</td>
+                                                        <td className="num">{qty(r.faAmount)}</td>
+                                                        <td className="num">{qty(r.receivedAmount)}</td>
+                                                        <td>{r.receivedDate || "—"}</td>
+                                                        <td className={diffClass}>{qty(r.difference)}</td>
+                                                        <td>
+                                                            <StatusBadge status={r.status} />
+                                                        </td>
+                                                    </tr>
+                                                );
+                                            }
                                             return isBenefitStage ? (
                                                 <tr key={r.accountCode} className={isBreak ? "cc-row-break" : undefined}>
                                                     <td translate="no">{r.accountCode}</td>

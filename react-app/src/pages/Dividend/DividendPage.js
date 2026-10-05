@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import MainLayout from "../../layouts/MainLayout";
+import SplitReconcilePanel from "../SplitPage/SplitReconcilePanel";
 import "./DividendPage.css";
 import "../TempTransactionUpload/tokens.css";
 import "../TempTransactionUpload/TempTransaction.css";
@@ -50,6 +51,19 @@ const STATUS_TONE = {
   already_paid: "info",
   missing_in_system: "bad",
   missing_in_file: "bad",
+};
+
+/**
+ * Dividend_Record Status as shown in the preview. Blank = not sent yet;
+ * DRAFT = applied before the Receivable → Received reconciliation existed.
+ */
+const RECEIPT_STATUS_LABEL = { RECEIVABLE: "Receivable", RECEIVED: "Received", DRAFT: "Applied" };
+const receiptStatusLabel = (status) => RECEIPT_STATUS_LABEL[status] || "—";
+
+/** Reconciliation statuses each "Send as Receivable" button sends. */
+const SEND_STATUSES = {
+  matched: ["ready"],
+  all: ["ready", "mismatch", "partial", "overpaid", "missing_in_file"],
 };
 
 /** RFC 4180-style CSV cell (comma-safe). */
@@ -125,6 +139,15 @@ function DividendPage() {
   const [applyJobName, setApplyJobName] = useState(null);
   const [applyStatus, setApplyStatus] = useState(null);
 
+  /*
+   * Custodian reconciliation stage from /preview:
+   *   NEW → compare with the Ex-Entitlement file, then Send as Receivable
+   *   RECEIVABLE → compare with the Benefit Collection file, then Confirm & Apply
+   *   RECEIVED → nothing left to do
+   */
+  const [stage, setStage] = useState(null);
+  const [sending, setSending] = useState(false);
+
   /* The newest file from Corporate Actions -> Custodian Upload: { file, rowCount } for this ISIN. */
   const [custodianInfo, setCustodianInfo] = useState(null);
   const [custodianError, setCustodianError] = useState("");
@@ -135,6 +158,16 @@ function DividendPage() {
 
   useEffect(() => setPage(1), [reconEvents, statusFilter, activeEvent]);
   useEffect(() => setSystemPage(1), [previewData]);
+
+  // A preview, comparison and stage only describe the inputs they were run
+  // with — hide them when an input changes, so nothing is sent for other values.
+  useEffect(() => {
+    setPreviewFetched(false);
+    setPreviewData([]);
+    setReconEvents(null);
+    setReconSummary(null);
+    setStage(null);
+  }, [isin, recordDate, rate, paymentDate]);
 
   /* Drill-down: which actual-account groups are currently expanded. */
   const [expandedKeys, setExpandedKeys] = useState(() => new Set());
@@ -315,29 +348,13 @@ function DividendPage() {
           };
           setDividendList((prev) => [entry, ...prev]);
           setSuccess(true);
-
-          setTimeout(() => {
-            setSuccess(false);
-            setPreviewData([]);
-            setPreviewFetched(false);
-            setPreviewEmptyMessage("");
-            setReconEvents(null);
-            setReconSummary(null);
-            setWarnings([]);
-            setStatusFilter("all");
-            setActiveEvent(0);
-            setSymbol("");
-            setSearchQuery("");
-            setCompanyName("");
-            setIsin("");
-            setRate("");
-            setExDate("");
-            setRecordDate("");
-            setPaymentDate("");
-            setLoading(false);
-            setApplyJobName(null);
-            setApplyStatus(null);
-          }, 3000);
+          setLoading(false);
+          setApplyJobName(null);
+          setApplyStatus(null);
+          // Re-read the preview: paid accounts now show Received, and any the
+          // Benefit Collection file did not list yet are still Receivable.
+          fetchPreview();
+          setTimeout(() => setSuccess(false), 3000);
         } else if (data.status === "FAILED" || data.status === "ERROR") {
           clearInterval(interval);
           setError("Dividend application failed. Please try again.");
@@ -400,6 +417,7 @@ function DividendPage() {
       const data = await postPreview(false);
       if (data.success) {
         setPreviewData(data.data || []);
+        setStage(data.stage || null);
         setPreviewFetched(true);
       } else {
         setError(data.message || "Preview failed");
@@ -567,24 +585,61 @@ function DividendPage() {
     );
   };
 
+  /* Accounts of the active reconciliation event that a Send button sends. */
+  const rowsToSend = (mode) =>
+    activeEventObj ? activeEventObj.rows.filter((r) => SEND_STATUSES[mode].includes(r.status)) : [];
+
   /*
-   * Apply dividend (called from preview section after fetch).
-   *
-   * Submits a Catalyst Job via the AppSail controller. The controller returns
-   * { jobName, status: "PENDING" } immediately; the polling useEffect above
-   * then polls /dividend/apply-status until COMPLETED / FAILED / ERROR.
-   * `loading` stays true for the entire duration so the button shows "Applying…".
-   *
-   * mode:
-   *   "system"  – legacy behaviour, no account filter, FIFO universe.
-   *   "matched" – send only accounts with status === "ready".
-   *   "all"     – send every reconciled account except already_paid /
-   *               missing_in_system (those are unsafe to auto-apply).
-   *
-   * accountCodes: optional explicit allow-list. When omitted the handler
-   *   derives it from the active reconciliation event using `mode`.
+   * Stage 1 → 2: store the chosen accounts as Receivable (no cash yet). The
+   * server recomputes every amount; the browser only says which accounts.
    */
-  const handleApply = async (mode = "system", accountCodes = null) => {
+  const sendReceivable = async (mode) => {
+    setError(null);
+    const accountCodes = rowsToSend(mode)
+      .map((r) => r.accountCode)
+      .filter(Boolean);
+    if (!accountCodes.length) {
+      setError("No accounts to send for the selected option.");
+      return;
+    }
+
+    setSending(true);
+    try {
+      const res = await fetch(`${BASE_URL}/dividend/send-receivable`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          isin,
+          securityCode: symbol,
+          rate: Number(rate),
+          recordDate,
+          paymentDate,
+          accountCodes,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.success) {
+        setError(data.message || "Could not send the dividend as receivable.");
+        return;
+      }
+      window.alert(`${data.message} The Status column now shows Receivable for these accounts.`);
+      fetchPreview();
+    } catch (err) {
+      console.error(err);
+      setError("Could not send the dividend as receivable.");
+    } finally {
+      setSending(false);
+    }
+  };
+
+  /*
+   * Stage 2: Confirm & Apply. The server pays only the Receivable accounts the
+   * Corporate Benefit Collection file lists (the rest stay Receivable) by
+   * submitting a Catalyst Job; it returns { jobName, status: "PENDING" } and
+   * the polling useEffect above follows /dividend/apply-status until
+   * COMPLETED / FAILED / ERROR. `loading` stays true for the whole run.
+   */
+  const confirmDividend = async () => {
     setError(null);
     if (!symbol || !companyName || !recordDate || !paymentDate) {
       setError("Security Code, Security Name, Record Date and Payment Date are required.");
@@ -595,37 +650,6 @@ function DividendPage() {
       return;
     }
 
-    let codesToSend = accountCodes;
-    if (!codesToSend && mode !== "system" && activeEventObj) {
-      const safeStatuses =
-        mode === "matched"
-          ? new Set(["ready"])
-          : new Set(["ready", "mismatch", "partial", "overpaid", "missing_in_file"]);
-      codesToSend = activeEventObj.rows
-        .filter((r) => safeStatuses.has(r.status))
-        .map((r) => r.accountCode)
-        .filter(Boolean);
-      if (!codesToSend.length) {
-        setError("No accounts to apply for the selected mode.");
-        return;
-      }
-    }
-
-    const payload = {
-      isin,
-      securityCode: symbol,
-      securityName: companyName,
-      rate: Number(rate),
-      exDate,
-      recordDate: recordDate || "",
-      paymentDate: paymentDate || "",
-      dividendType,
-      applyMode: mode,
-    };
-    if (codesToSend && codesToSend.length) {
-      payload.accountCodes = codesToSend;
-    }
-
     setLoading(true);
     setApplyStatus(null);
     setApplyJobName(null);
@@ -633,7 +657,16 @@ function DividendPage() {
       const res = await fetch(`${BASE_URL}/dividend/apply`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
+        body: JSON.stringify({
+          isin,
+          securityCode: symbol,
+          securityName: companyName,
+          rate: Number(rate),
+          exDate,
+          recordDate,
+          paymentDate,
+          dividendType,
+        }),
       });
       const data = await res.json();
       if (!data.success || !data.jobName) {
@@ -650,7 +683,10 @@ function DividendPage() {
       trackJob({
         id: data.jobName,
         label: `Dividend — ${symbol || isin || "security"}`,
-        message: "Your dividend task has been submitted.",
+        message: data.remaining
+          ? `Your dividend task has been submitted for ${data.count} account(s); ` +
+            `${data.remaining} stay Receivable until the Benefit Collection file lists them.`
+          : "Your dividend task has been submitted.",
         statusUrl: `${BASE_URL}/dividend/apply-status?jobName=${encodeURIComponent(
           data.jobName,
         )}`,
@@ -665,31 +701,27 @@ function DividendPage() {
   };
 
   /*
-   * Confirmation modal state for the two reconciliation Apply buttons.
-   * confirmApply is null when no dialog is open, or { mode, count, gross }.
+   * Confirmation modal for the two Send as Receivable buttons.
+   * confirmSend is null when no dialog is open, or { mode, count, gross }.
    */
-  const [confirmApply, setConfirmApply] = useState(null);
+  const [confirmSend, setConfirmSend] = useState(null);
 
-  const requestApply = (mode) => {
+  const requestSend = (mode) => {
     if (!activeEventObj) {
       setError("No reconciliation data — fetch affected accounts first.");
       return;
     }
-    const matchedRows = activeEventObj.rows.filter((r) => r.status === "ready");
-    const safeAllRows = activeEventObj.rows.filter((r) =>
-      ["ready", "mismatch", "partial", "overpaid", "missing_in_file"].includes(r.status),
-    );
-    const rows = mode === "matched" ? matchedRows : safeAllRows;
+    const rows = rowsToSend(mode);
     const gross = rows.reduce((s, r) => s + (Number(r.grossSys) || 0), 0);
-    setConfirmApply({ mode, count: rows.length, gross });
+    setConfirmSend({ mode, count: rows.length, gross });
   };
 
-  const closeConfirm = () => setConfirmApply(null);
-  const confirmAndApply = () => {
-    if (!confirmApply) return;
-    const { mode } = confirmApply;
-    setConfirmApply(null);
-    handleApply(mode);
+  const closeConfirm = () => setConfirmSend(null);
+  const confirmAndSend = () => {
+    if (!confirmSend) return;
+    const { mode } = confirmSend;
+    setConfirmSend(null);
+    sendReceivable(mode);
   };
 
   return (
@@ -898,12 +930,14 @@ function DividendPage() {
                   <th className="num">Dividend Rate</th>
                   <th>Payment Date</th>
                   <th className="num">Dividend Amount</th>
+                  <th>Status</th>
+                  <th>Received Date</th>
                 </tr>
               </thead>
               <tbody>
                 {previewData.length === 0 && (
                   <tr>
-                    <td colSpan={5} className="empty-cell">
+                    <td colSpan={7} className="empty-cell">
                       No accounts hold this ISIN on the record date.
                     </td>
                   </tr>
@@ -915,6 +949,8 @@ function DividendPage() {
                     <td className="num">{row.rate}</td>
                     <td>{row.paymentDate ?? "—"}</td>
                     <td className="num strong">{row.dividendAmount}</td>
+                    <td>{receiptStatusLabel(row.status)}</td>
+                    <td>{row.receivedDate || "—"}</td>
                   </tr>
                 ))}
               </tbody>
@@ -1284,57 +1320,52 @@ function DividendPage() {
             </button>
 
             {/*
-             * v2 Apply controls:
-             *   Primary  – Apply Matched Only (status === "ready")
-             *   Secondary – Apply All Reconciled (everything except
-             *               already_paid / missing_in_system)
+             * Stage 1 → 2 controls (no cash is credited here):
+             *   Primary   – Send Matched as Receivable (status === "ready")
+             *   Secondary – Send All Reconciled as Receivable (everything
+             *               except already_paid / missing_in_system)
+             * Only while the dividend is NEW; afterwards Stage 2 below takes over.
              */}
             {(() => {
-              const matchedRows = activeEventObj
-                ? activeEventObj.rows.filter((r) => r.status === "ready")
-                : [];
-              const safeAllRows = activeEventObj
-                ? activeEventObj.rows.filter((r) =>
-                    [
-                      "ready",
-                      "mismatch",
-                      "partial",
-                      "overpaid",
-                      "missing_in_file",
-                    ].includes(r.status),
-                  )
-                : [];
+              const matchedRows = rowsToSend("matched");
+              const safeAllRows = rowsToSend("all");
+              const notNew = stage !== "NEW";
+              const busy = sending || loading;
               return (
                 <>
                   <button
                     type="button"
                     className="cm-primary"
-                    disabled={loading || matchedRows.length === 0}
-                    onClick={() => requestApply("matched")}
+                    disabled={busy || notNew || matchedRows.length === 0}
+                    onClick={() => requestSend("matched")}
                     title={
-                      matchedRows.length === 0
-                        ? "No matched rows in this event."
-                        : `Apply ${matchedRows.length} matched row(s).`
+                      notNew
+                        ? "This dividend has already been sent as Receivable."
+                        : matchedRows.length === 0
+                          ? "No matched rows in this event."
+                          : `Send ${matchedRows.length} matched row(s) as Receivable.`
                     }
                   >
-                    {loading
-                      ? "Applying…"
-                      : `Apply Matched Only (${matchedRows.length})`}
+                    {sending
+                      ? "Sending…"
+                      : `Send Matched as Receivable (${matchedRows.length})`}
                   </button>
                   <button
                     type="button"
                     className="cm-primary cm-primary--warn"
-                    disabled={loading || safeAllRows.length === 0}
-                    onClick={() => requestApply("all")}
+                    disabled={busy || notNew || safeAllRows.length === 0}
+                    onClick={() => requestSend("all")}
                     title={
-                      safeAllRows.length === 0
-                        ? "No reconcilable rows in this event."
-                        : `Apply ${safeAllRows.length} row(s) including mismatches.`
+                      notNew
+                        ? "This dividend has already been sent as Receivable."
+                        : safeAllRows.length === 0
+                          ? "No reconcilable rows in this event."
+                          : `Send ${safeAllRows.length} row(s) as Receivable, including mismatches.`
                     }
                   >
-                    {loading
-                      ? "Applying…"
-                      : `Apply All Reconciled (${safeAllRows.length})`}
+                    {sending
+                      ? "Sending…"
+                      : `Send All Reconciled as Receivable (${safeAllRows.length})`}
                   </button>
                 </>
               );
@@ -1343,28 +1374,46 @@ function DividendPage() {
         </div>
       )}
 
-      {/* Confirmation modal for Apply Matched Only / Apply All Reconciled */}
-      {confirmApply && (
+      {/* Stage 2 — Receivable accounts vs the Corporate Benefit Collection file, then Confirm & Apply. */}
+      {previewFetched && (stage === "RECEIVABLE" || stage === "RECEIVED") && (
+        <SplitReconcilePanel
+          caType="dividend"
+          stage={stage}
+          isin={isin}
+          securityCode={symbol}
+          securityName={companyName}
+          recordDate={recordDate}
+          confirming={loading}
+          onConfirm={confirmDividend}
+          onReceivableSent={fetchPreview}
+          onCompared={() => {}}
+        />
+      )}
+
+      {/* Confirmation modal for Send Matched / Send All Reconciled as Receivable */}
+      {confirmSend && (
         <div className="dividend-modal-backdrop" onClick={closeConfirm}>
           <div
             className="dividend-modal"
             onClick={(e) => e.stopPropagation()}
           >
             <h3 className="ops-card-title">
-              {confirmApply.mode === "matched"
-                ? "Apply Matched Only?"
-                : "Apply All Reconciled?"}
+              {confirmSend.mode === "matched"
+                ? "Send Matched as Receivable?"
+                : "Send All Reconciled as Receivable?"}
             </h3>
             <p className="ops-modal-text">
-              You are about to credit dividend to{" "}
-              <strong>{confirmApply.count}</strong> account(s) for{" "}
-              <strong>{symbol}</strong> ({isin}).
+              You are about to mark{" "}
+              <strong>{confirmSend.count}</strong> account(s) for{" "}
+              <strong>{symbol}</strong> ({isin}) as Receivable. No cash is
+              credited yet: that happens on Confirm &amp; Apply, after the
+              Corporate Benefit Collection file shows the payment.
             </p>
             <p className="ops-modal-text">
               Estimated system gross:{" "}
-              <strong>₹{confirmApply.gross.toFixed(2)}</strong>
+              <strong>₹{confirmSend.gross.toFixed(2)}</strong>
             </p>
-            {confirmApply.mode === "all" && (
+            {confirmSend.mode === "all" && (
               <div className="cm-verdict warn">
                 This includes <em>mismatch</em>, <em>partial</em>,{" "}
                 <em>over-paid</em> and <em>missing-in-file</em> accounts. Review
@@ -1385,9 +1434,9 @@ function DividendPage() {
               <button
                 type="button"
                 className="cm-primary"
-                onClick={confirmAndApply}
+                onClick={confirmAndSend}
               >
-                Confirm Apply
+                Send as Receivable
               </button>
             </div>
           </div>

@@ -2,10 +2,32 @@ import {
   fetchHoldingsRowsByAccountForIsin,
   recomputeHoldingsSnapshot,
 } from "../../util/analytics/holdingsFromTable.js";
-import { readLatestCorpActionRows } from "../corporateAction/CustodianUploadController.js";
+import { readLatestCorpActionRows, readLatestReceiptRows } from "../corporateAction/CustodianUploadController.js";
 import { buildVirtualToActualMap } from "../../util/mapVirtualToActualCodes.js";
+import {
+  DIVIDEND_STATUS,
+  dividendAccountWhere,
+  dividendStage,
+  isDividendApplied,
+  readDividendAccountRows,
+} from "../../util/analytics/dividendAccountRows.js";
 
 const ACCOUNT_LOOKUP_BATCH = 50;
+const ACCOUNT_ROW_CHUNK = 200;
+
+/**
+ * Normalise an incoming date to `YYYY-MM-DD` without crossing a timezone
+ * boundary (same helper as the Split / Bonus controllers).
+ */
+const toISODateOnly = (v) => {
+  const s = String(v ?? "").trim();
+  const m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (m) return `${m[1]}-${m[2]}-${m[3]}`;
+  const d = new Date(s);
+  if (Number.isNaN(d.getTime())) return "";
+  const p = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+};
 
 const parseCatalystTime = (ct) => {
   if (!ct) return 0;
@@ -42,12 +64,14 @@ const lookupAlreadyReceived = async (
     const inList = slice.map((a) => `'${escSql(a)}'`).join(",");
     let rows = [];
     try {
+      // A RECEIVABLE row has not been paid yet, so it is not "already received".
       rows = await zcql.executeZCQLQuery(`
         SELECT WS_Account_code, Dividend_Amount, PaymentDate
         FROM Dividend_Record
         WHERE ISIN='${escSql(isin)}'
           AND RecordDate='${recordDateISO}'
           AND WS_Account_code IN (${inList})
+          AND (Status IS NULL OR Status <> '${DIVIDEND_STATUS.RECEIVABLE}')
       `);
     } catch (err) {
       console.error("lookupAlreadyReceived batch failed:", err.message);
@@ -145,6 +169,33 @@ const computeStatus = ({
   return "ready";
 };
 
+/**
+ * Each account's dividend on the record date: holding × rate, read from the
+ * materialised Holdings ledger (the same rows and maths UpdateDividendData
+ * uses, so the amount sent as Receivable is the amount later credited).
+ *
+ * One bulk keyset read for the whole ISIN instead of a query per account:
+ * the per-account loop overran the deployed AppSail request budget for a
+ * widely-held ISIN. Accounts come from Holdings, not Transaction, so clients
+ * whose shares all arrived through a merger / demerger are included.
+ *
+ * @returns {Promise<Array<{ accountCode, holding, amount }>>}
+ */
+const computeDividendSystemRows = async (zcql, { isin, recordDateISO, rate }) => {
+  const rowsByAccount = await fetchHoldingsRowsByAccountForIsin(zcql, isin, recordDateISO);
+  const rows = [];
+  for (const [accountCode, holdingRows] of rowsByAccount) {
+    /* Re-derive rather than reading the last row's stored HOLDING. That
+       running balance was frozen in settlement order at rebuild time, so it
+       can already include a buy the trade-date filter just dropped. Same
+       re-derivation Split and Bonus previews apply. */
+    const holding = recomputeHoldingsSnapshot(holdingRows).HOLDING;
+    if (holding <= 1e-6) continue;
+    rows.push({ accountCode, holding, amount: round2(holding * rate) });
+  }
+  return rows;
+};
+
 export const getAllSecuritiesISINs = async (req, res) => {
     try {
       if (!req.catalystApp) {
@@ -236,13 +287,14 @@ export const getAllSecuritiesISINs = async (req, res) => {
         });
       }
 
-      const recordDateObj = new Date(recordDate);
-      recordDateObj.setUTCHours(0, 0, 0, 0);
-      const recordDateISO = recordDateObj.toISOString().split("T")[0];
-
-      const paymentDateObj = new Date(paymentDate);
-      paymentDateObj.setUTCHours(0, 0, 0, 0);
-      const paymentDateISO = paymentDateObj.toISOString().split("T")[0];
+      const recordDateISO = toISODateOnly(recordDate);
+      const paymentDateISO = toISODateOnly(paymentDate);
+      if (!recordDateISO || !paymentDateISO) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid record date or payment date",
+        });
+      }
 
       /* ======================================================
          STEP 0: READ THE CUSTODIAN FILE (compare only)
@@ -294,62 +346,32 @@ export const getAllSecuritiesISINs = async (req, res) => {
 
       const zcql = req.catalystApp.zcql();
 
+      // Where this dividend is in the custodian reconciliation, and each account's status.
+      const dividendEvent = { isin, recordDateISO };
+      const accountRows = await readDividendAccountRows(zcql, dividendEvent);
+      const stage = dividendStage(accountRows, await isDividendApplied(zcql, dividendEvent));
+      const statusByAccount = new Map(accountRows.map((r) => [r.accountCode, r]));
+
       /* ======================================================
          STEP 1+2: HOLDING AS OF RECORD DATE (read materialised Holdings)
-         ------------------------------------------------------
-         Read the stored Holdings ledger — the same source of truth as the
-         rebuild / upload worker — as of the record date, instead of replaying
-         FIFO from the source tables. Corporate actions already applied (incl.
-         demerger/merger) are reflected automatically.
-
-         The accounts come from the same read. They used to come from
-         `SELECT WS_Account_code FROM Transaction`, which missed clients whose
-         shares all arrived through a merger / demerger. The apply job
-         (UpdateDividendData) and the CSV export (ExportDividendAccounts) read
-         Holdings the same way, so all three agree.
-
-         We don't early-return on an empty result: the file may carry rows
-         we need to surface as "missing_in_system" for ops to investigate.
+         See computeDividendSystemRows. We don't early-return on an empty
+         result: the file may carry rows we need to surface as
+         "missing_in_system" for ops to investigate.
          ====================================================== */
       const preview = [];
       const fifoByAccount = new Map();
 
-      /* One bulk keyset read for the whole ISIN instead of a query per account.
-         The per-account loop was one sequential round trip per holder, which
-         overruns the deployed AppSail request budget for a widely-held ISIN
-         (locally there is no such limit, so it only fails once deployed).
-         Same fix as the Split/Bonus exports and DemergerController. */
-      const rowsByAccount = await fetchHoldingsRowsByAccountForIsin(
-        zcql,
-        isin,
-        recordDateISO,
-      );
-
-      for (const [accountCode, holdingRows] of rowsByAccount) {
-        /* Re-derive rather than reading the last row's stored HOLDING. That
-           running balance was frozen in settlement order at rebuild time, so it
-           can already include a buy the trade-date filter above just dropped —
-           the kept row is right, but the total written on it is not. Same
-           re-derivation Split and Bonus previews apply; a no-op once the
-           Holdings table has been rebuilt on the trade-date basis. */
-        const holdingAsOnRecordDate =
-          recomputeHoldingsSnapshot(holdingRows).HOLDING;
-        if (holdingAsOnRecordDate <= 1e-6) continue;
-
-        const dividendAmount = round2(holdingAsOnRecordDate * rateNum);
-
-        fifoByAccount.set(accountCode, {
-          holding: holdingAsOnRecordDate,
-          gross: dividendAmount,
-        });
-
+      for (const row of await computeDividendSystemRows(zcql, { isin, recordDateISO, rate: rateNum })) {
+        fifoByAccount.set(row.accountCode, { holding: row.holding, gross: row.amount });
         preview.push({
           isin,
-          accountCode,
-          holdingAsOnRecordDate,
+          accountCode: row.accountCode,
+          holdingAsOnRecordDate: row.holding,
           rate: rateNum,
           paymentDate: paymentDateISO,
-          dividendAmount,
+          dividendAmount: row.amount,
+          status: statusByAccount.get(row.accountCode)?.status || "",
+          receivedDate: statusByAccount.get(row.accountCode)?.receivedDate || "",
         });
       }
 
@@ -643,7 +665,7 @@ export const getAllSecuritiesISINs = async (req, res) => {
         summary = summaryAgg;
       }
 
-      const response = { success: true, data: preview };
+      const response = { success: true, data: preview, stage };
       if (custodian) response.custodianFile = custodian.file;
       if (events) response.events = events;
       if (summary) response.summary = summary;
@@ -659,19 +681,170 @@ export const getAllSecuritiesISINs = async (req, res) => {
   };
 
   /* ======================================================
-     APPLY DIVIDEND (BACKGROUND JOB)
-     ------------------------------------------------------
-     Mirrors the BonusController pattern:
+     CUSTODIAN RECONCILIATION (Receivable → Received)
+     Stage 1: compare with the Ex-Entitlement file (preview with
+              compare: true), then "Send as Receivable" inserts one
+              Dividend_Record row per chosen account (Status RECEIVABLE,
+              no cash yet).
+     Stage 2: compare with the Corporate Benefit Collection file, then
+              "Confirm & Apply" stores each paid account's Received Date and
+              starts UpdateDividendData, which credits the cash and marks the
+              row RECEIVED. Accounts the file does not list stay Receivable
+              (no cash) until a later Confirm with a newer file.
+     See util/analytics/dividendAccountRows.js.
+     ====================================================== */
+
+  /**
+   * POST /api/dividend/send-receivable
+   * body: { isin, securityCode, rate, recordDate, paymentDate, accountCodes }
+   *
+   * accountCodes is the page's choice (matched only / all reconciled). The
+   * amounts are recomputed here rather than taken from the browser, and every
+   * code must be an account holding the ISIN on the record date.
+   */
+  export const sendDividendReceivable = async (req, res) => {
+    try {
+      const app = req.catalystApp;
+      const zcql = app.zcql();
+      const { isin, securityCode, rate: rateParam, recordDate, paymentDate, accountCodes } = req.body || {};
+      const rate = Number(rateParam);
+      const recordDateISO = toISODateOnly(recordDate);
+      const paymentDateISO = toISODateOnly(paymentDate);
+      const chosen = new Set(
+        (Array.isArray(accountCodes) ? accountCodes : []).map((s) => String(s || "").trim()).filter(Boolean),
+      );
+      if (!isin || !recordDateISO || !paymentDateISO || !(rate > 0)) {
+        return res
+          .status(400)
+          .json({ success: false, message: "ISIN, rate, record date and payment date are required." });
+      }
+      if (chosen.size === 0) {
+        return res.status(400).json({ success: false, message: "Choose at least one account to send as Receivable." });
+      }
+
+      const dividendEvent = { isin, recordDateISO };
+      if (await isDividendApplied(zcql, dividendEvent)) {
+        return res
+          .status(409)
+          .json({ success: false, code: "ALREADY_SENT", message: "This dividend has already been applied." });
+      }
+      if ((await readDividendAccountRows(zcql, dividendEvent)).length > 0) {
+        return res.status(409).json({
+          success: false,
+          code: "ALREADY_SENT",
+          message: "These accounts are already Receivable. Compare with the Corporate Benefit Collection file next.",
+        });
+      }
+
+      // Throws NO_CUSTODIAN_ROWS (caught below) when no uploaded file has this dividend.
+      await readLatestCorpActionRows(app, { caType: "dividend", isin, recordDateISO });
+
+      const systemRows = await computeDividendSystemRows(zcql, { isin, recordDateISO, rate });
+      const eligible = new Set(systemRows.map((r) => r.accountCode));
+      const notEligible = [...chosen].filter((code) => !eligible.has(code));
+      if (notEligible.length > 0) {
+        return res.status(409).json({
+          success: false,
+          code: "NOT_ELIGIBLE",
+          message:
+            `${notEligible.length} account(s) hold no ${isin} on ${recordDateISO}: ` +
+            `${notEligible.slice(0, 5).join(", ")}. Refresh the preview and try again.`,
+        });
+      }
+
+      const newRows = systemRows
+        .filter((r) => chosen.has(r.accountCode))
+        .map((r) => ({
+          ISIN: isin,
+          RecordDate: recordDateISO,
+          WS_Account_code: r.accountCode,
+          Holding: r.holding,
+          Rate: rate,
+          Dividend_Amount: r.amount,
+          PaymentDate: paymentDateISO,
+          Security_Code: securityCode || "",
+          Status: DIVIDEND_STATUS.RECEIVABLE,
+        }));
+      const table = app.datastore().table("Dividend_Record");
+      try {
+        for (let i = 0; i < newRows.length; i += ACCOUNT_ROW_CHUNK) {
+          await table.insertRows(newRows.slice(i, i + ACCOUNT_ROW_CHUNK));
+        }
+      } catch (insertErr) {
+        // A half-sent dividend would show as Receivable with accounts missing.
+        // No row of this dividend existed before (checked above), so every row
+        // was inserted by this call — remove them and let the user send again.
+        try {
+          await zcql.executeZCQLQuery(`DELETE FROM Dividend_Record WHERE ${dividendAccountWhere(dividendEvent)}`);
+        } catch (cleanupErr) {
+          console.error("[DividendUploader] Could not remove a half-sent receivable:", cleanupErr.message);
+        }
+        throw insertErr;
+      }
+
+      return res.json({
+        success: true,
+        count: newRows.length,
+        message: `${newRows.length} account(s) updated with status Receivable.`,
+      });
+    } catch (error) {
+      if (error.code) return res.status(409).json({ success: false, code: error.code, message: error.message });
+      console.error("[DividendUploader] sendDividendReceivable:", error);
+      return res
+        .status(500)
+        .json({ success: false, message: error.message || "Could not send the dividend as receivable." });
+    }
+  };
+
+  /**
+   * The Receivable accounts the Corporate Benefit Collection file says were
+   * paid, each with the date it was paid (matched on the actual / UCC code).
+   * Nothing is written here, so a missing Benefit file stops Confirm before
+   * any change.
+   *
+   * @returns {Promise<{ payable: Array<{ rowId, accountCode, receivedDate }> } | { code: string, error: string }>}
+   */
+  const planDividendReceipt = async (app, zcql, { isin, recordDateISO, receivable }) => {
+    let allocationRows;
+    try {
+      ({ rows: allocationRows } = await readLatestReceiptRows(app, { caType: "dividend", isin, recordDateISO }));
+    } catch (err) {
+      if (err.code) return { code: err.code, error: err.message };
+      throw err;
+    }
+
+    // The latest date is when the last of a client's payments arrived.
+    const receivedDateByActual = new Map();
+    for (const row of allocationRows) {
+      if (!row.receivedDate) continue;
+      const previous = receivedDateByActual.get(row.accountCode);
+      if (!previous || row.receivedDate > previous) receivedDateByActual.set(row.accountCode, row.receivedDate);
+    }
+
+    const virtualToActual = await buildVirtualToActualMap(
+      zcql,
+      receivable.map((r) => r.accountCode),
+    );
+    const payable = [];
+    for (const r of receivable) {
+      const actual = String(virtualToActual.get(r.accountCode) || r.accountCode).toUpperCase();
+      const receivedDate = receivedDateByActual.get(actual);
+      if (receivedDate) payable.push({ rowId: r.rowId, accountCode: r.accountCode, receivedDate });
+    }
+    return { payable };
+  };
+
+  /* ======================================================
+     CONFIRM & APPLY DIVIDEND (BACKGROUND JOB) — stage 2
        - Validate inputs.
-       - Idempotency check on (ISIN, RecordDate) in Dividend.
+       - Only Receivable accounts that the Benefit Collection file lists are
+         paid; their Received Dates are stored before the job starts.
        - Reuse / clean up any existing Jobs row for jobName.
-       - Submit a Catalyst Job that runs the UpdateDividendData
-         function. The function performs all heavy work
-         (master insert, per-account FIFO, Dividend_Record
-         inserts, Cash_Balance_Per_Transaction credits) and
-         updates the Jobs row to COMPLETED / FAILED.
-       - Return immediately with { jobName, status: "PENDING" }
-         so the React UI can poll /dividend/apply-status.
+       - Submit UpdateDividendData with those accounts as its allow-list. It
+         inserts the Dividend master row (once), credits
+         Cash_Balance_Per_Transaction and marks each account RECEIVED.
+       - Return immediately with { jobName, status: "PENDING" } so the React
+         UI can poll /dividend/apply-status.
      ====================================================== */
   export const applyStockDividendMaster = async (req, res) => {
     try {
@@ -691,28 +864,9 @@ export const getAllSecuritiesISINs = async (req, res) => {
         recordDate,
         paymentDate,
         dividendType,
-        accountCodes,    // optional allow-list (string[] or comma-separated)
-        applyMode,       // optional: "matched" | "all" | "system" (audit only)
       } = req.body;
 
       const rate = Number(rateParam);
-
-      /*
-       * Normalise accountCodes to a clean string[].
-       * Accepts JSON arrays (preferred) or a comma-separated string for
-       * cURL/manual testing. Empty / undefined => no filter (full universe).
-       */
-      let accountCodesArr = null;
-      if (Array.isArray(accountCodes)) {
-        accountCodesArr = accountCodes
-          .map((s) => String(s || "").trim())
-          .filter(Boolean);
-      } else if (typeof accountCodes === "string" && accountCodes.trim()) {
-        accountCodesArr = accountCodes
-          .split(",")
-          .map((s) => s.trim())
-          .filter(Boolean);
-      }
 
       if (!Number.isFinite(rate) || rate <= 0) {
         return res.status(400).json({
@@ -733,34 +887,51 @@ export const getAllSecuritiesISINs = async (req, res) => {
         });
       }
 
-      const normalizeDate = (d) => {
-        const dt = new Date(d);
-        dt.setUTCHours(0, 0, 0, 0);
-        return dt.toISOString().split("T")[0];
-      };
-
-      const recordDateISO = normalizeDate(recordDate);
+      const recordDateISO = toISODateOnly(recordDate);
       const exDateISO = (exDate && String(exDate).trim())
-        ? normalizeDate(exDate)
+        ? toISODateOnly(exDate)
         : recordDateISO;
-      const paymentDateISO = normalizeDate(paymentDate);
+      const paymentDateISO = toISODateOnly(paymentDate);
+      if (!recordDateISO || !exDateISO || !paymentDateISO) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid record date, ex date or payment date",
+        });
+      }
 
       const catalystApp = req.catalystApp;
       const zcql = catalystApp.zcql();
       const jobScheduling = catalystApp.jobScheduling();
 
-      const existingDiv = await zcql.executeZCQLQuery(`
-        SELECT ROWID
-        FROM Dividend
-        WHERE ISIN='${isin}'
-        AND RecordDate='${recordDateISO}'
-        LIMIT 1
-      `);
-
-      if (existingDiv && existingDiv.length > 0) {
-        return res.status(400).json({
+      // Stage 2 of the custodian reconciliation: only accounts sent as
+      // Receivable can be confirmed, and only those the Benefit Collection
+      // file says were paid. The rest stay Receivable for a later Confirm.
+      const dividendEvent = { isin, recordDateISO };
+      const receivable = (await readDividendAccountRows(zcql, dividendEvent)).filter(
+        (r) => r.status === DIVIDEND_STATUS.RECEIVABLE,
+      );
+      if (receivable.length === 0) {
+        const applied = await isDividendApplied(zcql, dividendEvent);
+        return res.status(409).json({
           success: false,
-          message: "Dividend already exists for this ISIN and Record Date",
+          code: applied ? "ALREADY_APPLIED" : "NOT_RECEIVABLE",
+          message: applied
+            ? "This dividend has already been applied."
+            : `This dividend (${isin}, Record Date ${recordDateISO}) has not been sent as Receivable yet. ` +
+              "Compare with the Ex-Entitlement file and send it as receivable first.",
+        });
+      }
+      const receipt = await planDividendReceipt(catalystApp, zcql, { isin, recordDateISO, receivable });
+      if (receipt.error) {
+        return res.status(409).json({ success: false, code: receipt.code, message: receipt.error });
+      }
+      if (receipt.payable.length === 0) {
+        return res.status(409).json({
+          success: false,
+          code: "NOTHING_RECEIVED",
+          message:
+            "No Receivable account is in the Corporate Benefit Collection file yet. " +
+            "Upload a newer Benefit Collection file and try again.",
         });
       }
 
@@ -795,27 +966,20 @@ export const getAllSecuritiesISINs = async (req, res) => {
         }
       }
 
-      /*
-       * Pass the optional accountCodes allow-list to the job as a JSON
-       * string. UpdateDividendData parses it back; when present the job
-       * filters its eligible-accounts loop to this set.
-       */
-      const jobParams = {
-        isin,
-        securityCode,
-        securityName,
-        rate: String(rate),
-        exDate: exDateISO,
-        recordDate: recordDateISO,
-        paymentDate: paymentDateISO,
-        dividendType: dividendType || "Final",
-        jobName,
-      };
-      if (accountCodesArr && accountCodesArr.length) {
-        jobParams.accountCodesJson = JSON.stringify(accountCodesArr);
-        jobParams.applyMode = applyMode || "matched";
-      } else {
-        jobParams.applyMode = applyMode || "system";
+      // Received Dates first; the job sets Status RECEIVED once each account's
+      // cash is credited, so a failure leaves the account Receivable.
+      const rowIdsByDate = new Map();
+      for (const p of receipt.payable) {
+        if (!rowIdsByDate.has(p.receivedDate)) rowIdsByDate.set(p.receivedDate, []);
+        rowIdsByDate.get(p.receivedDate).push(p.rowId);
+      }
+      for (const [date, rowIds] of rowIdsByDate) {
+        for (let i = 0; i < rowIds.length; i += ACCOUNT_ROW_CHUNK) {
+          await zcql.executeZCQLQuery(`
+            UPDATE Dividend_Record SET Received_Date = '${escSql(date)}'
+            WHERE ROWID IN (${rowIds.slice(i, i + ACCOUNT_ROW_CHUNK).join(", ")})
+          `);
+        }
       }
 
       await jobScheduling.JOB.submitJob({
@@ -823,13 +987,27 @@ export const getAllSecuritiesISINs = async (req, res) => {
         jobpool_name: "CorporateActions",
         target_name: "UpdateDividendData",
         target_type: "Function",
-        params: jobParams,
+        params: {
+          isin,
+          securityCode,
+          securityName,
+          rate: String(rate),
+          exDate: exDateISO,
+          recordDate: recordDateISO,
+          paymentDate: paymentDateISO,
+          dividendType: dividendType || "Final",
+          jobName,
+          // Only these accounts are paid by this Confirm.
+          accountCodesJson: JSON.stringify(receipt.payable.map((p) => p.accountCode)),
+        },
       });
 
       return res.json({
         success: true,
         jobName,
         status: "PENDING",
+        count: receipt.payable.length,
+        remaining: receivable.length - receipt.payable.length,
         message: "Dividend application job started",
       });
 
