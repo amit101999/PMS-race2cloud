@@ -129,8 +129,6 @@ export const getAllSecuritiesISINs = async (req, res) => {
   }
 };
 
-const ZCQL_ROW_LIMIT = 270;
-
 export const previewStockSplit = async (req, res) => {
   try {
     if (!req.catalystApp) {
@@ -632,9 +630,11 @@ export const addStockSplit = async (req, res) => {
       return res.status(409).json({ success: false, code: receipt.code, message: receipt.error });
     }
 
-    // Split row first, then the statuses. If marking fails after the insert,
-    // the accounts stay Receivable, the page still offers Confirm, and the
-    // next click skips this insert and finishes the rest.
+    // Order: Split row → rebuild/bonus jobs → statuses Received (at the end).
+    // If anything fails before the end, the accounts stay Receivable, the page
+    // still offers Confirm, and the next click skips this insert and sends the
+    // jobs again (a rebuild is safe to repeat). Marking Received earlier would
+    // make the next click treat the split as done and never send the rebuild.
     if (!alreadyApplied) {
       await zcql.executeZCQLQuery(`
       INSERT INTO Split
@@ -659,26 +659,18 @@ export const addStockSplit = async (req, res) => {
       )
     `);
     }
-    await markSplitReceived(zcql, receipt.rowIdsByDate);
 
-    const accountSet = new Set();
-    let holdOffset = 0;
-
-    while (true) {
-      const batch = await zcql.executeZCQLQuery(`
-        SELECT WS_Account_code
-        FROM Transaction
-        WHERE ISIN='${isinEsc}'
-        LIMIT ${ZCQL_ROW_LIMIT} OFFSET ${holdOffset}
-      `);
-
-      if (!batch || batch.length === 0) break;
-      batch.forEach((r) => accountSet.add(r.Transaction.WS_Account_code));
-      if (batch.length < ZCQL_ROW_LIMIT) break;
-      holdOffset += ZCQL_ROW_LIMIT;
-    }
-
-    const affectedAccounts = Array.from(accountSet);
+    // Accounts to rebuild = every account holding the ISIN on the record date,
+    // read from the Holdings ledger (same source and rule as the bonus apply).
+    // The Transaction table is not enough: a client whose shares all came from
+    // a merger or demerger has no Transaction row for this ISIN and was skipped.
+    const eligibleRows = await computeSplitPreviewRows(zcql, {
+      isin,
+      r1: splitEvent.r1,
+      r2: splitEvent.r2,
+      recordDateISO,
+    });
+    const affectedAccounts = eligibleRows.map((row) => row.accountCode);
 
     // One track key per Apply-Split click. The parent Jobs row starts RUNNING;
     // each rebuild chunk and each bonus job below registers a "piece" row that
@@ -789,6 +781,9 @@ export const addStockSplit = async (req, res) => {
         recomputeErr.message,
       );
     }
+
+    // Every job is sent — only now is the split done from the page's view.
+    await markSplitReceived(zcql, receipt.rowIdsByDate);
 
     // Nothing to wait for (no affected accounts, no bonus to recompute) — settle
     // the parent now so the notification completes on the first status poll.
