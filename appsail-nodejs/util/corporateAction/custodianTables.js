@@ -21,8 +21,15 @@ import { num, stripIsinSuffix } from "../custodian/parseCustodianCsv.js";
 export const UPLOAD_TABLE = "CA_Custodian_Upload";
 export const IMPORT_STATUS = { IMPORTING: "IMPORTING", DONE: "DONE", FAILED: "FAILED" };
 
-/** Where the CSVs handed to the bulk write job are kept, inside the files bucket. */
+/** Bucket holding the uploaded Entitlement and Allocation files. */
+export const FILES_BUCKET = "custodian-ca-files";
+
+/**
+ * Where the CSVs handed to the bulk write job are kept, inside the files bucket.
+ * Each one is only read by its job, so it is deleted once the import ends.
+ */
 const IMPORT_FOLDER = "CA-Import";
+const importKeyOf = (kind, timeMs) => `${IMPORT_FOLDER}/${kind}/${timeMs}.csv`;
 
 const PAGE = 300;
 
@@ -210,10 +217,25 @@ const setImportResult = async (zcql, key, status, error = "") => {
 /* -------------------------------- import -------------------------------- */
 
 /**
+ * Delete an upload's import CSV once its import has ended (done or failed).
+ * The outcome is already recorded, so a failed delete is only logged; a file
+ * that is already gone (two status checks finishing together) is fine.
+ */
+const removeImportFile = async (catalystApp, kind, timeMs) => {
+  const importKey = importKeyOf(kind, timeMs);
+  try {
+    const bucket = catalystApp.stratus().bucket(FILES_BUCKET);
+    if (await bucket.headObject(importKey, { throwErr: false })) await bucket.deleteObject(importKey);
+  } catch (error) {
+    console.error(`[CustodianImport] Could not delete ${importKey}:`, error.message);
+  }
+};
+
+/**
  * Record the upload, store the import CSV next to the file and start the bulk
  * write job. Returns the upload as stored; the job finishes in the background.
  */
-export const startImport = async (catalystApp, { bucket, bucketName }, { kind, key, businessDate, timeMs, fileName, fileHash, csv, rowCount }) => {
+export const startImport = async (catalystApp, { kind, key, businessDate, timeMs, fileName, fileHash, csv, rowCount }) => {
   const zcql = catalystApp.zcql();
   await catalystApp.datastore().table(UPLOAD_TABLE).insertRow({
     Source_Key: key,
@@ -227,13 +249,13 @@ export const startImport = async (catalystApp, { bucket, bucketName }, { kind, k
   });
 
   try {
-    const importKey = `${IMPORT_FOLDER}/${kind}/${timeMs}.csv`;
-    await bucket.putObject(importKey, csv, { contentType: "text/csv", overwrite: true });
+    const importKey = importKeyOf(kind, timeMs);
+    await catalystApp.stratus().bucket(FILES_BUCKET).putObject(importKey, csv, { contentType: "text/csv", overwrite: true });
     const job = await catalystApp
       .datastore()
       .table(KINDS[kind].table)
       .bulkJob("write")
-      .createJob({ bucket_name: bucketName, object_key: importKey }, { operation: "insert" });
+      .createJob({ bucket_name: FILES_BUCKET, object_key: importKey }, { operation: "insert" });
     const jobId = String(job?.job_id ?? "");
     if (!jobId) throw new Error(`The bulk write job did not start: ${JSON.stringify(job)}`);
     await zcql.executeZCQLQuery(
@@ -243,6 +265,7 @@ export const startImport = async (catalystApp, { bucket, bucketName }, { kind, k
   } catch (error) {
     console.error(`[CustodianImport] ${key} could not start:`, error.message);
     await setImportResult(zcql, key, IMPORT_STATUS.FAILED, error.message);
+    await removeImportFile(catalystApp, kind, timeMs);
   }
 
   return findUpload(zcql, key);
@@ -287,7 +310,11 @@ export const settleImport = async (catalystApp, key) => {
       );
     }
   }
-  return findUpload(zcql, key);
+  const settled = await findUpload(zcql, key);
+  if (settled && settled.importStatus !== IMPORT_STATUS.IMPORTING) {
+    await removeImportFile(catalystApp, settled.kind, settled.timeMs);
+  }
+  return settled;
 };
 
 const WATCH_FIRST_MS = 10_000;
