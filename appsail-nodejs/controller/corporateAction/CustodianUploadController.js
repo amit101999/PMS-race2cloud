@@ -40,6 +40,7 @@ import {
   deleteDataRows,
   deleteUploadRow,
   fileLabel,
+  FILES_BUCKET,
   findDuplicate,
   isImporting,
   listUploadKeys,
@@ -60,8 +61,6 @@ const FILE_KINDS = {
   entitlement: { folder: "CA-Ex-Entitlement", profileType: PROFILE_TYPE.CUSTODY_CORP_ACTION },
   allocation: { folder: "CA-Benefit-Collection", profileType: PROFILE_TYPE.CUSTODY_CORP_ALLOCATION },
 };
-/** Bucket holding the uploaded Entitlement and Allocation files. */
-const FILES_BUCKET = "custodian-ca-files";
 const filesBucket = (catalystApp) => getBucket(catalystApp, FILES_BUCKET);
 
 const KEY_PATTERN = /^(CA-Ex-Entitlement|CA-Benefit-Collection)\/(\d{4}-\d{2}-\d{2})\/(\d+)-([^/]+)$/;
@@ -149,11 +148,7 @@ const importFile = async (catalystApp, { kind, key, rows, profile, fileHash }) =
     reportDate: businessDate,
     uploadedMs: timeMs,
   });
-  return startImport(
-    catalystApp,
-    { bucket: filesBucket(catalystApp), bucketName: FILES_BUCKET },
-    { kind, key, businessDate, timeMs, fileName, fileHash, csv, rowCount },
-  );
+  return startImport(catalystApp, { kind, key, businessDate, timeMs, fileName, fileHash, csv, rowCount });
 };
 
 /**
