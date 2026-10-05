@@ -3,6 +3,15 @@ import { buildVirtualToActualMap } from "../util/mapVirtualToActualCodes.js";
 // this module's preview cannot be silently changed by another module's copy.
 import { recomputeHoldingsSnapshot } from "../util/analytics/holdingsFromTable.js";
 import { readCaJobProgress, insertCaTrackPiece } from "../util/caJobProgress.js";
+import { computeBonusPreviewRows } from "../util/analytics/bonusPreviewCalc.js";
+import {
+  BONUS_STATUS,
+  bonusAccountWhere,
+  bonusStage,
+  isBonusApplied,
+  readBonusAccountRows,
+} from "../util/analytics/bonusAccountRows.js";
+import { readLatestCorpActionRows, readLatestReceiptRows } from "./corporateAction/CustodianUploadController.js";
 
 const escSql = (v) => String(v ?? "").replace(/'/g, "''");
 
@@ -154,6 +163,12 @@ export const previewStockBonus = async (req, res) => {
 
     const zcql = req.catalystApp.zcql();
 
+    // Where this bonus is in the custodian reconciliation, and each account's status.
+    const bonusEvent = { isin, recordDateISO, r1, r2 };
+    const accountRows = await readBonusAccountRows(zcql, bonusEvent);
+    const stage = bonusStage(accountRows, await isBonusApplied(zcql, bonusEvent));
+    const statusByAccount = new Map(accountRows.map((r) => [r.accountCode, r]));
+
     /* ======================================================
        STEP 1: READ Holdings AS OF the record date
        Fetch all Holdings rows for this ISIN with date filter.
@@ -205,7 +220,7 @@ export const previewStockBonus = async (req, res) => {
     }
 
     if (latestByAccount.size === 0) {
-      return res.json({ success: true, data: [] });
+      return res.json({ success: true, data: [], stage });
     }
 
     /* The stored HOLDING is a running balance frozen in settlement order at
@@ -223,7 +238,7 @@ export const previewStockBonus = async (req, res) => {
     }
 
     if (latestByAccount.size === 0) {
-      return res.json({ success: true, data: [] });
+      return res.json({ success: true, data: [], stage });
     }
 
     /* ======================================================
@@ -266,16 +281,165 @@ export const previewStockBonus = async (req, res) => {
         newHolding,
         newWAP,
         delta: bonusShares,
+        status: statusByAccount.get(accountCode)?.status || "",
+        receivedDate: statusByAccount.get(accountCode)?.receivedDate || "",
       });
     }
 
-    return res.json({ success: true, data: preview });
+    return res.json({ success: true, data: preview, stage });
   } catch (error) {
     console.error("Preview bonus error:", error);
     return res.status(500).json({
       success: false,
       message: error.message,
     });
+  }
+};
+
+/* ======================================================
+   CUSTODIAN RECONCILIATION (Receivable → Received)
+   Stage 1: compare with the Ex-Entitlement file, then "Send as Receivable"
+            inserts one Bonus_Record account row per account (Status RECEIVABLE).
+   Stage 2: compare with the Corporate Benefit Collection file, then
+            "Confirm & Apply" stores each account's Received Date and starts
+            the bonus job, which marks the accounts RECEIVED once the bonus is
+            applied. See util/analytics/bonusAccountRows.js.
+   ====================================================== */
+
+const ACCOUNT_ROW_CHUNK = 200;
+
+/**
+ * Store the Received Date the Corporate Benefit Collection file gives each
+ * Receivable account (matched on its actual / UCC code); Status stays
+ * Receivable until the bonus job has applied the bonus. Accounts the file does
+ * not list keep no date. A missing Benefit event stops before anything is written.
+ *
+ * @returns {Promise<{ ok: true } | { code: string, error: string }>}
+ */
+const recordBonusReceivedDates = async (app, zcql, { isin, recordDateISO, receivable }) => {
+  let allocationRows;
+  try {
+    ({ rows: allocationRows } = await readLatestReceiptRows(app, { caType: "bonus", isin, recordDateISO }));
+  } catch (err) {
+    if (err.code) return { code: err.code, error: err.message };
+    throw err;
+  }
+
+  // The latest date is when the last of a client's shares arrived.
+  const receivedDateByActual = new Map();
+  for (const row of allocationRows) {
+    if (!row.receivedDate) continue;
+    const previous = receivedDateByActual.get(row.accountCode);
+    if (!previous || row.receivedDate > previous) receivedDateByActual.set(row.accountCode, row.receivedDate);
+  }
+
+  const virtualToActual = await buildVirtualToActualMap(
+    zcql,
+    receivable.map((r) => r.accountCode),
+  );
+  const rowIdsByDate = new Map();
+  for (const r of receivable) {
+    const actual = String(virtualToActual.get(r.accountCode) || r.accountCode).toUpperCase();
+    const date = receivedDateByActual.get(actual);
+    if (!date) continue;
+    if (!rowIdsByDate.has(date)) rowIdsByDate.set(date, []);
+    rowIdsByDate.get(date).push(r.rowId);
+  }
+
+  for (const [date, rowIds] of rowIdsByDate) {
+    for (let i = 0; i < rowIds.length; i += ACCOUNT_ROW_CHUNK) {
+      await zcql.executeZCQLQuery(`
+        UPDATE Bonus_Record SET Received_Date = '${escSql(date)}'
+        WHERE ROWID IN (${rowIds.slice(i, i + ACCOUNT_ROW_CHUNK).join(", ")})
+      `);
+    }
+  }
+  return { ok: true };
+};
+
+/**
+ * POST /bonus/send-receivable
+ * body: { isin, securityCode, securityName, ratio1, ratio2, recordDate, effectiveDate }
+ *
+ * Stage 1 → 2: store every account of the bonus preview in Bonus_Record (one
+ * account row each, Status RECEIVABLE). The rows are recomputed here rather
+ * than taken from the browser, and an uploaded Ex-Entitlement file must have
+ * this bonus (ISIN + record date).
+ */
+export const sendBonusReceivable = async (req, res) => {
+  try {
+    const app = req.catalystApp;
+    const zcql = app.zcql();
+    const { isin, securityCode, securityName, ratio1, ratio2, recordDate, effectiveDate } = req.body || {};
+    const r1 = Number(ratio1);
+    const r2 = Number(ratio2);
+    const recordDateISO = toISODateOnly(recordDate);
+    const effectiveDateISO = effectiveDate ? toISODateOnly(effectiveDate) : recordDateISO;
+    if (!isin || !recordDateISO || !effectiveDateISO || !(r1 > 0) || !(r2 > 0)) {
+      return res.status(400).json({ success: false, message: "ISIN, ratio and record date are required." });
+    }
+
+    const bonusEvent = { isin, recordDateISO, r1, r2 };
+    if (await isBonusApplied(zcql, bonusEvent)) {
+      return res
+        .status(409)
+        .json({ success: false, code: "ALREADY_SENT", message: "This bonus has already been applied." });
+    }
+    if ((await readBonusAccountRows(zcql, bonusEvent)).length > 0) {
+      return res.status(409).json({
+        success: false,
+        code: "ALREADY_SENT",
+        message: "These accounts are already Receivable. Compare with the Corporate Benefit Collection file next.",
+      });
+    }
+
+    // Throws NO_CUSTODIAN_ROWS (caught below) when no uploaded file has this bonus.
+    await readLatestCorpActionRows(app, { caType: "bonus", isin, recordDateISO });
+
+    const previewRows = await computeBonusPreviewRows(zcql, { isin, r1, r2, recordDateISO });
+    if (previewRows.length === 0) {
+      return res.status(409).json({ success: false, code: "NO_HOLDINGS", message: "No eligible holdings on the record date." });
+    }
+
+    const table = app.datastore().table("Bonus_Record");
+    const newRows = previewRows.map((row) => ({
+      ISIN: isin,
+      SecurityCode: securityCode || "",
+      SecurityName: securityName || "",
+      WS_Account_code: row.accountCode,
+      Ratio1: r1,
+      Ratio2: r2,
+      Record_Date: recordDateISO,
+      ExDate: effectiveDateISO,
+      Old_Holding: row.currentHolding,
+      Bonus_Shares: row.bonusShares,
+      Status: BONUS_STATUS.RECEIVABLE,
+    }));
+    try {
+      for (let i = 0; i < newRows.length; i += ACCOUNT_ROW_CHUNK) {
+        await table.insertRows(newRows.slice(i, i + ACCOUNT_ROW_CHUNK));
+      }
+    } catch (insertErr) {
+      // A half-sent bonus would show as Receivable with accounts missing. The
+      // bonus is not applied (checked above), so every account row of it was
+      // inserted by this call — remove them and let the user send again.
+      try {
+        await zcql.executeZCQLQuery(`DELETE FROM Bonus_Record WHERE ${bonusAccountWhere(bonusEvent)}`);
+      } catch (cleanupErr) {
+        console.error("[BonusController] Could not remove a half-sent receivable:", cleanupErr.message);
+      }
+      throw insertErr;
+    }
+
+    return res.json({
+      success: true,
+      count: newRows.length,
+      message: `${newRows.length} account(s) updated with status Receivable.`,
+    });
+  } catch (error) {
+    if (error.code) return res.status(409).json({ success: false, code: error.code, message: error.message });
+    console.error("[BonusController] sendBonusReceivable:", error);
+    return res.status(500).json({ success: false, message: error.message || "Could not send the bonus as receivable." });
   }
 };
 
@@ -334,6 +498,30 @@ export const applyStockBonus = async (req, res) => {
     const catalystApp = req.catalystApp;
     const zcql = catalystApp.zcql();
     const jobScheduling = catalystApp.jobScheduling();
+
+    // Stage 2 of the custodian reconciliation: only accounts sent as Receivable
+    // can be confirmed, and their Received Dates are taken from the Benefit
+    // Collection file before the job starts. The job marks them Received once
+    // the bonus is applied (functions/UpdateBonusTable).
+    const bonusEvent = { isin, recordDateISO, r1, r2 };
+    const receivable = (await readBonusAccountRows(zcql, bonusEvent)).filter(
+      (r) => r.status === BONUS_STATUS.RECEIVABLE,
+    );
+    if (receivable.length === 0) {
+      const applied = await isBonusApplied(zcql, bonusEvent);
+      return res.status(409).json({
+        success: false,
+        code: applied ? "ALREADY_APPLIED" : "NOT_RECEIVABLE",
+        message: applied
+          ? "This bonus has already been applied."
+          : `This bonus (${isin}, Record Date ${recordDateISO}) has not been sent as Receivable yet. ` +
+            "Compare with the Ex-Entitlement file and send it as receivable first.",
+      });
+    }
+    const receipt = await recordBonusReceivedDates(catalystApp, zcql, { isin, recordDateISO, receivable });
+    if (receipt.error) {
+      return res.status(409).json({ success: false, code: receipt.code, message: receipt.error });
+    }
 
     const jobName = `BON_${isin.slice(-6)}_${recordDateISO}`;
 

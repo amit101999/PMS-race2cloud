@@ -25,15 +25,19 @@ const StatusBadge = ({ status }) => {
 };
 
 /**
- * Split page: the two-stage custodian reconciliation of the previewed split.
+ * Split and Bonus pages: the two-stage custodian reconciliation of the
+ * previewed split / bonus.
  *
  *   NEW        → compare with the Ex-Entitlement file, then "Send as Receivable"
  *   RECEIVABLE → compare with the Corporate Benefit Collection file, then "Confirm & Apply"
  *   RECEIVED   → nothing left to do
  *
  * `stage` comes from the preview, so re-fetching the preview moves the panel on.
+ *
+ * @param {"split"|"bonus"} caType  which page; its API is /api/<caType>/...
  */
 const SplitReconcilePanel = ({
+    caType = "split",
     stage,
     isin,
     securityCode,
@@ -57,7 +61,7 @@ const SplitReconcilePanel = ({
     const [result, setResult] = useState(null);
     const [compareError, setCompareError] = useState("");
 
-    // Which uploaded custodian file holds this split (ISIN + record date) for this stage.
+    // Which uploaded custodian file holds this event (ISIN + record date) for this stage.
     useEffect(() => {
         setFileInfo(null);
         setFileError("");
@@ -66,8 +70,8 @@ const SplitReconcilePanel = ({
         let cancelled = false;
         const params = new URLSearchParams(
             isBenefitStage
-                ? { kind: "allocation", caType: "split", isin, recordDate }
-                : { kind: "entitlement", caType: "split", isin, recordDate },
+                ? { kind: "allocation", caType, isin, recordDate }
+                : { kind: "entitlement", caType, isin, recordDate },
         );
         fetch(`${BASE_URL}/custodian-upload/latest?${params.toString()}`)
             .then(async (res) => {
@@ -80,7 +84,7 @@ const SplitReconcilePanel = ({
         return () => {
             cancelled = true;
         };
-    }, [isin, recordDate, stage, isBenefitStage, fileLabel]);
+    }, [caType, isin, recordDate, stage, isBenefitStage, fileLabel]);
 
     // A result only describes the inputs and stage it was run with.
     useEffect(() => {
@@ -92,7 +96,7 @@ const SplitReconcilePanel = ({
     const canCompare = Boolean(isin && recordDate && fileInfo?.rowCount) && !busy;
 
     const postJson = async (path, body) => {
-        const res = await fetch(`${BASE_URL}/split/${path}`, {
+        const res = await fetch(`${BASE_URL}/${caType}/${path}`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(body),
@@ -152,7 +156,8 @@ const SplitReconcilePanel = ({
             <div className="temp-transaction-card cc-panel">
                 <h3 className="ops-card-title">Custodian Reconciliation</h3>
                 <div className="cm-verdict ok">
-                    This split has been received and applied. The Status and Received Date columns above show each account.
+                    This {caType} has been received and applied. The Status and Received Date columns above show each
+                    account.
                 </div>
             </div>
         );
