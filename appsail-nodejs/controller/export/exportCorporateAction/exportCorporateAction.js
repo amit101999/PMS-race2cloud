@@ -159,12 +159,15 @@ export const exportCorporateAction = async (req, res) => {
     const bonusRows = [];
     let offset = 0;
 
+    // Bonus_Record also holds one row per account (WS_Account_code set) for the
+    // Bonus page's custodian reconciliation; only the event rows are bonuses.
     while (true) {
       const rows = await zcql.executeZCQLQuery(`
         SELECT SecurityCode, SecurityName, Ratio1, Ratio2, Record_Date, ExDate, ISIN, EXCHG, SCHEMENAME
         FROM Bonus_Record
-        WHERE (ExDate >= '${fromISO}' AND ExDate <= '${toISO}')
-           OR (Record_Date >= '${fromISO}' AND Record_Date <= '${toISO}')
+        WHERE WS_Account_code IS NULL
+          AND ((ExDate >= '${fromISO}' AND ExDate <= '${toISO}')
+           OR (Record_Date >= '${fromISO}' AND Record_Date <= '${toISO}'))
         ORDER BY ExDate ASC, ROWID ASC
         LIMIT ${BATCH_SIZE} OFFSET ${offset}
       `);

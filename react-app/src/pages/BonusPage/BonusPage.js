@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import MainLayout from "../../layouts/MainLayout";
 import DownloadButton from "../../components/common/DownloadButton";
-import CustodianComparePanel from "../CustodianUploadPage/CustodianComparePanel";
+import PreviousFiles from "../HoldingComparison/holdingComparison/PreviousFiles";
+import SplitReconcilePanel from "../SplitPage/SplitReconcilePanel";
 import "./BonusPage.css";
 import "../TempTransactionUpload/tokens.css";
 import "../TempTransactionUpload/TempTransaction.css";
@@ -11,6 +12,22 @@ import { BASE_URL } from "../../constant";
 import { useJobNotifications } from "../../notifications/JobNotificationContext";
 
 const numberFormat = new Intl.NumberFormat(undefined, { maximumFractionDigits: 4 });
+
+/** Bonus_Record account Status as shown in the preview. Blank = not yet sent (or applied before statuses existed). */
+const STATUS_LABEL = { RECEIVABLE: "Receivable", RECEIVED: "Received" };
+const statusLabel = (status) => STATUS_LABEL[status] || "—";
+
+/** GET a bonus endpoint, throwing the server's message on failure (PreviousFiles shows it). */
+const getBonusJson = async (path) => {
+  const res = await fetch(`${BASE_URL}/bonus/${path}`);
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok || !body.success) throw new Error(body.message || `Request failed (${res.status}).`);
+  return body;
+};
+// Module-level so PreviousFiles does not reload on every render.
+const loadEntitlementHistory = () => getBonusJson("history?stage=entitlement");
+const loadBenefitHistory = () => getBonusJson("history?stage=benefit");
+const getHistoryDownloadUrl = (key) => getBonusJson(`history/download?key=${encodeURIComponent(key)}`);
 
 /** Maps GET /bonus/apply-progress → the notification system's vocabulary. */
 function parseBonusStatus(d) {
@@ -59,6 +76,9 @@ function BonusPage() {
 
   const [previewData, setPreviewData] = useState([]);
   const [step, setStep] = useState("form");
+  // Custodian reconciliation stage of the previewed bonus: NEW | RECEIVABLE | RECEIVED.
+  const [stage, setStage] = useState("NEW");
+  const [historyToken, setHistoryToken] = useState(0);
   /** Actual codes whose virtual-scheme rows are expanded in the preview table. */
   const [expandedActuals, setExpandedActuals] = useState(() => new Set());
 
@@ -86,10 +106,14 @@ function BonusPage() {
           bonusShares: 0,
           newHolding: 0,
           delta: 0,
+          statuses: new Set(),
+          receivedDate: "",
         };
         map.set(actualKey, group);
       }
       group.virtuals.push(row);
+      group.statuses.add(statusLabel(row.status));
+      if (row.receivedDate && row.receivedDate > group.receivedDate) group.receivedDate = row.receivedDate;
       group.currentHolding += Number(row.currentHolding) || 0;
       group.bonusShares += Number(row.bonusShares) || 0;
       group.newHolding += Number(row.newHolding) || 0;
@@ -252,6 +276,7 @@ function BonusPage() {
 
     if (data.success) {
       setPreviewData(data.data || []);
+      setStage(data.stage || "NEW");
       setStep("preview");
     } else {
       setError(data.message);
@@ -259,6 +284,72 @@ function BonusPage() {
 
     setLoading(false);
   };
+  /* ===========================
+     CONFIRM & APPLY (stage 2 of the custodian reconciliation)
+     =========================== */
+  const applyBonus = async () => {
+    if (datesOutOfOrder) {
+      setError("Effective Date cannot be before the Record Date.");
+      return;
+    }
+    setApplying(true);
+    setError(null);
+    setApplyStatus("SUBMITTING");
+
+    try {
+      const res = await fetch(`${BASE_URL}/bonus/apply`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          isin,
+          ratio1: Number(ratio1),
+          ratio2: Number(ratio2),
+          recordDate,
+          effectiveDate,
+          securityCode,
+          securityName,
+        }),
+      });
+
+      const data = await res.json();
+
+      if (!data.success) {
+        setError(data.message || "Failed to apply bonus");
+        setApplying(false);
+        setApplyStatus(null);
+        return;
+      }
+
+      setApplyJobName(data.jobName);
+      setApplyStatus(data.status);
+
+      // Bell notification: "in progress" until the background
+      // holdings rebuild has actually finished.
+      const bonusLabel = `Stock bonus — ${isin || securityCode || "security"}`;
+      if (data.alreadyRunning) {
+        reportJob({
+          id: `bonus-already-${Date.now()}`,
+          label: bonusLabel,
+          status: "completed",
+          message: "A bonus for this security and date is already being applied.",
+        });
+      } else if (data.catalystJobName) {
+        trackJob({
+          id: data.catalystJobName,
+          label: bonusLabel,
+          message: "Your bonus task has been submitted.",
+          statusUrl: `${BASE_URL}/bonus/apply-progress?key=${encodeURIComponent(data.catalystJobName)}`,
+          parseStatus: parseBonusStatus,
+          timeoutMs: 45 * 60 * 1000,
+        });
+      }
+    } catch (err) {
+      setError("Something went wrong");
+      setApplying(false);
+      setApplyStatus(null);
+    }
+  };
+
   const downloadBonusExport = () => {
     if (!isin || !ratio1 || !ratio2 || !recordDate) return;
 
@@ -463,6 +554,8 @@ function BonusPage() {
                       <th className="num">Bonus Shares</th>
                       <th className="num">New Holding</th>
                       <th className="num">Δ Change</th>
+                      <th>Status</th>
+                      <th>Received Date</th>
                     </tr>
                   </thead>
 
@@ -513,6 +606,8 @@ function BonusPage() {
                             <td className="num positive">
                               +{numberFormat.format(Math.floor(Number(group.delta) || 0))}
                             </td>
+                            <td>{[...group.statuses].join(" / ")}</td>
+                            <td>{group.receivedDate || "—"}</td>
                           </tr>
 
                           {expanded &&
@@ -538,6 +633,8 @@ function BonusPage() {
                                 <td className="num positive">
                                   +{numberFormat.format(Number(row.delta) || 0)}
                                 </td>
+                                <td>{statusLabel(row.status)}</td>
+                                <td>{row.receivedDate || "—"}</td>
                               </tr>
                             ))}
                         </React.Fragment>
@@ -633,93 +730,44 @@ function BonusPage() {
                     }
                   }}
                 />
-
-                {/* APPLY BONUS */}
-                <button
-                  className="cm-primary"
-                  disabled={applying || datesOutOfOrder}
-                  onClick={async () => {
-                    setApplying(true);
-                    setError(null);
-                    setApplyStatus("SUBMITTING");
-
-                    try {
-                      const res = await fetch(`${BASE_URL}/bonus/apply`, {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({
-                          isin,
-                          ratio1: Number(ratio1),
-                          ratio2: Number(ratio2),
-                          recordDate,
-                          effectiveDate,
-                          securityCode,
-                          securityName,
-                        }),
-                      });
-
-                      const data = await res.json();
-
-                      if (!data.success) {
-                        setError(data.message || "Failed to apply bonus");
-                        setApplying(false);
-                        setApplyStatus(null);
-                        return;
-                      }
-
-                      setApplyJobName(data.jobName);
-                      setApplyStatus(data.status);
-
-                      // Bell notification: "in progress" until the background
-                      // holdings rebuild has actually finished.
-                      const bonusLabel = `Stock bonus — ${isin || securityCode || "security"}`;
-                      if (data.alreadyRunning) {
-                        reportJob({
-                          id: `bonus-already-${Date.now()}`,
-                          label: bonusLabel,
-                          status: "completed",
-                          message: "A bonus for this security and date is already being applied.",
-                        });
-                      } else if (data.catalystJobName) {
-                        trackJob({
-                          id: data.catalystJobName,
-                          label: bonusLabel,
-                          message: "Your bonus task has been submitted.",
-                          statusUrl: `${BASE_URL}/bonus/apply-progress?key=${encodeURIComponent(
-                            data.catalystJobName,
-                          )}`,
-                          parseStatus: parseBonusStatus,
-                          timeoutMs: 45 * 60 * 1000,
-                        });
-                      }
-                    } catch (err) {
-                      setError("Something went wrong");
-                      setApplying(false);
-                      setApplyStatus(null);
-                    }
-                  }}
-                >
-                  {applying
-                    ? applyStatus === "COMPLETED"
-                      ? "Bonus Applied!"
-                      : "Applying Bonus…"
-                    : "Confirm & Apply Bonus"}
-                </button>
               </div>
             </>
           )}
         </div>
       )}
-      {step === "preview" && (
-        <CustodianComparePanel
+      {step === "preview" && previewData.length > 0 && (
+        <SplitReconcilePanel
           caType="bonus"
+          stage={stage}
           isin={isin}
+          securityCode={securityCode}
           securityName={securityName}
           ratio1={ratio1}
           ratio2={ratio2}
           recordDate={recordDate}
+          effectiveDate={effectiveDate}
+          confirming={applying}
+          onConfirm={applyBonus}
+          onReceivableSent={fetchPreview}
+          onCompared={() => setHistoryToken((t) => t + 1)}
         />
       )}
+      <PreviousFiles
+        title="Stage 1 · Ex-Entitlement Comparison History"
+        load={loadEntitlementHistory}
+        getDownloadUrl={getHistoryDownloadUrl}
+        dateLabel="Record date"
+        emptyText="No Ex-Entitlement comparisons yet."
+        refreshToken={historyToken}
+      />
+      <PreviousFiles
+        title="Stage 2 · Corporate Benefit Collection Comparison History"
+        load={loadBenefitHistory}
+        getDownloadUrl={getHistoryDownloadUrl}
+        dateLabel="Record date"
+        emptyText="No Corporate Benefit Collection comparisons yet."
+        refreshToken={historyToken}
+      />
       </div>
     </MainLayout>
   );

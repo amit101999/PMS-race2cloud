@@ -131,17 +131,27 @@ const sortDifferencesFirst = (rows, matchedStatus) =>
  *
  * @param {object[]} previewRows  computeSplitPreviewRows / computeBonusPreviewRows
  * @param {object[]} custodyRows  readLatestCorpActionRows
- * @param {boolean}  withCaQty    Split only: also compare our newHolding with the custodian's CA Qty
+ * @param {boolean}  withCaQty    also compare our CA qty with the custodian's CA Qty
+ * @param {string}   faCaQtyField the preview field that is our CA qty: the custodian's CA Qty is the
+ *                                total after a split ("newHolding") but only the new shares for a bonus ("bonusShares")
  * @returns {{ rows: object[], counts: object }} every client, differences first
  */
-export const compareHoldings = ({ previewRows, custodyRows, isin, isinName, recordDateISO, withCaQty = false }) => {
+export const compareHoldings = ({
+  previewRows,
+  custodyRows,
+  isin,
+  isinName,
+  recordDateISO,
+  withCaQty = false,
+  faCaQtyField = "newHolding",
+}) => {
   const faByAccount = new Map(); // account → { holding, caQty }
   for (const row of previewRows) {
     const account = String(row.actualCode || row.accountCode || "").trim().toUpperCase();
     if (!account) continue;
     const totals = faByAccount.get(account) || { holding: 0, caQty: 0 };
     totals.holding += Number(row.currentHolding) || 0;
-    totals.caQty += Number(row.newHolding) || 0;
+    totals.caQty += Number(row[faCaQtyField]) || 0;
     faByAccount.set(account, totals);
   }
 
@@ -210,14 +220,14 @@ export const compareHoldings = ({ previewRows, custodyRows, isin, isinName, reco
 };
 
 /**
- * Split stage 2: every account marked Receivable vs the Corporate Benefit
- * Collection file.
+ * Split / Bonus stage 2: every account marked Receivable vs the Corporate
+ * Benefit Collection file.
  *
- * Our CA qty (Split_Account.New_Holding, summed per actual code) is compared
- * with the custodian's "Received Quantity". CA Qty, Balance Qty and Received
- * Date are carried along for the reader.
+ * Our CA qty (summed per actual code: the new holding for a split, the bonus
+ * shares for a bonus) is compared with the custodian's "Received Quantity".
+ * CA Qty, Balance Qty and Received Date are carried along for the reader.
  *
- * @param {Array<{ accountCode: string, newHolding: number }>} receivableRows
+ * @param {Array<{ accountCode: string, expectedQty: number }>} receivableRows
  *        one per virtual code; accountCode is already the ACTUAL code
  * @param {Array<{ accountCode, isinName, caRefNo, caQty, receivedQty, balanceQty, receivedDate, eventStatus }>} allocationRows
  * @returns {{ rows: object[], counts: object }} every client, differences first
@@ -227,7 +237,7 @@ export const compareReceipts = ({ receivableRows, allocationRows, isin, isinName
   for (const row of receivableRows) {
     const account = String(row.accountCode || "").trim().toUpperCase();
     if (!account) continue;
-    faByAccount.set(account, (faByAccount.get(account) || 0) + (Number(row.newHolding) || 0));
+    faByAccount.set(account, (faByAccount.get(account) || 0) + (Number(row.expectedQty) || 0));
   }
 
   // The custodian can list one client more than once (e.g. two DP accounts).

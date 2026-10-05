@@ -5,13 +5,13 @@ import {
   previewStockSplit,
   getSplitApplyStatus,
   sendSplitReceivable,
-  getSplitHistory,
-  getSplitHistoryDownload,
 } from "../controller/uploader/SplitController.js";
 import { exportSplitPreviewFile } from "../controller/export/exportSplit/exportSplitFile.js";
 import {
+  compareWithBenefit,
   compareWithCustodian,
-  compareSplitWithBenefit,
+  downloadDifferenceFile,
+  listDifferenceHistory,
 } from "../controller/corporateAction/CustodianUploadController.js";
 const router = express.Router();
 
@@ -21,11 +21,11 @@ router.post("/preview", previewStockSplit);
 router.post("/compare-custodian", compareWithCustodian("split"));
 router.post("/send-receivable", sendSplitReceivable);
 // Stage 2: Receivable accounts vs the Corporate Benefit Collection file.
-router.post("/compare-benefit", compareSplitWithBenefit);
+router.post("/compare-benefit", compareWithBenefit("split"));
 
 router.get("/getAllSecuritiesList", getAllSecuritiesISINs);
 router.get("/export-preview", exportSplitPreviewFile);
 router.get("/job-status", getSplitApplyStatus);
-router.get("/history", getSplitHistory);
-router.get("/history/download", getSplitHistoryDownload);
+router.get("/history", listDifferenceHistory("split"));
+router.get("/history/download", downloadDifferenceFile("split"));
 export default router;
