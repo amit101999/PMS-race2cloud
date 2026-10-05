@@ -12,15 +12,18 @@
  * What it does:
  *   1. INSERT a row into `Jobs` (status='PENDING') keyed by jobName so the
  *      React UI can poll `/dividend/apply-status?jobName=...`.
- *   2. Idempotency check on (ISIN, RecordDate) in `Dividend`.
- *   3. INSERT one master row into `Dividend`.
+ *   2. INSERT the master row into `Dividend`, unless it already exists (a
+ *      dividend can be confirmed more than once).
+ *   3. Read the `Dividend_Record` rows still RECEIVABLE (sent as Receivable by
+ *      the Dividend page's custodian reconciliation).
  *   4. Read the Holdings ledger for the ISIN as at the RecordDate — the same
  *      rows, date rule and position maths as the dividend preview.
  *   5. Re-derive each account's holding on the RecordDate from those rows.
- *   6. INSERT one row into `Dividend_Record` per eligible account.
- *   7. APPEND one row into `Cash_Balance_Per_Transaction` per eligible
- *      account (running balance + monotonic Sequence per account).
- *   8. UPDATE the `Jobs` row to status='COMPLETED' (or 'FAILED' on error).
+ *   6. For each RECEIVABLE account in the allow-list (accountCodesJson):
+ *      UPDATE its `Dividend_Record` row, APPEND one row into
+ *      `Cash_Balance_Per_Transaction` (running balance + monotonic Sequence
+ *      per account), then mark the row RECEIVED.
+ *   7. UPDATE the `Jobs` row to status='COMPLETED' (or 'FAILED' on error).
  */
 
 const catalyst = require("zcatalyst-sdk-node");
@@ -107,6 +110,31 @@ async function fetchHoldingsRowsByAccountForIsin(zcql, isin, recordDateISO) {
   return byAccount;
 }
 
+/**
+ * The Dividend page's custodian reconciliation: every Dividend_Record row of
+ * this dividend still RECEIVABLE (sent as Receivable, cash not credited yet).
+ * @returns {Promise<Map<string, string>>} account code → ROWID
+ */
+async function readReceivableRowIds(zcql, isin, recordDateISO) {
+  const byAccount = new Map();
+  let lastRowId = "0";
+  while (true) {
+    const page = ((await zcql.executeZCQLQuery(`
+      SELECT ROWID, WS_Account_code FROM Dividend_Record
+      WHERE ISIN = '${esc(isin)}' AND RecordDate = '${esc(recordDateISO)}'
+        AND Status = 'RECEIVABLE' AND ROWID > ${lastRowId}
+      ORDER BY ROWID ASC
+      LIMIT ${ZCQL_ROW_LIMIT}
+    `)) || []).map((r) => r.Dividend_Record || r);
+    for (const d of page) {
+      const code = String(d.WS_Account_code || "").trim();
+      if (code) byAccount.set(code, d.ROWID);
+    }
+    if (page.length < ZCQL_ROW_LIMIT) return byAccount;
+    lastRowId = page[page.length - 1].ROWID;
+  }
+}
+
 const normalizeDate = (d) => {
   const dt = new Date(d);
   dt.setUTCHours(0, 0, 0, 0);
@@ -135,44 +163,30 @@ module.exports = async (jobRequest, context) => {
       paymentDate,
       dividendType,
       accountCodesJson,
-      applyMode,
     } = params;
     const rate = Number(params.rate);
     jobName = params.jobName;
 
     /*
-     * Optional account filter passed by the controller. When present the job
-     * still discovers all FIFO-eligible accounts but only writes rows for
-     * those in this allow-list. Used by the Apply Matched Only / Apply All
-     * Reconciled buttons on the Dividend page.
+     * The accounts this Confirm pays: the Receivable accounts the Corporate
+     * Benefit Collection file lists, chosen by the controller. Required — paying
+     * without it could credit accounts the custodian has not paid yet.
      */
     let accountFilter = null;
-    if (accountCodesJson) {
-      try {
-        const arr = JSON.parse(accountCodesJson);
-        if (Array.isArray(arr) && arr.length) {
-          accountFilter = new Set(arr.map((s) => String(s).trim()));
-        }
-      } catch (parseErr) {
-        console.warn(
-          "UpdateDividendData: could not parse accountCodesJson; treating as no filter:",
-          parseErr.message,
-        );
+    try {
+      const arr = JSON.parse(accountCodesJson || "[]");
+      if (Array.isArray(arr) && arr.length) {
+        accountFilter = new Set(arr.map((s) => String(s).trim()));
       }
+    } catch (parseErr) {
+      console.error("UpdateDividendData: could not parse accountCodesJson:", parseErr.message);
     }
     if (accountFilter) {
-      console.log(
-        `UpdateDividendData: applyMode=${applyMode || "matched"}, ` +
-          `account filter contains ${accountFilter.size} accounts`,
-      );
-    } else {
-      console.log(
-        `UpdateDividendData: applyMode=${applyMode || "system"} (no account filter)`,
-      );
+      console.log(`UpdateDividendData: account filter contains ${accountFilter.size} accounts`);
     }
 
-    if (!Number.isFinite(rate) || rate <= 0) {
-      console.error("UpdateDividendData: invalid dividend rate ->", params.rate);
+    if (!accountFilter || !Number.isFinite(rate) || rate <= 0) {
+      console.error("UpdateDividendData: invalid rate or no accounts to pay ->", params.rate, accountCodesJson);
       if (jobName) {
         try {
           await zcql.executeZCQLQuery(
@@ -221,7 +235,12 @@ module.exports = async (jobRequest, context) => {
       `UpdateDividendData: ISIN=${isin} RecordDate=${recordDateISO} Rate=${rate} PaymentDate=${paymentDateISO}`,
     );
 
-    /* ---- 2. Idempotency check ---- */
+    /* ---- 2+3. Dividend master row — inserted once ----
+     * A dividend can be confirmed more than once (accounts the Benefit
+     * Collection file did not list yet stay Receivable for a later Confirm), so
+     * an existing master row no longer stops the job: only the insert is skipped.
+     * Which accounts still need paying is decided per account below, from the
+     * RECEIVABLE Dividend_Record rows. */
     const existing = await zcql.executeZCQLQuery(`
       SELECT ROWID
       FROM Dividend
@@ -231,18 +250,9 @@ module.exports = async (jobRequest, context) => {
     `);
 
     if (existing && existing.length > 0) {
-      console.warn(
-        `Dividend already exists for ISIN=${isin} RecordDate=${recordDateISO}. Skipping master insert and per-account allocation.`,
-      );
-      await zcql.executeZCQLQuery(
-        `UPDATE Jobs SET status = 'COMPLETED' WHERE jobName = '${jobName}'`
-      );
-      context.closeWithSuccess();
-      return;
-    }
-
-    /* ---- 3. INSERT INTO Dividend (master row) ---- */
-    await zcql.executeZCQLQuery(`
+      console.log(`Dividend master row already exists for ${isin}/${recordDateISO} — skip INSERT`);
+    } else {
+      await zcql.executeZCQLQuery(`
       INSERT INTO Dividend
       (
         SecurityCode,
@@ -268,7 +278,11 @@ module.exports = async (jobRequest, context) => {
         'Draft'
       )
     `);
-    console.log(`Dividend master row inserted for ${isin}/${recordDateISO}`);
+      console.log(`Dividend master row inserted for ${isin}/${recordDateISO}`);
+    }
+
+    const receivableRowIds = await readReceivableRowIds(zcql, isin, recordDateISO);
+    console.log(`Receivable Dividend_Record rows: ${receivableRowIds.size}`);
 
     /* ---- 4. Read the Holdings ledger as at the RecordDate ----
      * Same rows, same date rule and same position maths as the dividend
@@ -292,7 +306,8 @@ module.exports = async (jobRequest, context) => {
     console.log(`Accounts with Holdings rows as at ${recordDateISO}: ${rowsByAccount.size}`);
 
     if (rowsByAccount.size === 0) {
-      console.log("No eligible accounts. Job complete (master row inserted only).");
+      // Nothing can be paid; the Receivable accounts stay Receivable.
+      console.log("No eligible accounts. Job complete (no account paid).");
       await zcql.executeZCQLQuery(
         `UPDATE Jobs SET status = 'COMPLETED' WHERE jobName = '${jobName}'`
       );
@@ -300,8 +315,13 @@ module.exports = async (jobRequest, context) => {
       return;
     }
 
-    /* ---- 5. Holding + INSERT INTO Dividend_Record + Cash_Balance_Per_Transaction
-     *        per eligible account.
+    /* ---- 5. Per Receivable account in the allow-list: refresh its
+     *        Dividend_Record row (holding + amount), credit
+     *        Cash_Balance_Per_Transaction, then mark the row RECEIVED.
+     *
+     *        RECEIVED is written only after the cash row exists, so any failure
+     *        leaves the account Receivable and the next Confirm finishes it (the
+     *        cash duplicate check below stops it being paid twice).
      *
      *        Cash_Balance_Per_Transaction insert rules (append-only):
      *          - Skip if a row already exists for
@@ -313,19 +333,27 @@ module.exports = async (jobRequest, context) => {
      *            the record date so the Cash Passbook UI shows the dividend's
      *            entitlement date in both date columns).
      * ---- */
-    let insertedCount = 0;
+    let updatedCount = 0;
+    let receivedCount = 0;
     let skippedFlat = 0;
     let skippedFiltered = 0;
-    let insertErrors = 0;
+    let skippedNotReceivable = 0;
+    let recordErrors = 0;
     let cashInsertedCount = 0;
     let cashSkippedDup = 0;
     let cashErrors = 0;
 
     for (const [accountCode, holdingRows] of rowsByAccount) {
-      // Apply Matched Only / Apply All Reconciled: skip accounts that are
-      // not in the allow-list passed by the controller.
+      // Only the accounts this Confirm pays (those the Benefit Collection file
+      // lists), passed by the controller as the allow-list.
       if (accountFilter && !accountFilter.has(accountCode)) {
         skippedFiltered++;
+        continue;
+      }
+      // Never sent as Receivable, or already credited by an earlier Confirm.
+      const recordRowId = receivableRowIds.get(accountCode);
+      if (!recordRowId) {
+        skippedNotReceivable++;
         continue;
       }
 
@@ -333,30 +361,27 @@ module.exports = async (jobRequest, context) => {
       // balance can be stale for the trade-date rule. Identical call to the preview's.
       const holding = recomputeHoldingsSnapshot(holdingRows).HOLDING;
       if (holding <= QTY_EPS) {
-        skippedFlat++;
+        skippedFlat++; // stays Receivable — nothing to pay on a zero holding
         continue;
       }
 
       const dividendAmount = Math.round(holding * rate * 100) / 100;
 
       try {
+        // The amounts sent as Receivable may be stale (e.g. a back-dated trade
+        // since); store what is actually credited.
         await zcql.executeZCQLQuery(`
-          INSERT INTO Dividend_Record
-          (ISIN, RecordDate, WS_Account_code, Holding, Rate, Dividend_Amount, PaymentDate, Security_Code, Status)
-          VALUES (
-            '${esc(isin)}',
-            '${recordDateISO}',
-            '${esc(accountCode)}',
-            ${holding},
-            ${rate},
-            ${dividendAmount},
-            '${paymentDateISO}',
-            '${esc(securityCode)}',
-            'Draft'
-          )
+          UPDATE Dividend_Record SET
+            Holding = ${holding},
+            Rate = ${rate},
+            Dividend_Amount = ${dividendAmount},
+            PaymentDate = '${paymentDateISO}',
+            Security_Code = '${esc(securityCode)}'
+          WHERE ROWID = ${recordRowId}
         `);
-        insertedCount++;
+        updatedCount++;
 
+        let cashDone = false;
         /* ---- Cash_Balance_Per_Transaction: append dividend credit ---- */
         try {
           const existingCash = await zcql.executeZCQLQuery(`
@@ -370,6 +395,7 @@ module.exports = async (jobRequest, context) => {
 
           if (existingCash && existingCash.length > 0) {
             cashSkippedDup++;
+            cashDone = true; // credited by an earlier run
           } else {
             /*
              * Insert the dividend row at its CHRONOLOGICAL position, not at
@@ -477,6 +503,7 @@ module.exports = async (jobRequest, context) => {
                 )
               `);
               cashInsertedCount++;
+              cashDone = true;
             } catch (insertErr) {
               // Compensate: undo the shifts in ASCENDING new-sequence order so
               // restoring N+1 → N happens before restoring N+2 → N+1.
@@ -503,18 +530,25 @@ module.exports = async (jobRequest, context) => {
             `Cash_Balance_Per_Transaction insert failed for ${accountCode}: ${cashErr.message}`,
           );
         }
-      } catch (insertErr) {
-        insertErrors++;
+
+        if (cashDone) {
+          await zcql.executeZCQLQuery(`
+            UPDATE Dividend_Record SET Status = 'RECEIVED' WHERE ROWID = ${recordRowId}
+          `);
+          receivedCount++;
+        }
+      } catch (recordErr) {
+        recordErrors++;
         console.error(
-          `Dividend_Record insert failed for ${accountCode}: ${insertErr.message}`,
+          `Dividend_Record update failed for ${accountCode}: ${recordErr.message}`,
         );
       }
     }
 
     console.log(
-      `UpdateDividendData done. Master=1, Records inserted=${insertedCount}, ` +
-        `skipped(flat)=${skippedFlat}, ` +
-        `skipped(filtered)=${skippedFiltered}, errors=${insertErrors}, ` +
+      `UpdateDividendData done. Records updated=${updatedCount}, marked RECEIVED=${receivedCount}, ` +
+        `skipped(flat)=${skippedFlat}, skipped(filtered)=${skippedFiltered}, ` +
+        `skipped(not receivable)=${skippedNotReceivable}, record errors=${recordErrors}, ` +
         `CashRows inserted=${cashInsertedCount}, CashRows skipped(dup)=${cashSkippedDup}, CashRows errors=${cashErrors}`,
     );
 

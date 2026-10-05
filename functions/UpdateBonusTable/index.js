@@ -165,9 +165,11 @@ async function ensureBonusRecord(
   zcql,
   { secCode, secName, isin, r1, r2, recordDateISO, effectiveDateISO },
 ) {
+  // Bonus_Record also holds one row per account (WS_Account_code set) for the
+  // Bonus page's custodian reconciliation; only an event row counts here.
   const existing = await zcql.executeZCQLQuery(`
     SELECT ROWID, Record_Date, ExDate FROM Bonus_Record
-    WHERE ISIN = '${esc(isin)}'
+    WHERE ISIN = '${esc(isin)}' AND WS_Account_code IS NULL
   `);
   const alreadyThere = (existing || [])
     .map((r) => r.Bonus_Record || r)
@@ -198,6 +200,31 @@ async function ensureBonusRecord(
         '${esc(effectiveDateISO)}'
       )
     `);
+}
+
+/**
+ * The Bonus page's custodian reconciliation: once this bonus is applied, its
+ * account rows in Bonus_Record (WS_Account_code set, sent as Receivable by the
+ * page) become RECEIVED. The page stored their Received Dates already.
+ */
+async function markBonusAccountsReceived(zcql, { isin, recordDateISO, r1, r2 }) {
+  const where =
+    `ISIN = '${esc(isin)}' AND Record_Date = '${esc(recordDateISO)}' ` +
+    `AND Ratio1 = ${Number(r1)} AND Ratio2 = ${Number(r2)} ` +
+    `AND WS_Account_code IS NOT NULL AND Status = 'RECEIVABLE'`;
+  let marked = 0;
+  // Bounded: if an UPDATE ever changed nothing, the same rows would come back forever.
+  for (let pass = 0; pass < 1000; pass += 1) {
+    const page = ((await zcql.executeZCQLQuery(
+      `SELECT ROWID FROM Bonus_Record WHERE ${where} ORDER BY ROWID ASC LIMIT 200`,
+    )) || []).map((r) => (r.Bonus_Record || r).ROWID);
+    if (page.length === 0) return marked;
+    await zcql.executeZCQLQuery(
+      `UPDATE Bonus_Record SET Status = 'RECEIVED' WHERE ROWID IN (${page.join(", ")})`,
+    );
+    marked += page.length;
+  }
+  return marked;
 }
 
 async function queueRebuildHoldingsJobs(
@@ -525,6 +552,7 @@ module.exports = async (jobRequest, context) => {
     /* ======================================================
        STEP 4: BONUS_RECORD (master record, idempotent)
        ====================================================== */
+    let bonusRecorded = false;
     if (inserted > 0) {
       try {
         await ensureBonusRecord(zcql, {
@@ -536,8 +564,20 @@ module.exports = async (jobRequest, context) => {
           recordDateISO,
           effectiveDateISO,
         });
+        bonusRecorded = true;
       } catch (recordErr) {
         console.error("Error inserting Bonus_Record:", recordErr);
+      }
+    }
+
+    // Only a complete first-time apply confirms the custodian reconciliation;
+    // otherwise the accounts stay Receivable and Confirm can be run again.
+    if (bonusRecorded && errorCount === 0 && !recompute) {
+      try {
+        const marked = await markBonusAccountsReceived(zcql, { isin, recordDateISO, r1, r2 });
+        console.log(`[UpdateBonusTable] ${marked} account row(s) marked RECEIVED`);
+      } catch (markErr) {
+        console.error("[UpdateBonusTable] Could not mark the accounts Received:", markErr);
       }
     }
 

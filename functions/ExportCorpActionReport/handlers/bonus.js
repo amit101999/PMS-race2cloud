@@ -41,12 +41,15 @@ async function buildManifest(zcql, fromDate, toDate) {
   const seenRowIds = new Set();
   let offset = 0;
 
+  // Bonus_Record also holds one row per account (WS_Account_code set) for the
+  // Bonus page's custodian reconciliation; only the event rows are bonuses.
   while (true) {
     const rows = await zcql.executeZCQLQuery(`
       SELECT ROWID, SecurityCode, SecurityName, Ratio1, Ratio2, Record_Date, ExDate, ISIN
       FROM Bonus_Record
-      WHERE (ExDate >= '${from}' AND ExDate <= '${to}')
-         OR (Record_Date >= '${from}' AND Record_Date <= '${to}')
+      WHERE WS_Account_code IS NULL
+        AND ((ExDate >= '${from}' AND ExDate <= '${to}')
+         OR (Record_Date >= '${from}' AND Record_Date <= '${to}'))
       ORDER BY ExDate ASC, ROWID ASC
       LIMIT ${MANIFEST_BATCH} OFFSET ${offset}
     `);

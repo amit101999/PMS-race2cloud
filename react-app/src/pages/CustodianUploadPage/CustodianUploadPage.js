@@ -51,7 +51,7 @@ const IMPORT_POLL_MS = 10000;
  * button once the mapping is saved.
  *
  * @param {"entitlement"|"allocation"} kind   which file (the backend's folder and mapping)
- * @param {string} title                       e.g. "CA Custodian Entitlement File"
+ * @param {string} title                       e.g. "Custodian Ex-Entitlement File"
  * @param {string} listHeading                 heading over the stored file
  * @param {string} profileType                 the mapping type the popup edits
  * @param {string} businessDate                yyyy-mm-dd from the page's Date picker
@@ -395,7 +395,7 @@ const CustodianUploadPage = () => {
                     <div className="cm-col">
                         <CustodianFileCard
                             kind="entitlement"
-                            title="CA Custodian Entitlement File"
+                            title="Custodian Ex-Entitlement File"
                             listHeading="Custodian entitlement file"
                             profileType={PROFILE_TYPE.CUSTODY_CORP_ACTION}
                             businessDate={businessDate}
@@ -406,7 +406,7 @@ const CustodianUploadPage = () => {
                     <div className="cm-col">
                         <CustodianFileCard
                             kind="allocation"
-                            title="CA Custodian Allocation File"
+                            title="Custodian Benefit Collection File"
                             listHeading="Custodian allocation file (Corporate Benefit Collection)"
                             profileType={PROFILE_TYPE.CUSTODY_CORP_ALLOCATION}
                             businessDate={businessDate}
@@ -418,12 +418,12 @@ const CustodianUploadPage = () => {
 
                 <PreviousUploads
                     kind="entitlement"
-                    title="Previous CA Custodian Entitlement File Uploads"
+                    title="Previous Custodian Ex-Entitlement File Uploads"
                     change={fileChanges.entitlement}
                 />
                 <PreviousUploads
                     kind="allocation"
-                    title="Previous CA Custodian Allocation File Uploads"
+                    title="Previous Custodian Benefit Collection File Uploads"
                     change={fileChanges.allocation}
                 />
             </div>

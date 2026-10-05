@@ -9,13 +9,7 @@ import {
   splitStage,
   SPLIT_STATUS,
 } from "../../util/analytics/splitPreviewCalc.js";
-import {
-  readLatestCorpActionRows,
-  readLatestSplitReceiptRows,
-  SPLIT_DIFFERENCE_FOLDERS,
-} from "../corporateAction/CustodianUploadController.js";
-import { getBucket, listAll } from "../../util/holdingComparison/storage.js";
-import { STRATUS_GET_URL_OPTS, stratusSignedUrlToString } from "../../util/stratusSignedUrl.js";
+import { readLatestCorpActionRows, readLatestReceiptRows } from "../corporateAction/CustodianUploadController.js";
 
 const HOLDINGS_BATCH = 250;
 const round4 = (n) => Math.round(n * 10000) / 10000;
@@ -128,8 +122,6 @@ export const getAllSecuritiesISINs = async (req, res) => {
     });
   }
 };
-
-const ZCQL_ROW_LIMIT = 270;
 
 export const previewStockSplit = async (req, res) => {
   try {
@@ -372,7 +364,7 @@ const updateSplitAccountRows = async (zcql, rowIds, assignments) => {
 const planSplitReceipt = async (app, zcql, { isin, recordDateISO, receivable }) => {
   let allocationRows;
   try {
-    ({ rows: allocationRows } = await readLatestSplitReceiptRows(app, { isin, recordDateISO }));
+    ({ rows: allocationRows } = await readLatestReceiptRows(app, { caType: "split", isin, recordDateISO }));
   } catch (err) {
     if (err.code) return { code: err.code, error: err.message };
     throw err;
@@ -502,57 +494,6 @@ export const sendSplitReceivable = async (req, res) => {
   }
 };
 
-const HISTORY_LIMIT = 10;
-const HISTORY_KEY_PATTERN = /^CA-Differences\/split-(entitlement|benefit)\/(\d{4}-\d{2}-\d{2})\/(\d+)-([^/]+)$/;
-
-/**
- * GET /split/history?stage=entitlement|benefit
- * The newest differential files of one reconciliation stage (every ISIN).
- */
-export const getSplitHistory = async (req, res) => {
-  try {
-    const stage = String(req.query?.stage || "");
-    const folder = SPLIT_DIFFERENCE_FOLDERS[stage];
-    if (!folder) {
-      return res.status(400).json({ success: false, message: "stage must be entitlement or benefit." });
-    }
-
-    const items = (await listAll(getBucket(req.catalystApp), `${folder}/`))
-      .map((item) => {
-        const m = HISTORY_KEY_PATTERN.exec(item.key);
-        return m
-          ? { key: item.key, businessDate: m[2], timeMs: Number(m[3]), fileName: m[4], sizeBytes: item.sizeBytes }
-          : null;
-      })
-      .filter(Boolean)
-      .sort((a, b) => b.timeMs - a.timeMs)
-      .slice(0, HISTORY_LIMIT);
-
-    return res.json({ success: true, items });
-  } catch (error) {
-    console.error("[SplitController] getSplitHistory:", error);
-    return res.status(500).json({ success: false, message: error.message || "Could not list the split differential files." });
-  }
-};
-
-/** GET /split/history/download?key=... — only for keys getSplitHistory lists. */
-export const getSplitHistoryDownload = async (req, res) => {
-  try {
-    const key = String(req.query?.key || "");
-    if (!HISTORY_KEY_PATTERN.test(key)) {
-      return res.status(400).json({ success: false, message: "key must name a split differential file." });
-    }
-    const bucket = getBucket(req.catalystApp);
-    const downloadUrl = stratusSignedUrlToString(
-      await bucket.generatePreSignedUrl(key, "GET", STRATUS_GET_URL_OPTS),
-    );
-    return res.json({ success: true, downloadUrl });
-  } catch (error) {
-    console.error("[SplitController] getSplitHistoryDownload:", error);
-    return res.status(500).json({ success: false, message: error.message || "Could not create the download link." });
-  }
-};
-
 export const addStockSplit = async (req, res) => {
   try {
     const app = req.catalystApp;
@@ -632,9 +573,11 @@ export const addStockSplit = async (req, res) => {
       return res.status(409).json({ success: false, code: receipt.code, message: receipt.error });
     }
 
-    // Split row first, then the statuses. If marking fails after the insert,
-    // the accounts stay Receivable, the page still offers Confirm, and the
-    // next click skips this insert and finishes the rest.
+    // Order: Split row → rebuild/bonus jobs → statuses Received (at the end).
+    // If anything fails before the end, the accounts stay Receivable, the page
+    // still offers Confirm, and the next click skips this insert and sends the
+    // jobs again (a rebuild is safe to repeat). Marking Received earlier would
+    // make the next click treat the split as done and never send the rebuild.
     if (!alreadyApplied) {
       await zcql.executeZCQLQuery(`
       INSERT INTO Split
@@ -659,26 +602,18 @@ export const addStockSplit = async (req, res) => {
       )
     `);
     }
-    await markSplitReceived(zcql, receipt.rowIdsByDate);
 
-    const accountSet = new Set();
-    let holdOffset = 0;
-
-    while (true) {
-      const batch = await zcql.executeZCQLQuery(`
-        SELECT WS_Account_code
-        FROM Transaction
-        WHERE ISIN='${isinEsc}'
-        LIMIT ${ZCQL_ROW_LIMIT} OFFSET ${holdOffset}
-      `);
-
-      if (!batch || batch.length === 0) break;
-      batch.forEach((r) => accountSet.add(r.Transaction.WS_Account_code));
-      if (batch.length < ZCQL_ROW_LIMIT) break;
-      holdOffset += ZCQL_ROW_LIMIT;
-    }
-
-    const affectedAccounts = Array.from(accountSet);
+    // Accounts to rebuild = every account holding the ISIN on the record date,
+    // read from the Holdings ledger (same source and rule as the bonus apply).
+    // The Transaction table is not enough: a client whose shares all came from
+    // a merger or demerger has no Transaction row for this ISIN and was skipped.
+    const eligibleRows = await computeSplitPreviewRows(zcql, {
+      isin,
+      r1: splitEvent.r1,
+      r2: splitEvent.r2,
+      recordDateISO,
+    });
+    const affectedAccounts = eligibleRows.map((row) => row.accountCode);
 
     // One track key per Apply-Split click. The parent Jobs row starts RUNNING;
     // each rebuild chunk and each bonus job below registers a "piece" row that
@@ -729,10 +664,12 @@ export const addStockSplit = async (req, res) => {
     try {
       // Compared on each bonus's record date (ExDate for bonuses saved before
       // Record_Date existed), so the filter is applied here rather than in SQL.
+      // Bonus_Record also holds one row per account (WS_Account_code set) for the
+      // Bonus page's custodian reconciliation; only the event rows are bonuses.
       const bonusRecords = await zcql.executeZCQLQuery(`
         SELECT SecurityCode, SecurityName, ISIN, Ratio1, Ratio2, Record_Date, ExDate
         FROM Bonus_Record
-        WHERE ISIN = '${isinEsc}'
+        WHERE ISIN = '${isinEsc}' AND WS_Account_code IS NULL
         ORDER BY ExDate ASC
       `);
 
@@ -789,6 +726,9 @@ export const addStockSplit = async (req, res) => {
         recomputeErr.message,
       );
     }
+
+    // Every job is sent — only now is the split done from the page's view.
+    await markSplitReceived(zcql, receipt.rowIdsByDate);
 
     // Nothing to wait for (no affected accounts, no bonus to recompute) — settle
     // the parent now so the notification completes on the first status poll.
