@@ -1136,6 +1136,7 @@ function DividendPage() {
                   <th>Account</th>
                   <th className="num">Holding<br />PMS / File / Diff</th>
                   <th className="num">Rate<br />PMS / File</th>
+                  <th className="num">Payment Date<br />PMS / File</th>
                   <th className="num">Amount<br />PMS / File / Diff</th>
                   <th className="num">Already<br />Received</th>
                   <th className="num">To Receive</th>
