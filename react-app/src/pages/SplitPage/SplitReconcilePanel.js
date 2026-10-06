@@ -370,7 +370,7 @@ const SplitReconcilePanel = ({
                             </p>
                         ) : null}
 
-                        <div className="cc-actions">
+                        <div className="cc-actions cc-actions--below">
                             {isBenefitStage ? (
                                 <button type="button" className="cm-primary" disabled={busy} onClick={onConfirm}>
                                     {confirming ? "Applying…" : "Confirm & Apply"}

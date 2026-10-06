@@ -334,11 +334,13 @@
   border: 1px solid #93c5fd;
 }
 
+/* Centred under the table, as on the Split and Bonus pages. */
 .dividend-pagination {
   display: flex;
+  justify-content: center;
   align-items: center;
-  gap: 12px;
-  margin-top: 12px;
+  gap: 14px;
+  margin-top: 18px;
   flex-wrap: wrap;
 }
 
@@ -371,11 +373,13 @@
    DIVIDEND PREVIEW ACTIONS (Export / Download)
    =========================== */
 
+/* Right-aligned, as on the Split and Bonus pages. */
 .dividend-preview-actions {
   display: flex;
-  gap: 12px;
+  justify-content: flex-end;
+  gap: 16px;
   align-items: center;
-  margin-top: 20px;
+  margin-top: 16px;
   flex-wrap: wrap;
 }
 
