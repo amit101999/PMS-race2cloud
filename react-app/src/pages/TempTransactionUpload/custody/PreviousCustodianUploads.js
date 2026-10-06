@@ -74,7 +74,7 @@ const PreviousCustodianUploads = ({ latest }) => {
                             <th className="truncate">File name</th>
                             <th>Scheme</th>
                             <th>Type</th>
-                            <th className="date">Business date</th>
+                            <th className="date">Date</th>
                             <th className="action">Download</th>
                         </tr>
                     </thead>

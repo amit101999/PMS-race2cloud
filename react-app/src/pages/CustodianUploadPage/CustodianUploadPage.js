@@ -315,7 +315,7 @@ const PreviousUploads = ({ kind, title, change }) => {
                     <thead>
                         <tr>
                             <th className="date">Uploaded on</th>
-                            <th className="date">Business date</th>
+                            <th className="date">Date</th>
                             <th className="truncate">File name</th>
                             <th className="num">Size</th>
                             <th className="action">Download</th>
