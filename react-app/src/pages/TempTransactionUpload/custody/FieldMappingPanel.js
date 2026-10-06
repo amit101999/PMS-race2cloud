@@ -403,6 +403,7 @@ function MappingRow({ entry, source, columns, takenBy, onChange, registerRef, fi
  * @param {string[]} [props.types]         file types offered; Holding Comparison passes only its own
  * @param {boolean}  [props.autofill]      pre-fill unanswered fields from matching column names
  * @param {boolean}  [props.showHints]     false = compact tinted field labels (Holding Comparison)
+ * @param {string}   [props.uploadingHint] shown in the footer while an upload runs (Custodian Upload)
  */
 export default function FieldMappingPanel({
     open,
@@ -414,6 +415,7 @@ export default function FieldMappingPanel({
     types = FILE_CHOICES,
     autofill = false,
     showHints = true,
+    uploadingHint = "",
 }) {
     const [maps, setMaps] = useState([]);
     const [chosen, setChosen] = useState(null);
@@ -1053,7 +1055,11 @@ export default function FieldMappingPanel({
                         ) : null}
 
                         <div className="fm-actions-right">
-                            {showUpload ? (
+                            {showUpload && uploading && uploadingHint ? (
+                                <span className="fm-ready" role="status">
+                                    {uploadingHint}
+                                </span>
+                            ) : showUpload ? (
                                 <span className="fm-ready">Mapping saved &mdash; ready to upload.</span>
                             ) : null}
 

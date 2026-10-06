@@ -25,7 +25,7 @@ const PreviousFiles = ({
     refreshToken,
     hiddenKeys,
     getDownloadUrl = api.getDownloadUrl,
-    dateLabel = "Business date",
+    dateLabel = "Date",
 }) => {
     const [items, setItems] = useState([]);
     const [loading, setLoading] = useState(false);
