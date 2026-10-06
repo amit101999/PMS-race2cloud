@@ -60,11 +60,12 @@ const STATUS_TONE = {
 const RECEIPT_STATUS_LABEL = { RECEIVABLE: "Receivable", RECEIVED: "Received", DRAFT: "Applied" };
 const receiptStatusLabel = (status) => RECEIPT_STATUS_LABEL[status] || "—";
 
-/** Reconciliation statuses each "Send as Receivable" button sends. */
-const SEND_STATUSES = {
-  matched: ["ready"],
-  all: ["ready", "mismatch", "partial", "overpaid", "missing_in_file"],
-};
+/**
+ * Reconciliation statuses "Send as Receivable" sends: every account we hold on
+ * the record date, matched or not, as on the Split and Bonus pages. Already-paid
+ * accounts would be paid twice, and missing-in-system ones hold nothing here.
+ */
+const SEND_STATUSES = ["ready", "mismatch", "partial", "overpaid", "missing_in_file"];
 
 /** RFC 4180-style CSV cell (comma-safe). */
 function csvEscapeCell(value) {
@@ -597,21 +598,21 @@ function DividendPage() {
     );
   };
 
-  /* Accounts of the active reconciliation event that a Send button sends. */
-  const rowsToSend = (mode) =>
-    activeEventObj ? activeEventObj.rows.filter((r) => SEND_STATUSES[mode].includes(r.status)) : [];
+  /* Accounts of the active reconciliation event that Send as Receivable sends. */
+  const rowsToSend = () =>
+    activeEventObj ? activeEventObj.rows.filter((r) => SEND_STATUSES.includes(r.status)) : [];
 
   /*
-   * Stage 1 → 2: store the chosen accounts as Receivable (no cash yet). The
-   * server recomputes every amount; the browser only says which accounts.
+   * Stage 1 → 2: store the accounts as Receivable (no cash yet). The server
+   * recomputes every amount; the browser only says which accounts.
    */
-  const sendReceivable = async (mode) => {
+  const sendReceivable = async () => {
     setError(null);
-    const accountCodes = rowsToSend(mode)
+    const accountCodes = rowsToSend()
       .map((r) => r.accountCode)
       .filter(Boolean);
     if (!accountCodes.length) {
-      setError("No accounts to send for the selected option.");
+      setError("No accounts to send as Receivable.");
       return;
     }
 
@@ -713,27 +714,27 @@ function DividendPage() {
   };
 
   /*
-   * Confirmation modal for the two Send as Receivable buttons.
-   * confirmSend is null when no dialog is open, or { mode, count, gross }.
+   * Confirmation modal for Send as Receivable.
+   * confirmSend is null when no dialog is open, or { count, gross, hasDifferences }.
    */
   const [confirmSend, setConfirmSend] = useState(null);
 
-  const requestSend = (mode) => {
+  const requestSend = () => {
     if (!activeEventObj) {
       setError("No reconciliation data — fetch affected accounts first.");
       return;
     }
-    const rows = rowsToSend(mode);
+    const rows = rowsToSend();
     const gross = rows.reduce((s, r) => s + (Number(r.grossSys) || 0), 0);
-    setConfirmSend({ mode, count: rows.length, gross });
+    const hasDifferences = rows.some((r) => r.status !== "ready");
+    setConfirmSend({ count: rows.length, gross, hasDifferences });
   };
 
   const closeConfirm = () => setConfirmSend(null);
   const confirmAndSend = () => {
     if (!confirmSend) return;
-    const { mode } = confirmSend;
     setConfirmSend(null);
-    sendReceivable(mode);
+    sendReceivable();
   };
 
   return (
@@ -1135,8 +1136,7 @@ function DividendPage() {
                   <th>Account</th>
                   <th className="num">Holding<br />PMS / File / Diff</th>
                   <th className="num">Rate<br />PMS / File</th>
-                  <th className="num">Payment Date<br />PMS / File</th>
-                  <th className="num">Gross<br />PMS / File / Diff</th>
+                  <th className="num">Amount<br />PMS / File / Diff</th>
                   <th className="num">Already<br />Received</th>
                   <th className="num">To Receive</th>
                   <th className="status">Status</th>
@@ -1340,54 +1340,29 @@ function DividendPage() {
             </button>
 
             {/*
-             * Stage 1 → 2 controls (no cash is credited here):
-             *   Primary   – Send Matched as Receivable (status === "ready")
-             *   Secondary – Send All Reconciled as Receivable (everything
-             *               except already_paid / missing_in_system)
-             * Only while the dividend is NEW; afterwards Stage 2 below takes over.
+             * Stage 1 → 2 (no cash is credited here): send every account we
+             * hold as Receivable. Only while the dividend is NEW; afterwards
+             * Stage 2 below takes over.
              */}
             {(() => {
-              const matchedRows = rowsToSend("matched");
-              const safeAllRows = rowsToSend("all");
+              const sendRows = rowsToSend();
               const notNew = stage !== "NEW";
-              const busy = sending || loading;
               return (
-                <>
-                  <button
-                    type="button"
-                    className="cm-primary"
-                    disabled={busy || notNew || matchedRows.length === 0}
-                    onClick={() => requestSend("matched")}
-                    title={
-                      notNew
-                        ? "This dividend has already been sent as Receivable."
-                        : matchedRows.length === 0
-                          ? "No matched rows in this event."
-                          : `Send ${matchedRows.length} matched row(s) as Receivable.`
-                    }
-                  >
-                    {sending
-                      ? "Sending…"
-                      : `Send Matched as Receivable (${matchedRows.length})`}
-                  </button>
-                  <button
-                    type="button"
-                    className="cm-primary cm-primary--warn"
-                    disabled={busy || notNew || safeAllRows.length === 0}
-                    onClick={() => requestSend("all")}
-                    title={
-                      notNew
-                        ? "This dividend has already been sent as Receivable."
-                        : safeAllRows.length === 0
-                          ? "No reconcilable rows in this event."
-                          : `Send ${safeAllRows.length} row(s) as Receivable, including mismatches.`
-                    }
-                  >
-                    {sending
-                      ? "Sending…"
-                      : `Send All Reconciled as Receivable (${safeAllRows.length})`}
-                  </button>
-                </>
+                <button
+                  type="button"
+                  className="cm-primary"
+                  disabled={sending || loading || notNew || sendRows.length === 0}
+                  onClick={requestSend}
+                  title={
+                    notNew
+                      ? "This dividend has already been sent as Receivable."
+                      : sendRows.length === 0
+                        ? "No accounts to send in this event."
+                        : `Send ${sendRows.length} account(s) as Receivable.`
+                  }
+                >
+                  {sending ? "Sending…" : `Send as Receivable (${sendRows.length})`}
+                </button>
               );
             })()}
           </div>
@@ -1410,18 +1385,14 @@ function DividendPage() {
         />
       )}
 
-      {/* Confirmation modal for Send Matched / Send All Reconciled as Receivable */}
+      {/* Confirmation modal for Send as Receivable */}
       {confirmSend && (
         <div className="dividend-modal-backdrop" onClick={closeConfirm}>
           <div
             className="dividend-modal"
             onClick={(e) => e.stopPropagation()}
           >
-            <h3 className="ops-card-title">
-              {confirmSend.mode === "matched"
-                ? "Send Matched as Receivable?"
-                : "Send All Reconciled as Receivable?"}
-            </h3>
+            <h3 className="ops-card-title">Send as Receivable?</h3>
             <p className="ops-modal-text">
               You are about to mark{" "}
               <strong>{confirmSend.count}</strong> account(s) for{" "}
@@ -1433,7 +1404,7 @@ function DividendPage() {
               Estimated system gross:{" "}
               <strong>₹{confirmSend.gross.toFixed(2)}</strong>
             </p>
-            {confirmSend.mode === "all" && (
+            {confirmSend.hasDifferences && (
               <div className="cm-verdict warn">
                 This includes <em>mismatch</em>, <em>partial</em>,{" "}
                 <em>over-paid</em> and <em>missing-in-file</em> accounts. Review

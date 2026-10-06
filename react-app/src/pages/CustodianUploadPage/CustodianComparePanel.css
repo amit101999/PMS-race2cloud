@@ -16,6 +16,11 @@
     margin-bottom: 4px;
 }
 
+/* The Send as Receivable / Confirm button under the table keeps clear of it. */
+.cc-actions--below {
+    margin-top: 16px;
+}
+
 .cc-message {
     margin-top: 12px;
 }
