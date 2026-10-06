@@ -817,11 +817,11 @@ export const getAllSecuritiesISINs = async (req, res) => {
 
   /**
    * The Receivable accounts the Corporate Benefit Collection file says were
-   * paid, each with the date it was paid (matched on the actual / UCC code).
-   * Nothing is written here, so a missing Benefit file stops Confirm before
-   * any change.
+   * paid, each with the date it was paid and the tax (CA Tax) the custodian
+   * deducted (matched on the actual / UCC code). Nothing is written here, so a
+   * missing Benefit file stops Confirm before any change.
    *
-   * @returns {Promise<{ payable: Array<{ rowId, accountCode, receivedDate }> } | { code: string, error: string }>}
+   * @returns {Promise<{ payable: Array<{ rowId, accountCode, receivedDate, tax }> } | { code: string, error: string }>}
    */
   const planDividendReceipt = async (app, zcql, { isin, recordDateISO, receivable }) => {
     let allocationRows;
@@ -834,7 +834,9 @@ export const getAllSecuritiesISINs = async (req, res) => {
 
     // The latest date is when the last of a client's payments arrived.
     const receivedDateByActual = new Map();
+    const taxByActual = new Map();
     for (const row of allocationRows) {
+      taxByActual.set(row.accountCode, (taxByActual.get(row.accountCode) || 0) + (Number(row.caTaxAmt) || 0));
       if (!row.receivedDate) continue;
       const previous = receivedDateByActual.get(row.accountCode);
       if (!previous || row.receivedDate > previous) receivedDateByActual.set(row.accountCode, row.receivedDate);
@@ -848,7 +850,17 @@ export const getAllSecuritiesISINs = async (req, res) => {
     for (const r of receivable) {
       const actual = String(virtualToActual.get(r.accountCode) || r.accountCode).toUpperCase();
       const receivedDate = receivedDateByActual.get(actual);
-      if (receivedDate) payable.push({ rowId: r.rowId, accountCode: r.accountCode, receivedDate });
+      if (receivedDate) payable.push({ rowId: r.rowId, accountCode: r.accountCode, actual, amount: r.amount, receivedDate });
+    }
+
+    // The custodian deducts tax per client (actual code). When one client has
+    // several of our accounts, share its tax by each account's dividend amount.
+    const amountByActual = new Map();
+    for (const p of payable) amountByActual.set(p.actual, (amountByActual.get(p.actual) || 0) + (Number(p.amount) || 0));
+    for (const p of payable) {
+      const clientTax = taxByActual.get(p.actual) || 0;
+      const clientAmount = amountByActual.get(p.actual) || 0;
+      p.tax = clientAmount > 0 ? round2((clientTax * (Number(p.amount) || 0)) / clientAmount) : 0;
     }
     return { payable };
   };
@@ -1018,6 +1030,8 @@ export const getAllSecuritiesISINs = async (req, res) => {
           jobName,
           // Only these accounts are paid by this Confirm.
           accountCodesJson: JSON.stringify(receipt.payable.map((p) => p.accountCode)),
+          // Tax deducted per account: the cash credited is the dividend minus this.
+          taxByAccountJson: JSON.stringify(Object.fromEntries(receipt.payable.map((p) => [p.accountCode, p.tax]))),
         },
       });
 

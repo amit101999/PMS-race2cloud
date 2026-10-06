@@ -163,6 +163,7 @@ module.exports = async (jobRequest, context) => {
       paymentDate,
       dividendType,
       accountCodesJson,
+      taxByAccountJson,
     } = params;
     const rate = Number(params.rate);
     jobName = params.jobName;
@@ -183,6 +184,15 @@ module.exports = async (jobRequest, context) => {
     }
     if (accountFilter) {
       console.log(`UpdateDividendData: account filter contains ${accountFilter.size} accounts`);
+    }
+
+    // Tax (CA Tax) the custodian deducted per account, from the Corporate
+    // Benefit Collection file. Missing means no tax.
+    let taxByAccount = {};
+    try {
+      taxByAccount = JSON.parse(taxByAccountJson || "{}") || {};
+    } catch (parseErr) {
+      console.error("UpdateDividendData: could not parse taxByAccountJson:", parseErr.message);
     }
 
     if (!accountFilter || !Number.isFinite(rate) || rate <= 0) {
@@ -328,7 +338,7 @@ module.exports = async (jobRequest, context) => {
      *            (Account_Code, ISIN, Transaction_Date=RecordDate, Type='DIVIDEND').
      *          - Otherwise read the last row for the account (ORDER BY Sequence DESC),
      *            insert a new row with Sequence=lastSeq+1 and
-     *            Cash_Balance=lastBalance+dividendAmount.
+     *            Cash_Balance=lastBalance+cashAmount (dividend minus tax).
      *          - Tran Date = RecordDate, Set Date = RecordDate (both store/display
      *            the record date so the Cash Passbook UI shows the dividend's
      *            entitlement date in both date columns).
@@ -366,6 +376,10 @@ module.exports = async (jobRequest, context) => {
       }
 
       const dividendAmount = Math.round(holding * rate * 100) / 100;
+      // Dividend_Record keeps the gross dividend; the cash credited is what the
+      // custodian actually paid: the dividend minus the tax it deducted.
+      const tax = Number(taxByAccount[accountCode]) || 0;
+      const cashAmount = Math.round((dividendAmount - tax) * 100) / 100;
 
       try {
         // The amounts sent as Receivable may be stale (e.g. a back-dated trade
@@ -408,7 +422,7 @@ module.exports = async (jobRequest, context) => {
              *      Sequence order so we never collide on a uniqueness
              *      assumption.
              *   3. INSERT the dividend at Sequence = priorSequence + 1 with
-             *      Cash_Balance = priorBalance + dividendAmount.
+             *      Cash_Balance = priorBalance + cashAmount.
              *
              * Updating the stored Cash_Balance for shifted rows keeps the
              * chip-filtered Cash Passbook view (which displays the per-row
@@ -438,7 +452,7 @@ module.exports = async (jobRequest, context) => {
 
             const newSequence = priorSequence + 1;
             const newBalance =
-              Math.round((priorBalance + dividendAmount) * 100) / 100;
+              Math.round((priorBalance + cashAmount) * 100) / 100;
 
             const SHIFT_BATCH = ZCQL_ROW_LIMIT;
             const rowsToShift = [];
@@ -475,7 +489,7 @@ module.exports = async (jobRequest, context) => {
               for (const row of rowsToShift) {
                 const newSeq = row.Sequence + 1;
                 const newBal =
-                  Math.round((row.Cash_Balance + dividendAmount) * 100) / 100;
+                  Math.round((row.Cash_Balance + cashAmount) * 100) / 100;
                 await zcql.executeZCQLQuery(`
                   UPDATE Cash_Balance_Per_Transaction
                   SET Sequence = ${newSeq}, Cash_Balance = ${newBal}
@@ -497,7 +511,7 @@ module.exports = async (jobRequest, context) => {
                   '${esc(securityCode)}',
                   '${esc(isin)}',
                   ${Math.round(Number(holding) || 0)},
-                  ${dividendAmount},
+                  ${cashAmount},
                   0,
                   ${newSequence}
                 )

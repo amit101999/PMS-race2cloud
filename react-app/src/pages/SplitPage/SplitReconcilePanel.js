@@ -281,11 +281,9 @@ const SplitReconcilePanel = ({
                                             <tr>
                                                 <th scope="col">Account Code</th>
                                                 <th scope="col">CA Ref No</th>
-                                                <th scope="col" className="num">
-                                                    Amount
-                                                    <br />
-                                                    FA / Received / Diff
-                                                </th>
+                                                <th scope="col" className="num">Amount</th>
+                                                <th scope="col" className="num">CA Tax</th>
+                                                <th scope="col" className="num">Received Amount</th>
                                                 <th scope="col">Received Date</th>
                                                 <th scope="col">Status</th>
                                             </tr>
@@ -328,7 +326,9 @@ const SplitReconcilePanel = ({
                                                     <tr key={r.accountCode} className={isBreak ? "cc-row-break" : undefined}>
                                                         <td translate="no">{r.accountCode}</td>
                                                         <td title={r.caRefNo}>{r.caRefNo || "—"}</td>
-                                                        <CompareCell fa={r.faAmount} custodian={r.receivedAmount} />
+                                                        <td className="num">{qty(r.faAmount)}</td>
+                                                        <td className="num">{qty(r.caTaxAmt)}</td>
+                                                        <td className="num">{qty(r.receivedAmount)}</td>
                                                         <td>{r.receivedDate || "—"}</td>
                                                         <td>
                                                             <StatusBadge status={r.status} />
