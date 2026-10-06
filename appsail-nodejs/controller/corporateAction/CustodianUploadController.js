@@ -365,7 +365,7 @@ export const readLatestCorpActionRows = async (catalystApp, { caType, isin, reco
  *
  * @param {{ caType: "split"|"bonus"|"dividend", isin: string, recordDateISO: string }} filter
  * @returns {Promise<{ file: object, rows: Array<{ accountCode, isinName, caRefNo, recordDate,
- *   caQty, receivedQty, balanceQty, receivedAmount, receivedDate, eventStatus }> }>}
+ *   caQty, receivedQty, balanceQty, receivedAmount, caTaxAmt, receivedDate, eventStatus }> }>}
  */
 export const readLatestReceiptRows = async (catalystApp, { caType, isin, recordDateISO }) => {
   const { upload, rows } = await readEvent(catalystApp, "allocation", { caType, isin, recordDateISO });
@@ -381,6 +381,8 @@ export const readLatestReceiptRows = async (catalystApp, { caType, isin, recordD
       balanceQty: numberOrNull(row.Balance_Qty) ?? 0,
       // Dividends are paid in cash: the custodian fills the amount, not the quantity.
       receivedAmount: numberOrNull(row.Received_Amount) ?? 0,
+      // Tax (TDS) the custodian deducted: Received Amount = CA Amount − CA Tax.
+      caTaxAmt: numberOrNull(row.CA_Tax_Amt) ?? 0,
       receivedDate: dateOf(row.Received_Date),
       eventStatus: row.Event_Status || "",
     })),

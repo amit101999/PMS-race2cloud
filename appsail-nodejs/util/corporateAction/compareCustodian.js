@@ -83,6 +83,8 @@ const DIVIDEND_RECEIPT_CSV_HEADERS = [
   "CA_REF_NO",
   "RECORD_DATE",
   "FA_AMOUNT",
+  "CA_TAX_AMT",
+  "FA_NET_AMOUNT",
   "RECEIVED_AMOUNT",
   "RECEIVED_DATE",
   "DIFFERENCE",
@@ -337,13 +339,14 @@ const round2 = (n) => Math.round(n * 100) / 100;
 
 /**
  * Dividend stage 2: every account marked Receivable vs the Corporate Benefit
- * Collection file. Our dividend amount (summed per actual code) is compared
- * with the custodian's "Received Amount"; a difference under one paisa is
+ * Collection file. The custodian pays the dividend less the tax it deducts,
+ * so our dividend amount (summed per actual code) minus the file's "CA Tax"
+ * is compared with its "Received Amount"; a difference under one paisa is
  * rounding, not a break.
  *
  * @param {Array<{ accountCode: string, expectedAmount: number }>} receivableRows
  *        one per virtual code; accountCode is already the ACTUAL code
- * @param {Array<{ accountCode, isinName, caRefNo, receivedAmount, receivedDate, eventStatus }>} allocationRows
+ * @param {Array<{ accountCode, isinName, caRefNo, receivedAmount, caTaxAmt, receivedDate, eventStatus }>} allocationRows
  * @returns {{ rows: object[], counts: object }} every client, differences first
  */
 export const compareDividendReceipts = ({ receivableRows, allocationRows, isin, isinName, recordDateISO }) => {
@@ -361,11 +364,13 @@ export const compareDividendReceipts = ({ receivableRows, allocationRows, isin, 
     if (!row.accountCode) continue;
     const totals = custodyByAccount.get(row.accountCode) || {
       receivedAmount: 0,
+      caTaxAmt: 0,
       receivedDate: "",
       caRefNos: new Set(),
       eventStatuses: new Set(),
     };
     totals.receivedAmount += Number(row.receivedAmount) || 0;
+    totals.caTaxAmt += Number(row.caTaxAmt) || 0;
     // The latest date is when the last of the payments arrived.
     if (row.receivedDate && row.receivedDate > totals.receivedDate) totals.receivedDate = row.receivedDate;
     if (row.caRefNo) totals.caRefNos.add(row.caRefNo);
@@ -387,8 +392,10 @@ export const compareDividendReceipts = ({ receivableRows, allocationRows, isin, 
     const inFa = faByAccount.has(account);
     const custody = custodyByAccount.get(account);
     const faAmount = round2(faByAccount.get(account) || 0);
+    const caTaxAmt = round2(custody?.caTaxAmt || 0);
+    const faNetAmount = round2(faAmount - caTaxAmt);
     const receivedAmount = round2(custody?.receivedAmount || 0);
-    const difference = round2(Math.abs(faAmount - receivedAmount));
+    const difference = round2(Math.abs(faNetAmount - receivedAmount));
 
     let status = DIVIDEND_RECEIPT_STATUS.MATCHED;
     if (!custody) status = DIVIDEND_RECEIPT_STATUS.NOT_IN_BENEFIT_FILE;
@@ -408,6 +415,8 @@ export const compareDividendReceipts = ({ receivableRows, allocationRows, isin, 
       caRefNo: custody ? [...custody.caRefNos].join(" ") : "",
       recordDate: recordDateISO,
       faAmount: inFa ? faAmount : null,
+      caTaxAmt: custody ? caTaxAmt : null,
+      faNetAmount: inFa ? faNetAmount : null,
       receivedAmount: custody ? receivedAmount : null,
       receivedDate: custody?.receivedDate || "",
       difference,
@@ -465,6 +474,8 @@ export const dividendReceiptsToCsv = (rows) =>
     r.caRefNo,
     r.recordDate,
     r.faAmount,
+    r.caTaxAmt,
+    r.faNetAmount,
     r.receivedAmount,
     r.receivedDate,
     r.difference,
