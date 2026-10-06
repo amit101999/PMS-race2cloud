@@ -19,7 +19,6 @@ const STATUS_VIEW = {
 const MATCHED_STATUSES = ["MATCHED"];
 
 const numberFormat = new Intl.NumberFormat(undefined, { maximumFractionDigits: 4 });
-const dateTimeFormat = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" });
 
 const qty = (v) => (v === null || v === undefined ? "—" : numberFormat.format(v));
 
@@ -227,8 +226,7 @@ const SplitReconcilePanel = ({
                 {fileInfo ? (
                     <div className={fileInfo.rowCount ? "cm-verdict ok" : "cm-verdict warn"}>
                         {fileLabel} fetched: <strong className="cc-file-name">{fileInfo.file.fileName}</strong> ·
-                        report date {fileInfo.file.businessDate} · uploaded{" "}
-                        {dateTimeFormat.format(new Date(fileInfo.file.timeMs))} ·{" "}
+                        report date {fileInfo.file.businessDate} ·{" "}
                         {numberFormat.format(fileInfo.rowCount)} row(s) for <span translate="no">{isin}</span> with
                         Record Date {recordDate}
                     </div>
