@@ -24,9 +24,10 @@ const dateTimeFormat = new Intl.DateTimeFormat(undefined, { dateStyle: "medium",
 const qty = (v) => (v === null || v === undefined ? "—" : numberFormat.format(v));
 
 /**
- * "FA / Custodian / Diff" in one cell, like the Dividend grid. The difference is
- * custodian − FA with its sign; a side the client is missing from shows "—" and
- * counts as zero.
+ * "FA / Custodian / Diff" in one cell, like the Dividend grid. `custodian` is the
+ * custodian's figure (its holding / CA qty, or what it says was received). The
+ * difference is custodian − FA with its sign; a side the client is missing from
+ * shows "—" and counts as zero.
  */
 const CompareCell = ({ fa, custodian }) => {
     const diff = Math.round(((custodian ?? 0) - (fa ?? 0)) * 10000) / 10000;
@@ -273,29 +274,32 @@ const SplitReconcilePanel = ({
                             <p className="cm-empty">No clients to compare for this security and record date.</p>
                         ) : (
                             <div className="data-table-wrap">
-                                {/* Stage 1 spreads its five columns evenly, like the history tables. */}
-                                <table className={isBenefitStage ? "data-table cc-table" : "data-table data-table--spread cc-table"}>
+                                {/* Columns spread evenly, like the history tables. */}
+                                <table className="data-table data-table--spread cc-table">
                                     <thead>
                                         {isBenefitStage && isDividend ? (
                                             <tr>
                                                 <th scope="col">Account Code</th>
                                                 <th scope="col">CA Ref No</th>
-                                                <th scope="col" className="num">FA Amount</th>
-                                                <th scope="col" className="num">Received Amount</th>
+                                                <th scope="col" className="num">
+                                                    Amount
+                                                    <br />
+                                                    FA / Received / Diff
+                                                </th>
                                                 <th scope="col">Received Date</th>
-                                                <th scope="col" className="num">Difference</th>
                                                 <th scope="col">Status</th>
                                             </tr>
                                         ) : isBenefitStage ? (
                                             <tr>
                                                 <th scope="col">Account Code</th>
                                                 <th scope="col">CA Ref No</th>
-                                                <th scope="col" className="num">FA CA Qty</th>
-                                                <th scope="col" className="num">Custodian CA Qty</th>
-                                                <th scope="col" className="num">Received Qty</th>
+                                                <th scope="col" className="num">
+                                                    CA Qty
+                                                    <br />
+                                                    FA / Received / Diff
+                                                </th>
                                                 <th scope="col" className="num">Balance Qty</th>
                                                 <th scope="col">Received Date</th>
-                                                <th scope="col" className="num">Difference</th>
                                                 <th scope="col">Status</th>
                                             </tr>
                                         ) : (
@@ -319,16 +323,13 @@ const SplitReconcilePanel = ({
                                     <tbody>
                                         {result.rows.map((r) => {
                                             const isBreak = !MATCHED_STATUSES.includes(r.status);
-                                            const diffClass = isBreak ? "num cc-diff" : "num cc-diff-zero";
                                             if (isBenefitStage && isDividend) {
                                                 return (
                                                     <tr key={r.accountCode} className={isBreak ? "cc-row-break" : undefined}>
                                                         <td translate="no">{r.accountCode}</td>
-                                                        <td>{r.caRefNo || "—"}</td>
-                                                        <td className="num">{qty(r.faAmount)}</td>
-                                                        <td className="num">{qty(r.receivedAmount)}</td>
+                                                        <td title={r.caRefNo}>{r.caRefNo || "—"}</td>
+                                                        <CompareCell fa={r.faAmount} custodian={r.receivedAmount} />
                                                         <td>{r.receivedDate || "—"}</td>
-                                                        <td className={diffClass}>{qty(r.difference)}</td>
                                                         <td>
                                                             <StatusBadge status={r.status} />
                                                         </td>
@@ -338,13 +339,10 @@ const SplitReconcilePanel = ({
                                             return isBenefitStage ? (
                                                 <tr key={r.accountCode} className={isBreak ? "cc-row-break" : undefined}>
                                                     <td translate="no">{r.accountCode}</td>
-                                                    <td>{r.caRefNo || "—"}</td>
-                                                    <td className="num">{qty(r.faCaQty)}</td>
-                                                    <td className="num">{qty(r.custodianCaQty)}</td>
-                                                    <td className="num">{qty(r.receivedQty)}</td>
+                                                    <td title={r.caRefNo}>{r.caRefNo || "—"}</td>
+                                                    <CompareCell fa={r.faCaQty} custodian={r.receivedQty} />
                                                     <td className="num">{qty(r.balanceQty)}</td>
                                                     <td>{r.receivedDate || "—"}</td>
-                                                    <td className={diffClass}>{qty(r.difference)}</td>
                                                     <td>
                                                         <StatusBadge status={r.status} />
                                                     </td>
