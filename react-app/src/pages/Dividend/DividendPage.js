@@ -227,6 +227,11 @@ function DividendPage() {
           rateFile: row.rateFile,
           rateSysMixed: false,
           rateFileMixed: false,
+          rateMismatch: false,
+          paymentDateSys: row.paymentDateSys,
+          paymentDateFile: row.paymentDateFile,
+          paymentDateFileMixed: false,
+          paymentDateMismatch: false,
           statusCounts: {},
           children: [],
         };
@@ -243,6 +248,9 @@ function DividendPage() {
       g.toReceiveNet += Number(row.toReceiveNet) || 0;
       if (row.rateSys !== g.rateSys) g.rateSysMixed = true;
       if (row.rateFile !== g.rateFile) g.rateFileMixed = true;
+      if (row.rateMismatch) g.rateMismatch = true;
+      if (row.paymentDateFile !== g.paymentDateFile) g.paymentDateFileMixed = true;
+      if (row.paymentDateMismatch) g.paymentDateMismatch = true;
       g.statusCounts[row.status] = (g.statusCounts[row.status] || 0) + 1;
       g.children.push(row);
     }
@@ -541,6 +549,8 @@ function DividendPage() {
       "Holding_File",
       "Rate_PMS",
       "Rate_File",
+      "Payment_Date_PMS",
+      "Payment_Date_File",
       "Gross_PMS",
       "Gross_File",
       "Already_Received",
@@ -563,6 +573,8 @@ function DividendPage() {
             row.holdingFile ?? "",
             row.rateSys ?? "",
             row.rateFile ?? "",
+            row.paymentDateSys ?? "",
+            row.paymentDateFile ?? "",
             row.grossSys ?? "",
             row.grossFile ?? "",
             row.alreadyReceivedGross ?? "",
@@ -1123,6 +1135,7 @@ function DividendPage() {
                   <th>Account</th>
                   <th className="num">Holding<br />PMS / File / Diff</th>
                   <th className="num">Rate<br />PMS / File</th>
+                  <th className="num">Payment Date<br />PMS / File</th>
                   <th className="num">Gross<br />PMS / File / Diff</th>
                   <th className="num">Already<br />Received</th>
                   <th className="num">To Receive</th>
@@ -1132,7 +1145,7 @@ function DividendPage() {
               <tbody>
                 {paginatedGroups.length === 0 && (
                   <tr>
-                    <td colSpan={7} className="empty-cell">
+                    <td colSpan={8} className="empty-cell">
                       No rows in this filter.
                     </td>
                   </tr>
@@ -1170,9 +1183,13 @@ function DividendPage() {
                             {group.holdingDelta || 0}
                           </span>
                         </td>
-                        <td className="num">
+                        <td className={group.rateMismatch ? "num negative" : "num"}>
                           {group.rateSysMixed ? "—" : (group.rateSys ?? "—")} /{" "}
                           {group.rateFileMixed ? "—" : (group.rateFile ?? "—")}
+                        </td>
+                        <td className={group.paymentDateMismatch ? "num negative" : "num"}>
+                          {group.paymentDateSys || "—"} /{" "}
+                          {group.paymentDateFileMixed ? "—" : (group.paymentDateFile || "—")}
                         </td>
                         <td className="num">
                           {group.grossSys} / {group.grossFile} /{" "}
@@ -1223,8 +1240,11 @@ function DividendPage() {
                                 {row.holdingDelta || 0}
                               </span>
                             </td>
-                            <td className="num">
+                            <td className={row.rateMismatch ? "num negative" : "num"}>
                               {row.rateSys ?? "—"} / {row.rateFile ?? "—"}
+                            </td>
+                            <td className={row.paymentDateMismatch ? "num negative" : "num"}>
+                              {row.paymentDateSys || "—"} / {row.paymentDateFile || "—"}
                             </td>
                             <td className="num">
                               {row.grossSys ?? "—"} / {row.grossFile ?? "—"} /{" "}
