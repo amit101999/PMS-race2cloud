@@ -61,11 +61,3 @@
 .cc-table tr.cc-row-break td:first-child {
     box-shadow: inset 3px 0 0 var(--ds-error, #d93025);
 }
-
-.cc-table .cc-diff {
-    font-weight: 600;
-}
-
-.cc-table .cc-diff-zero {
-    color: var(--ds-neutral, #6b7280);
-}

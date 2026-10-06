@@ -141,7 +141,8 @@ const lookupCashCredited = async (
  *   partial            — 0 < already received gross < file gross
  *   missing_in_system  — in file but FIFO never saw the account
  *   missing_in_file    — FIFO has holding but file row absent
- *   mismatch           — both sides present but holding or gross differs
+ *   mismatch           — both sides present but holding, gross, rate or
+ *                        payment date differs
  *   ready              — both sides match, nothing already paid
  */
 const computeStatus = ({
@@ -149,6 +150,8 @@ const computeStatus = ({
   inSystem,
   holdingDelta,
   grossDelta,
+  rateMismatch,
+  paymentDateMismatch,
   alreadyReceivedGross,
   fileGross,
   alreadyCreditedCash,
@@ -163,7 +166,12 @@ const computeStatus = ({
     return "already_paid";
   }
 
-  if (Math.abs(holdingDelta) > 0.0001 || Math.abs(grossDelta) > 0.005) {
+  if (
+    Math.abs(holdingDelta) > 0.0001 ||
+    Math.abs(grossDelta) > 0.005 ||
+    rateMismatch ||
+    paymentDateMismatch
+  ) {
     return "mismatch";
   }
   return "ready";
@@ -548,14 +556,19 @@ export const getAllSecuritiesISINs = async (req, res) => {
               inFile && inSystem ? holdingFile - holdingSys : 0;
 
             const grossFile = inFile ? fileRow.gross : null;
-            // System gross uses file rate if attributed to this event;
-            // otherwise it's the form rate.
-            const grossSys =
-              inSystem && fifoRow
-                ? round2(holdingSys * evt.rate)
-                : null;
+            // System gross is what will be booked: our holding × the form rate.
+            const grossSys = inSystem ? round2(holdingSys * rateNum) : null;
             const grossDelta =
               inFile && inSystem ? round2(grossFile - grossSys) : 0;
+
+            const rateFile = inFile ? fileRow.rate : null;
+            const rateMismatch =
+              inFile && inSystem && Math.abs(rateFile - rateNum) > 0.0001;
+
+            // Payment Date is optional in the custodian file; a blank one is not checked.
+            const paymentDateFile = inFile ? fileRow.paymentDate || null : null;
+            const paymentDateMismatch =
+              inFile && inSystem && !!paymentDateFile && paymentDateFile !== paymentDateISO;
 
             const tdsFile = inFile ? fileRow.tds : null;
             const netFile = inFile ? fileRow.net : null;
@@ -584,6 +597,8 @@ export const getAllSecuritiesISINs = async (req, res) => {
               inSystem,
               holdingDelta,
               grossDelta,
+              rateMismatch,
+              paymentDateMismatch,
               alreadyReceivedGross,
               fileGross: grossFile || 0,
               alreadyCreditedCash,
@@ -599,7 +614,11 @@ export const getAllSecuritiesISINs = async (req, res) => {
               holdingFile,
               holdingDelta,
               rateSys: rateNum,
-              rateFile: inFile ? fileRow.rate : null,
+              rateFile,
+              rateMismatch,
+              paymentDateSys: paymentDateISO,
+              paymentDateFile,
+              paymentDateMismatch,
               grossSys,
               grossFile,
               grossDelta,
