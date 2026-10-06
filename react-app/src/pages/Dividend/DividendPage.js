@@ -895,7 +895,7 @@ function DividendPage() {
               {custodianInfo && (
                 <div className={custodianInfo.rowCount ? "cm-verdict ok" : "cm-verdict warn"}>
                   Custodian file fetched: <strong>{custodianInfo.file.fileName}</strong> · report date{" "}
-                  {custodianInfo.file.businessDate} · uploaded {new Date(custodianInfo.file.timeMs).toLocaleString()} ·{" "}
+                  {custodianInfo.file.businessDate} ·{" "}
                   {custodianInfo.rowCount} Dividend In Cash row(s) for <span translate="no">{isin}</span> with Record
                   Date {recordDate}
                 </div>
