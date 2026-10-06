@@ -14,12 +14,28 @@ import "../TempTransactionUpload/custody/CustodyMatch.css";
 
 const ROOT = `${BASE_URL}/custodian-upload`;
 
+/*
+ * A 25–30k row file is stored and its import started before the server answers,
+ * which can take a minute or two. Past this the page stops waiting and says so
+ * rather than spinning on.
+ */
+const UPLOAD_TIMEOUT_MS = 3 * 60 * 1000;
+const UPLOADING_HINT = "This can take 1–2 minutes for a large file. Please don't refresh the page.";
+
 /** fetch + JSON, throwing ApiError with the server's body attached so the popup can show it. */
 async function request(path, options) {
     let res;
     try {
         res = await fetch(`${ROOT}${path}`, options);
     } catch (err) {
+        // Only the upload passes an abort signal, and only its time limit fires it.
+        if (err.name === "AbortError") {
+            throw new ApiError(
+                "The server has not answered in 3 minutes. The file may still be saving: close this window, " +
+                    "wait a minute and refresh the page. If the file then shows under the card, do not upload it again.",
+                { detail: { code: "TIMEOUT" } },
+            );
+        }
         throw new ApiError("Could not reach the server. Check that the backend is running.", {
             detail: { code: "NETWORK", cause: String(err) },
         });
@@ -134,18 +150,21 @@ const CustodianFileCard = ({ kind, title, listHeading, profileType, businessDate
      */
     const uploadMappedFile = async ({ replace } = {}) => {
         setUploading(true);
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), UPLOAD_TIMEOUT_MS);
         try {
             const form = new FormData();
             form.append("file", mappingFile);
             form.append("businessDate", businessDate);
             form.append("kind", kind);
             if (replace) form.append("replace", "true");
-            const res = await request("/file", { method: "POST", body: form });
+            const res = await request("/file", { method: "POST", body: form, signal: controller.signal });
             setStoredFile(res.file);
             onFileChange(kind, { added: res.file });
             setNote(`${res.message} ${res.rowCount.toLocaleString()} row(s) read.`);
             return res;
         } finally {
+            clearTimeout(timer);
             setUploading(false);
         }
     };
@@ -245,6 +264,7 @@ const CustodianFileCard = ({ kind, title, listHeading, profileType, businessDate
                 types={[profileType]}
                 autofill
                 showHints={false}
+                uploadingHint={UPLOADING_HINT}
                 onUpload={uploadMappedFile}
                 onClose={() => setMappingFile(null)}
             />
