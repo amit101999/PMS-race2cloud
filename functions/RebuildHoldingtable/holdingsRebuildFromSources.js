@@ -93,8 +93,10 @@ async function fetchAccountTransactions(zcql, accountCode, asOnDate) {
       if (batch.length < BATCH) break;
       offset += BATCH;
     } catch (err) {
-      console.error(`fetchAccountTransactions[${accountCode}] offset=${offset}:`, err.message);
-      break;
+      // Throw instead of returning a partial list: the caller deletes and
+      // re-inserts Holdings from what we return, so missing pages would
+      // overwrite good rows with wrong ones. Throwing skips the account.
+      throw new Error(`fetchAccountTransactions[${accountCode}] offset=${offset}: ${err.message}`);
     }
   }
 
@@ -137,8 +139,7 @@ async function fetchAccountBonuses(zcql, accountCode, asOnDate) {
       if (batch.length < BATCH) break;
       offset += BATCH;
     } catch (err) {
-      console.error(`fetchAccountBonuses[${accountCode}] offset=${offset}:`, err.message);
-      break;
+      throw new Error(`fetchAccountBonuses[${accountCode}] offset=${offset}: ${err.message}`);
     }
   }
   return rows;
@@ -173,8 +174,7 @@ async function fetchAccountDemergers(zcql, accountCode, asOnDate) {
       if (batch.length < BATCH) break;
       offset += BATCH;
     } catch (err) {
-      console.error(`fetchAccountDemergers[${accountCode}] offset=${offset}:`, err.message);
-      break;
+      throw new Error(`fetchAccountDemergers[${accountCode}] offset=${offset}: ${err.message}`);
     }
   }
   return rows.filter(
@@ -211,8 +211,7 @@ async function fetchAccountMergers(zcql, accountCode, asOnDate) {
       if (batch.length < BATCH) break;
       offset += BATCH;
     } catch (err) {
-      console.error(`fetchAccountMergers[${accountCode}] offset=${offset}:`, err.message);
-      break;
+      throw new Error(`fetchAccountMergers[${accountCode}] offset=${offset}: ${err.message}`);
     }
   }
   return rows.filter(
@@ -253,8 +252,7 @@ async function fetchSplitsForIsins(zcql, isins, asOnDate) {
       if (batch.length < BATCH) break;
       offset += BATCH;
     } catch (err) {
-      console.error(`fetchSplitsForIsins offset=${offset}:`, err.message);
-      break;
+      throw new Error(`fetchSplitsForIsins offset=${offset}: ${err.message}`);
     }
   }
 
@@ -800,11 +798,21 @@ function runFifoEngine(
 
 /* ============================== HOLDINGS WRITER ============================== */
 
+/** ZCQL removes at most this many rows per DELETE statement. */
+const ZCQL_DELETE_LIMIT = 300;
+
 async function deleteHoldingsForPair(zcql, accountCode, isin) {
-  await zcql.executeZCQLQuery(`
-    DELETE FROM Holdings
-    WHERE WS_Account_code = '${esc(accountCode)}' AND ISIN = '${esc(isin)}'
-  `);
+  // A pair can hold more than 300 rows. One DELETE would leave the rest behind
+  // and the rebuild would then insert on top of them, duplicating the pair, so
+  // repeat until a pass removes fewer rows than the limit.
+  for (;;) {
+    const result = await zcql.executeZCQLQuery(`
+      DELETE FROM Holdings
+      WHERE WS_Account_code = '${esc(accountCode)}' AND ISIN = '${esc(isin)}'
+    `);
+    const deleted = Number(result?.[0]?.Holdings?.DELETED_ROWS_COUNT) || 0;
+    if (deleted < ZCQL_DELETE_LIMIT) return;
+  }
 }
 
 async function insertHoldingsRow(zcql, accountCode, row, displayIsin) {

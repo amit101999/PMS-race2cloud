@@ -1020,11 +1020,21 @@ function runFifoEngine(
 
 /* ============================== HOLDINGS WRITER ============================== */
 
+/** ZCQL removes at most this many rows per DELETE statement. */
+const ZCQL_DELETE_LIMIT = 300;
+
 async function deleteHoldingsForPair(zcql, accountCode, isin) {
-  await zcql.executeZCQLQuery(`
-    DELETE FROM Holdings
-    WHERE WS_Account_code = '${esc(accountCode)}' AND ISIN = '${esc(isin)}'
-  `);
+  // A pair can hold more than 300 rows. One DELETE would leave the rest behind
+  // and the rebuild would then insert on top of them, duplicating the pair, so
+  // repeat until a pass removes fewer rows than the limit.
+  for (;;) {
+    const result = await zcql.executeZCQLQuery(`
+      DELETE FROM Holdings
+      WHERE WS_Account_code = '${esc(accountCode)}' AND ISIN = '${esc(isin)}'
+    `);
+    const deleted = Number(result?.[0]?.Holdings?.DELETED_ROWS_COUNT) || 0;
+    if (deleted < ZCQL_DELETE_LIMIT) return;
+  }
 }
 
 async function insertHoldingsRow(zcql, accountCode, row, displayIsin) {
