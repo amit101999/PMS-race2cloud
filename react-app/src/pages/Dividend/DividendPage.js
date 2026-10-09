@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import MainLayout from "../../layouts/MainLayout";
+import PreviousFiles from "../HoldingComparison/holdingComparison/PreviousFiles";
 import SplitReconcilePanel from "../SplitPage/SplitReconcilePanel";
 import "./DividendPage.css";
 import "../TempTransactionUpload/tokens.css";
@@ -8,6 +9,18 @@ import "../TempTransactionUpload/custody/CustodyMatch.css";
 import "../../styles/ops-pages.css";
 import { BASE_URL } from "../../constant";
 import { useJobNotifications } from "../../notifications/JobNotificationContext";
+
+/** GET a dividend endpoint, throwing the server's message on failure (PreviousFiles shows it). */
+const getDividendJson = async (path) => {
+  const res = await fetch(`${BASE_URL}/dividend/${path}`);
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok || !body.success) throw new Error(body.message || `Request failed (${res.status}).`);
+  return body;
+};
+// Module-level so PreviousFiles does not reload on every render.
+const loadEntitlementHistory = () => getDividendJson("history?stage=entitlement");
+const loadBenefitHistory = () => getDividendJson("history?stage=benefit");
+const getHistoryDownloadUrl = (key) => getDividendJson(`history/download?key=${encodeURIComponent(key)}`);
 
 /** Maps GET /dividend/apply-status → the notification system's vocabulary. */
 function parseDividendStatus(d) {
@@ -148,6 +161,8 @@ function DividendPage() {
    */
   const [stage, setStage] = useState(null);
   const [sending, setSending] = useState(false);
+  // Bumped after each comparison so the history cards reload.
+  const [historyToken, setHistoryToken] = useState(0);
 
   /* The newest file from Corporate Actions -> Custodian Upload: { file, rowCount } for this ISIN. */
   const [custodianInfo, setCustodianInfo] = useState(null);
@@ -459,6 +474,7 @@ function DividendPage() {
         setReconEvents(data.events);
         setReconSummary(data.summary || null);
         setWarnings(Array.isArray(data.warnings) ? data.warnings : []);
+        setHistoryToken((t) => t + 1);
         if (!data.events.length) {
           setPreviewEmptyMessage(
             "No accounts found in either system or custodian file.",
@@ -475,7 +491,9 @@ function DividendPage() {
     }
   };
 
-  const postPreview = async (compare) => {
+  // saveHistory: false for a read-only fetch (the export), so it does not add
+  // an entry to the Stage 1 comparison history.
+  const postPreview = async (compare, { saveHistory = true } = {}) => {
     const res = await fetch(`${BASE_URL}/dividend/preview`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -485,22 +503,56 @@ function DividendPage() {
         rate: Number(rate),
         paymentDate,
         compare,
+        saveHistory,
       }),
     });
     return res.json();
   };
 
-  /** System report CSV: the rows shown in the Dividend Preview table. */
-  const handleExportSystemCsv = () => {
+  /**
+   * System report CSV: the rows of the Dividend Preview table, with each
+   * account's status and the difference between our amount and the
+   * custodian's (Ex-Entitlement CA Amt). As on Split / Bonus, the difference
+   * is left out once every account is Received.
+   */
+  const handleExportSystemCsv = async () => {
+    // Custodian amount per account. Without an uploaded Ex-Entitlement file the
+    // compare fails; the export then goes ahead with those cells blank.
+    const custodianAmountByAccount = new Map();
+    try {
+      const data = await postPreview(true, { saveHistory: false });
+      for (const evt of (data.success && data.events) || []) {
+        for (const r of evt.rows || []) {
+          if (!r || !r.inFile) continue;
+          const prev = custodianAmountByAccount.get(r.accountCode) || 0;
+          custodianAmountByAccount.set(r.accountCode, prev + (Number(r.grossFile) || 0));
+        }
+      }
+    } catch (err) {
+      console.error("Could not read the custodian amounts for the export:", err);
+    }
+
+    const showDifference = previewData.some((row) => row.status !== "RECEIVED");
     const header = [
       "Account_Code",
       "Holding_Record_Date",
       "Dividend_Rate",
       "Payment_Date",
       "Dividend_Amount",
+      ...(showDifference ? ["Custodian_Amount", "Difference"] : []),
+      "Tax_Amount",
+      "Net_Amount",
+      "Status",
     ];
     const lines = [header.join(",")];
     for (const row of previewData) {
+      const custodianAmount = custodianAmountByAccount.has(row.accountCode)
+        ? Math.round(custodianAmountByAccount.get(row.accountCode) * 100) / 100
+        : null;
+      const difference =
+        custodianAmount === null
+          ? ""
+          : Math.round(((Number(row.dividendAmount) || 0) - custodianAmount) * 100) / 100;
       lines.push(
         [
           row.accountCode,
@@ -508,6 +560,10 @@ function DividendPage() {
           row.rate,
           row.paymentDate,
           row.dividendAmount,
+          ...(showDifference ? [custodianAmount ?? "", difference] : []),
+          row.taxAmount ?? "",
+          row.netAmount ?? "",
+          row.status || "",
         ]
           .map(csvEscapeCell)
           .join(","),
@@ -943,6 +999,8 @@ function DividendPage() {
                   <th className="num">Dividend Rate</th>
                   <th>Payment Date</th>
                   <th className="num">Dividend Amount</th>
+                  <th className="num">Tax</th>
+                  <th className="num">Net Amount</th>
                   <th>Status</th>
                   <th>Received Date</th>
                 </tr>
@@ -950,7 +1008,7 @@ function DividendPage() {
               <tbody>
                 {previewData.length === 0 && (
                   <tr>
-                    <td colSpan={7} className="empty-cell">
+                    <td colSpan={9} className="empty-cell">
                       No accounts hold this ISIN on the record date.
                     </td>
                   </tr>
@@ -962,6 +1020,9 @@ function DividendPage() {
                     <td className="num">{row.rate}</td>
                     <td>{row.paymentDate ?? "—"}</td>
                     <td className="num strong">{row.dividendAmount}</td>
+                    {/* Known once paid: the custodian's tax and the cash credited (amount − tax). */}
+                    <td className="num">{row.taxAmount ?? "—"}</td>
+                    <td className="num">{row.netAmount ?? "—"}</td>
                     <td>{receiptStatusLabel(row.status)}</td>
                     <td>{row.receivedDate || "—"}</td>
                   </tr>
@@ -1382,9 +1443,26 @@ function DividendPage() {
           confirming={loading}
           onConfirm={confirmDividend}
           onReceivableSent={fetchPreview}
-          onCompared={() => {}}
+          onCompared={() => setHistoryToken((t) => t + 1)}
         />
       )}
+
+      <PreviousFiles
+        title="Stage 1 · Ex-Entitlement Comparison History"
+        load={loadEntitlementHistory}
+        getDownloadUrl={getHistoryDownloadUrl}
+        dateLabel="Record date"
+        emptyText="No Ex-Entitlement comparisons yet."
+        refreshToken={historyToken}
+      />
+      <PreviousFiles
+        title="Stage 2 · Corporate Benefit Collection Comparison History"
+        load={loadBenefitHistory}
+        getDownloadUrl={getHistoryDownloadUrl}
+        dateLabel="Record date"
+        emptyText="No Corporate Benefit Collection comparisons yet."
+        refreshToken={historyToken}
+      />
 
       {/* Confirmation modal for Send as Receivable */}
       {confirmSend && (

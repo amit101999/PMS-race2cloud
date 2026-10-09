@@ -26,9 +26,14 @@ export const dividendAccountWhere = ({ isin, recordDateISO }) =>
 /** Datastore returns an empty value as null or the text "null". */
 const dateOf = (v) => (v && v !== "null" ? String(v).slice(0, 10) : "");
 
+/** Datastore returns an empty number as null or the text "null"; keep it empty (not 0). */
+const amountOf = (v) => (v === null || v === undefined || v === "" || v === "null" ? null : Number(v));
+
 /**
  * Every Dividend_Record row of one dividend, one per virtual account code.
- * @returns {Promise<Array<{ rowId, accountCode, holding, amount, status, receivedDate }>>}
+ * `amount` is the gross dividend; `taxAmount` / `netAmount` (cash credited) are
+ * set by UpdateDividendData when the account is paid, and null before that.
+ * @returns {Promise<Array<{ rowId, accountCode, holding, amount, taxAmount, netAmount, status, receivedDate }>>}
  */
 export async function readDividendAccountRows(zcql, event) {
   const rows = [];
@@ -36,7 +41,7 @@ export async function readDividendAccountRows(zcql, event) {
   for (;;) {
     const page = (
       (await zcql.executeZCQLQuery(`
-        SELECT ROWID, WS_Account_code, Holding, Dividend_Amount, Status, Received_Date
+        SELECT ROWID, WS_Account_code, Holding, Dividend_Amount, Tax_Amount, Net_Amount, Status, Received_Date
         FROM Dividend_Record
         WHERE ${dividendAccountWhere(event)} AND ROWID > ${lastRowId}
         ORDER BY ROWID ASC
@@ -50,6 +55,8 @@ export async function readDividendAccountRows(zcql, event) {
         accountCode: String(d.WS_Account_code || "").trim(),
         holding: Number(d.Holding) || 0,
         amount: Number(d.Dividend_Amount) || 0,
+        taxAmount: amountOf(d.Tax_Amount),
+        netAmount: amountOf(d.Net_Amount),
         status: String(d.Status || "").trim().toUpperCase(),
         receivedDate: dateOf(d.Received_Date),
       });

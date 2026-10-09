@@ -78,6 +78,10 @@ export async function computeBonusPreviewRows(zcql, { isin, r1, r2, recordDateIS
       // is not yet effective overwrites (and then wrongly drops) the real one.
       const eff = holdingsEffectiveDate(h);
       if (eff && eff >= cutoff) continue;
+      // Once this bonus is applied, its own BONUS row is dated on the record
+      // date. Size on the holding before it, as UpdateBonusTable does, or the
+      // preview counts the bonus twice (100 + 50 shown as 150 → 75 more).
+      if (String(h.TYPE || "").trim().toUpperCase() === "BONUS" && eff === recordDateISO) continue;
       latestByAccount.set(acc, h); // last row per account wins
       if (!rowsByAccount.has(acc)) rowsByAccount.set(acc, []);
       rowsByAccount.get(acc).push(h);

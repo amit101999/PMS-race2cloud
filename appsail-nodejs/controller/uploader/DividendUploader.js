@@ -2,7 +2,12 @@ import {
   fetchHoldingsRowsByAccountForIsin,
   recomputeHoldingsSnapshot,
 } from "../../util/analytics/holdingsFromTable.js";
-import { readLatestCorpActionRows, readLatestReceiptRows } from "../corporateAction/CustodianUploadController.js";
+import {
+  readLatestCorpActionRows,
+  readLatestReceiptRows,
+  saveComparisonHistory,
+} from "../corporateAction/CustodianUploadController.js";
+import { dividendEntitlementToCsv } from "../../util/corporateAction/compareCustodian.js";
 import { buildVirtualToActualMap } from "../../util/mapVirtualToActualCodes.js";
 import {
   DIVIDEND_STATUS,
@@ -280,6 +285,8 @@ export const getAllSecuritiesISINs = async (req, res) => {
 
       const { isin, recordDate, rate, paymentDate } = req.body || {};
       const compare = req.body?.compare === true;
+      // The page's export reads the comparison without adding it to the history.
+      const saveHistory = req.body?.saveHistory !== false;
       const rateNum = Number(rate);
 
       if (!Number.isFinite(rateNum) || rateNum <= 0) {
@@ -378,6 +385,9 @@ export const getAllSecuritiesISINs = async (req, res) => {
           rate: rateNum,
           paymentDate: paymentDateISO,
           dividendAmount: row.amount,
+          // Tax and the cash credited are known once the account is paid.
+          taxAmount: statusByAccount.get(row.accountCode)?.taxAmount ?? null,
+          netAmount: statusByAccount.get(row.accountCode)?.netAmount ?? null,
           status: statusByAccount.get(row.accountCode)?.status || "",
           receivedDate: statusByAccount.get(row.accountCode)?.receivedDate || "",
         });
@@ -684,7 +694,36 @@ export const getAllSecuritiesISINs = async (req, res) => {
         summary = summaryAgg;
       }
 
-      const response = { success: true, data: preview, stage };
+      // Keep the stage 1 comparison in the page's history, like Split / Bonus.
+      // The comparison itself is already done, so a storage failure is only logged.
+      let comparisonUrl = null;
+      if (events && saveHistory) {
+        const csvRows = events.flatMap((evt) =>
+          evt.rows.map((r) => ({ ...r, isin, recordDate: recordDateISO })),
+        );
+        try {
+          comparisonUrl = await saveComparisonHistory(req.catalystApp, {
+            caType: "dividend",
+            stage: "entitlement",
+            recordDateISO,
+            isin,
+            csv: dividendEntitlementToCsv(csvRows),
+          });
+        } catch (historyErr) {
+          console.error("[DividendUploader] Could not save the stage 1 comparison file:", historyErr.message);
+        }
+      }
+
+      // An applied dividend can gain an account later (a back-dated trade
+      // uploaded after Confirm). Such an account has no Dividend_Record row, so
+      // reopen stage 1 for it: Send as Receivable then adds only that account.
+      // Dividends applied before this reconciliation existed have no rows and stay RECEIVED.
+      const hasMissingAccount = preview.some((row) => !statusByAccount.has(row.accountCode));
+      const pageStage =
+        stage === "RECEIVED" && accountRows.length > 0 && hasMissingAccount ? "NEW" : stage;
+
+      const response = { success: true, data: preview, stage: pageStage };
+      if (comparisonUrl) response.comparisonUrl = comparisonUrl;
       if (custodian) response.custodianFile = custodian.file;
       if (events) response.events = events;
       if (summary) response.summary = summary;
@@ -720,6 +759,10 @@ export const getAllSecuritiesISINs = async (req, res) => {
    * accountCodes is the page's choice (matched only / all reconciled). The
    * amounts are recomputed here rather than taken from the browser, and every
    * code must be an account holding the ISIN on the record date.
+   *
+   * For a dividend that is already applied, only accounts with no
+   * Dividend_Record row are sent (an account that turned up later, e.g. a
+   * back-dated trade). Accounts already Received are never touched.
    */
   export const sendDividendReceivable = async (req, res) => {
     try {
@@ -742,18 +785,21 @@ export const getAllSecuritiesISINs = async (req, res) => {
       }
 
       const dividendEvent = { isin, recordDateISO };
-      if (await isDividendApplied(zcql, dividendEvent)) {
-        return res
-          .status(409)
-          .json({ success: false, code: "ALREADY_SENT", message: "This dividend has already been applied." });
-      }
-      if ((await readDividendAccountRows(zcql, dividendEvent)).length > 0) {
+      const alreadyApplied = await isDividendApplied(zcql, dividendEvent);
+      const existing = await readDividendAccountRows(zcql, dividendEvent);
+      if (existing.some((r) => r.status === DIVIDEND_STATUS.RECEIVABLE)) {
         return res.status(409).json({
           success: false,
           code: "ALREADY_SENT",
           message: "These accounts are already Receivable. Compare with the Corporate Benefit Collection file next.",
         });
       }
+      const alreadyAppliedMessage = "This dividend has already been applied.";
+      // Applied before this reconciliation existed: no rows to tell which accounts are missing.
+      if (alreadyApplied && existing.length === 0) {
+        return res.status(409).json({ success: false, code: "ALREADY_SENT", message: alreadyAppliedMessage });
+      }
+      const listedAccounts = new Set(existing.map((r) => r.accountCode));
 
       // Throws NO_CUSTODIAN_ROWS (caught below) when no uploaded file has this dividend.
       await readLatestCorpActionRows(app, { caType: "dividend", isin, recordDateISO });
@@ -771,19 +817,22 @@ export const getAllSecuritiesISINs = async (req, res) => {
         });
       }
 
-      const newRows = systemRows
-        .filter((r) => chosen.has(r.accountCode))
-        .map((r) => ({
-          ISIN: isin,
-          RecordDate: recordDateISO,
-          WS_Account_code: r.accountCode,
-          Holding: r.holding,
-          Rate: rate,
-          Dividend_Amount: r.amount,
-          PaymentDate: paymentDateISO,
-          Security_Code: securityCode || "",
-          Status: DIVIDEND_STATUS.RECEIVABLE,
-        }));
+      const rowsToSend = systemRows.filter((r) => chosen.has(r.accountCode) && !listedAccounts.has(r.accountCode));
+      if (rowsToSend.length === 0) {
+        return res.status(409).json({ success: false, code: "ALREADY_SENT", message: alreadyAppliedMessage });
+      }
+
+      const newRows = rowsToSend.map((r) => ({
+        ISIN: isin,
+        RecordDate: recordDateISO,
+        WS_Account_code: r.accountCode,
+        Holding: r.holding,
+        Rate: rate,
+        Dividend_Amount: r.amount,
+        PaymentDate: paymentDateISO,
+        Security_Code: securityCode || "",
+        Status: DIVIDEND_STATUS.RECEIVABLE,
+      }));
       const table = app.datastore().table("Dividend_Record");
       try {
         for (let i = 0; i < newRows.length; i += ACCOUNT_ROW_CHUNK) {
@@ -791,10 +840,14 @@ export const getAllSecuritiesISINs = async (req, res) => {
         }
       } catch (insertErr) {
         // A half-sent dividend would show as Receivable with accounts missing.
-        // No row of this dividend existed before (checked above), so every row
-        // was inserted by this call — remove them and let the user send again.
+        // No row was Receivable before this call (checked above), so the
+        // Receivable rows are exactly the ones inserted here — remove only those
+        // (Received rows of an applied dividend stay) and let the user send again.
         try {
-          await zcql.executeZCQLQuery(`DELETE FROM Dividend_Record WHERE ${dividendAccountWhere(dividendEvent)}`);
+          await zcql.executeZCQLQuery(
+            `DELETE FROM Dividend_Record WHERE ${dividendAccountWhere(dividendEvent)} ` +
+              `AND Status = '${DIVIDEND_STATUS.RECEIVABLE}'`,
+          );
         } catch (cleanupErr) {
           console.error("[DividendUploader] Could not remove a half-sent receivable:", cleanupErr.message);
         }

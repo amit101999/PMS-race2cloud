@@ -17,8 +17,9 @@
  *
  * SHARES_HELD, RATE and CASH_RECEIVED are read straight off `Dividend_Record` —
  * every value is stored, so (unlike split) there is no holdings diff / FIFO
- * replay and no `Holdings` read. CASH_RECEIVED is GROSS (Holding*Rate, before any
- * TDS/CA tax) — exactly "rate x shares held".
+ * replay and no `Holdings` read. CASH_RECEIVED is the cash actually credited:
+ * Net_Amount (the dividend minus the custodian's tax). Rows paid before
+ * Net_Amount existed have none, so their gross Dividend_Amount is used.
  *
  * Column casing traps: master `Dividend` uses SecurityCode / Security_Name;
  * per-account `Dividend_Record` uses Security_Code. The record-date column is
@@ -117,7 +118,7 @@ async function buildEventCsv({ zcql, event, generatedAt, fromDate, toDate, csvCe
 
   while (true) {
     const rows = await zcql.executeZCQLQuery(`
-      SELECT ROWID, WS_Account_code, Holding, Rate, Dividend_Amount
+      SELECT ROWID, WS_Account_code, Holding, Rate, Dividend_Amount, Net_Amount
       FROM Dividend_Record
       WHERE ISIN = '${isinEsc}' AND RecordDate = '${dateEsc}'
         AND (Status IS NULL OR Status <> 'RECEIVABLE')
@@ -138,9 +139,15 @@ async function buildEventCsv({ zcql, event, generatedAt, fromDate, toDate, csvCe
 
       const holding = Number(d.Holding) || 0;
       const rate = Number.isFinite(Number(d.Rate)) ? Number(d.Rate) : eventRate;
-      const cash = Number.isFinite(Number(d.Dividend_Amount))
-        ? Number(d.Dividend_Amount)
-        : round2(holding * rate);
+      const hasNet = d.Net_Amount !== null && d.Net_Amount !== undefined && d.Net_Amount !== "" && d.Net_Amount !== "null";
+      let cash;
+      if (hasNet && Number.isFinite(Number(d.Net_Amount))) {
+        cash = Number(d.Net_Amount);
+      } else if (Number.isFinite(Number(d.Dividend_Amount))) {
+        cash = Number(d.Dividend_Amount);
+      } else {
+        cash = round2(holding * rate);
+      }
 
       const cur = byAccount.get(acc) || { holding: 0, cash: 0, rate };
       cur.holding += holding;

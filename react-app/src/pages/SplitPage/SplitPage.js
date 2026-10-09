@@ -307,19 +307,9 @@ function SplitPage() {
         });
       }
 
-      // Reset form and preview (same as Bonus)
-      setIsin("");
-      setSearchQuery("");
-      setSecurityCode("");
-      setSecurityName("");
-      setRatio1("");
-      setRatio2("");
-      setRecordDate("");
-      setEffectiveDate("");
-      setPreviewData([]);
-      setShowPreview(false);
-      setExportDownloadUrl("");
-      setExportError("");
+      // Keep the form and reload the preview, as after Send as Receivable: the
+      // table then shows every account as Received and the panel moves on.
+      await handlePreview();
 
       setTimeout(() => setSuccess(false), 3000);
     } catch (err) {
