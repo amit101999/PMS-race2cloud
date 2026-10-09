@@ -41,6 +41,9 @@ function MainLayout({ title, rightContent, children }) {
     if (location.pathname === "/temp-transaction") {
       return "temp-transaction";
     }
+    if (location.pathname === "/transaction-deletion") {
+      return "transaction-deletion";
+    }
     if (location.pathname === "/holding-comparison") {
       return "holding-comparison";
     }
@@ -79,6 +82,7 @@ function MainLayout({ title, rightContent, children }) {
     { key: "bhav-copy", label: "Bhav Copy" },
     // { key: "transaction-upload", label: "Transaction Upload" },
     { key: "temp-transaction", label: "Transaction Upload" },
+    { key: "transaction-deletion", label: "Transaction Deletion" },
     { key: "holding-comparison", label: "Holding Comparison" },
     { key: "updateISIN", label: "Update ISIN" },
     { key: "cash-balance", label: "Cash Balance" },

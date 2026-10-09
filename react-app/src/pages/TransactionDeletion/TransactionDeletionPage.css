@@ -1,0 +1,98 @@
+.txn-deletion-filters {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 16px 18px;
+  align-items: end;
+}
+
+@media (max-width: 1024px) {
+  .txn-deletion-filters {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+@media (max-width: 600px) {
+  .txn-deletion-filters {
+    grid-template-columns: 1fr;
+  }
+}
+
+.txn-deletion-filter-actions {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+}
+
+/* The shared .cm-primary / .cm-secondary differ in padding and font size, and
+   .cm-secondary adds a top margin, so side by side they don't line up. Give the
+   buttons on this page one common box. */
+.txn-deletion-filter-actions button,
+.txn-deletion-actions button {
+  margin: 0;
+  padding: 0 16px;
+  font-size: 13px;
+  line-height: 1.2;
+  height: 36px;
+}
+
+/* Match the 44px filter inputs beside them. */
+.txn-deletion-filter-actions button {
+  height: 44px;
+}
+
+/* Pagination's own row uses space-between with a single child, which pins it
+   left; a centring wrapper shrinks it to its content instead. */
+.txn-deletion-pagination {
+  display: flex;
+  justify-content: center;
+}
+
+/* Rows marked for removal stay visible so they can be undone. */
+.txn-deletion-page .data-table tr.txn-row-marked td {
+  background: #f3f4f6;
+  color: #9ca3af;
+  text-decoration: line-through;
+}
+
+.txn-deletion-page .data-table tr.txn-row-marked td.txn-row-action {
+  text-decoration: none;
+}
+
+.txn-row-action {
+  white-space: nowrap;
+  text-align: right;
+}
+
+.txn-marked-tag {
+  margin-right: 8px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #b91c1c;
+}
+
+.txn-remove-btn {
+  width: 28px;
+  height: 28px;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  background: #fff;
+  color: #b91c1c;
+  cursor: pointer;
+}
+
+.txn-remove-btn:hover:not(:disabled) {
+  background: #fef2f2;
+}
+
+.txn-remove-btn:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.txn-deletion-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  justify-content: flex-end;
+  padding: 0 16px 16px;
+}
