@@ -1010,3 +1010,49 @@ Write code that is:
 Robust enough to trust.
 Flexible enough for real requirements.
 Straightforward enough to explain.**
+
+---
+
+# Business Documentation (docs/PMS documentation (business flow).docx)
+
+The business guide explains the system to the operations team and new teammates.
+
+Its current style and structure are the standard. Preserve them.
+
+## When to Update
+
+- When a change alters behaviour described in the guide (rules, inputs, formulas, dates, screens, reports), update the guide in the same task and list the sections changed in the final report.
+- Do not document behaviour that is not built yet as if it works. Use "Planned but not built yet" / "not available yet", and remove that wording once it is built.
+- Update the Subtitle date when the guide changes.
+
+## What to Write About
+
+- Describe what the system does for the business, from the operator's point of view.
+- Do not include code, table or column names, API routes, file paths, Catalyst/ZCQL details or internal workarounds. Those belong in code comments.
+
+## Writing Style
+
+- Simple English, short sentences, present tense, one idea per sentence.
+- Explain any technical term in brackets the first time it is used.
+- After an important rule, give the reason in one short sentence.
+- Write formulas in words with the result in bold, for example: "**New holding** = old holding × Y ÷ X". Use ×, ÷, −, ₹.
+- Give a small worked example with real numbers for any calculation.
+- Use the guide's existing terms: the operator, our books / FA, the custodian, actual code, virtual code, record date, effective date.
+- Name buttons exactly as they appear on screen, in bold.
+
+## Structure
+
+- Keep the order: 1 Introduction, 2 Business flow, 3 Modules, 4 Key business rules at a glance, 5 Glossary.
+- Modules (3.x) go in the order the work happens. A new screen gets a new 3.x section in its workflow position. Renumber later sections and fix every "(3.x)" reference.
+- Each module section: an opening definition paragraph, then bullets. Group longer sections under bold lead-in sentences ending in a full stop (for example "**Which date counts.**").
+- Corporate action sections follow: definition, **Inputs:**, formula, example, rounding, cost, edge cases, planned work.
+- Short steps: numbered list. Steps that need their own bullets: bold "**Step N – Name.**" paragraphs.
+- A new rule that matters for checking correctness also gets a row in Section 4. A new term also gets a Glossary row, in alphabetical order.
+- If the daily cycle or the corporate action cycle changes, update Section 2 and its diagram.
+
+## Formatting
+
+- Use the existing Word styles only: Title, Subtitle, Heading 1 ("N. Title"), Heading 2 ("N.M Name"), First Paragraph, Body Text, Compact (list items), Image Caption.
+- Use tables only for lists of named things (types, files, reports, rules, terms): 2–3 columns with a header row.
+- Use an en dash ( – ) after bold labels, and curly quotes.
+- Do not restyle, reorder or rewrite sections unrelated to the change.
