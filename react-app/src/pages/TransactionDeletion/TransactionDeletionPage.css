@@ -17,10 +17,12 @@
   }
 }
 
+/* As tall as the 44px filter inputs, so the 36px buttons sit centred beside them. */
 .txn-deletion-filter-actions {
   flex-direction: row;
   align-items: center;
   gap: 8px;
+  height: 44px;
 }
 
 /* The shared .cm-primary / .cm-secondary differ in padding and font size, and
@@ -35,9 +37,9 @@
   height: 36px;
 }
 
-/* Match the 44px filter inputs beside them. */
+/* Same width for Apply and Clear so they read as a pair. */
 .txn-deletion-filter-actions button {
-  height: 44px;
+  min-width: 88px;
 }
 
 /* Pagination's own row uses space-between with a single child, which pins it

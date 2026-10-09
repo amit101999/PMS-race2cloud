@@ -32,12 +32,19 @@ const COLUMNS = [
   { key: "QTY", label: "Qty" },
   { key: "RATE", label: "Rate" },
   { key: "Net_Amount", label: "Net Amount" },
-  { key: "CREATEDTIME", label: "Committed At" },
+  { key: "CREATEDTIME", label: "Committed At", format: formatCommittedAt },
 ];
 
 function displayValue(val) {
   if (val === null || val === undefined || val === "") return "–";
   return String(val);
+}
+
+// Catalyst returns CREATEDTIME as "YYYY-MM-DD HH:mm:ss:SSS"; drop the milliseconds.
+// Any other shape is shown unchanged.
+function formatCommittedAt(val) {
+  const match = /^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}):\d{3}$/.exec(String(val ?? ""));
+  return match ? match[1] : val;
 }
 
 function formatCount(n) {
@@ -311,7 +318,7 @@ function TransactionDeletionPage() {
                             <tr key={rowId} className={isMarked ? "txn-row-marked" : ""}>
                               {COLUMNS.map((c) => (
                                 <td key={c.key} className={c.className}>
-                                  {displayValue(row[c.key])}
+                                  {displayValue(c.format ? c.format(row[c.key]) : row[c.key])}
                                 </td>
                               ))}
                               <td className="txn-row-action">
@@ -345,11 +352,11 @@ function TransactionDeletionPage() {
                   <div className="txn-deletion-actions">
                     <button
                       type="button"
-                      className="cm-primary cm-primary--warn"
+                      className="cm-primary"
                       onClick={handleSelectAll}
                       disabled={allMarked}
                     >
-                      ✕ Select all ({formatCount(total)})
+                      Mark All ({formatCount(total)}) for Removal
                     </button>
                     <button
                       type="button"
