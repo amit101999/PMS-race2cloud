@@ -201,6 +201,9 @@ export const previewStockSplit = async (req, res) => {
         // is not yet effective overwrites (and then wrongly drops) the real one.
         const eff = splitEffectiveDate(h);
         if (eff && eff >= cutoff) continue;
+        // This split's own SPLIT row (dated on the record date) is its result,
+        // not the holding on the record date. Same rule as computeSplitPreviewRows.
+        if (String(h.TYPE || "").trim().toUpperCase() === "SPLIT" && eff === recordDateISO) continue;
         latestByAccount.set(acc, h); // last row per account wins
         if (!rowsByAccount.has(acc)) rowsByAccount.set(acc, []);
         rowsByAccount.get(acc).push(h);
@@ -280,7 +283,15 @@ export const previewStockSplit = async (req, res) => {
       });
     }
 
-    return res.json({ success: true, data: preview, stage });
+    // An applied split can gain an account later (a back-dated trade uploaded
+    // after Confirm). Such an account has no Split_Account row, so reopen stage 1
+    // for it: Send as Receivable then adds only the missing accounts. Splits
+    // applied before Split_Account existed have no rows at all and stay RECEIVED.
+    const hasMissingAccount = preview.some((row) => !statusByAccount.has(row.accountCode));
+    const pageStage =
+      stage === "RECEIVED" && splitAccountRows.length > 0 && hasMissingAccount ? "NEW" : stage;
+
+    return res.json({ success: true, data: preview, stage: pageStage });
   } catch (error) {
     console.error("Preview split error:", error);
     return res.status(500).json({
@@ -410,6 +421,10 @@ const markSplitReceived = async (zcql, rowIdsByDate) => {
  * Stage 1 → 2: store every account of the split preview in Split_Account with
  * Status RECEIVABLE. The rows are recomputed here rather than taken from the
  * browser, and an uploaded Ex-Entitlement file must have this split (ISIN + record date).
+ *
+ * For a split that is already applied, only accounts with no Split_Account row
+ * are sent (an account that turned up later, e.g. a back-dated trade). Accounts
+ * already Received are never touched.
  */
 export const sendSplitReceivable = async (req, res) => {
   try {
@@ -424,30 +439,36 @@ export const sendSplitReceivable = async (req, res) => {
       return res.status(400).json({ success: false, message: "ISIN, ratio and record date are required." });
     }
 
-    if (await isSplitApplied(zcql, { isin, recordDateISO, r1, r2 })) {
-      return res
-        .status(409)
-        .json({ success: false, code: "ALREADY_SENT", message: "This split has already been applied." });
-    }
+    const alreadyApplied = await isSplitApplied(zcql, { isin, recordDateISO, r1, r2 });
     const existing = await readSplitAccountRows(zcql, { isin, recordDateISO, r1, r2 });
-    if (existing.length > 0) {
+    if (existing.some((r) => r.status === SPLIT_STATUS.RECEIVABLE)) {
       return res.status(409).json({
         success: false,
         code: "ALREADY_SENT",
         message: "These accounts are already Receivable. Compare with the Corporate Benefit Collection file next.",
       });
     }
+    const alreadyAppliedMessage = "This split has already been applied.";
+    // Applied before Split_Account existed: no rows to tell which accounts are missing.
+    if (alreadyApplied && existing.length === 0) {
+      return res.status(409).json({ success: false, code: "ALREADY_SENT", message: alreadyAppliedMessage });
+    }
+
+    const previewRows = await computeSplitPreviewRows(zcql, { isin, r1, r2, recordDateISO });
+    const listedAccounts = new Set(existing.map((r) => r.accountCode));
+    const rowsToSend = previewRows.filter((row) => !listedAccounts.has(row.accountCode));
+    if (rowsToSend.length === 0) {
+      if (alreadyApplied) {
+        return res.status(409).json({ success: false, code: "ALREADY_SENT", message: alreadyAppliedMessage });
+      }
+      return res.status(409).json({ success: false, code: "NO_HOLDINGS", message: "No eligible holdings on the record date." });
+    }
 
     // Throws NO_CUSTODIAN_ROWS (caught below) when no uploaded file has this split.
     await readLatestCorpActionRows(app, { caType: "split", isin, recordDateISO });
 
-    const previewRows = await computeSplitPreviewRows(zcql, { isin, r1, r2, recordDateISO });
-    if (previewRows.length === 0) {
-      return res.status(409).json({ success: false, code: "NO_HOLDINGS", message: "No eligible holdings on the record date." });
-    }
-
     const table = app.datastore().table("Split_Account");
-    const newRows = previewRows.map((row) => ({
+    const newRows = rowsToSend.map((row) => ({
       ISIN: isin,
       WS_Account_code: row.accountCode,
       Security_Code: securityCode || "",
@@ -466,8 +487,9 @@ export const sendSplitReceivable = async (req, res) => {
       }
     } catch (insertErr) {
       // A half-sent split would show as Receivable with accounts missing.
-      // The split is not applied (checked above), so every row of this event
-      // was inserted by this call — remove them and let the user send again.
+      // No row of this event was Receivable before this call (checked above),
+      // so the Receivable rows are exactly the ones inserted here — remove only
+      // those (Received rows of an applied split stay) and let the user send again.
       try {
         await zcql.executeZCQLQuery(`
           DELETE FROM Split_Account
@@ -475,6 +497,7 @@ export const sendSplitReceivable = async (req, res) => {
             AND Record_Date = '${recordDateISO}'
             AND Ratio1 = ${r1}
             AND Ratio2 = ${r2}
+            AND Status = '${SPLIT_STATUS.RECEIVABLE}'
         `);
       } catch (cleanupErr) {
         console.error("[SplitController] Could not remove a half-sent receivable:", cleanupErr.message);
@@ -607,13 +630,21 @@ export const addStockSplit = async (req, res) => {
     // read from the Holdings ledger (same source and rule as the bonus apply).
     // The Transaction table is not enough: a client whose shares all came from
     // a merger or demerger has no Transaction row for this ISIN and was skipped.
-    const eligibleRows = await computeSplitPreviewRows(zcql, {
-      isin,
-      r1: splitEvent.r1,
-      r2: splitEvent.r2,
-      recordDateISO,
-    });
-    const affectedAccounts = eligibleRows.map((row) => row.accountCode);
+    // When the split was already applied, only the Receivable accounts still
+    // need it (accounts that turned up later, or a Confirm that stopped half-way);
+    // the Received ones already have it and are left alone.
+    let affectedAccounts;
+    if (alreadyApplied) {
+      affectedAccounts = receivable.map((r) => r.accountCode);
+    } else {
+      const eligibleRows = await computeSplitPreviewRows(zcql, {
+        isin,
+        r1: splitEvent.r1,
+        r2: splitEvent.r2,
+        recordDateISO,
+      });
+      affectedAccounts = eligibleRows.map((row) => row.accountCode);
+    }
 
     // One track key per Apply-Split click. The parent Jobs row starts RUNNING;
     // each rebuild chunk and each bonus job below registers a "piece" row that

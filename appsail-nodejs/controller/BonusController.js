@@ -210,6 +210,9 @@ export const previewStockBonus = async (req, res) => {
         // is not yet effective overwrites (and then wrongly drops) the real one.
         const eff = bonusEffectiveDate(h);
         if (eff && eff >= cutoff) continue;
+        // This bonus's own BONUS row (dated on the record date) is its result,
+        // not the holding it is sized on. Same rule as computeBonusPreviewRows.
+        if (String(h.TYPE || "").trim().toUpperCase() === "BONUS" && eff === recordDateISO) continue;
         latestByAccount.set(acc, h); // last row per account wins
         if (!rowsByAccount.has(acc)) rowsByAccount.set(acc, []);
         rowsByAccount.get(acc).push(h);
@@ -286,7 +289,15 @@ export const previewStockBonus = async (req, res) => {
       });
     }
 
-    return res.json({ success: true, data: preview, stage });
+    // An applied bonus can gain an account later (a back-dated trade uploaded
+    // after Confirm). Such an account has no account row, so reopen stage 1 for
+    // it: Send as Receivable then adds only the missing accounts. Bonuses applied
+    // before this reconciliation existed have no account rows and stay RECEIVED.
+    const hasMissingAccount = preview.some((row) => !statusByAccount.has(row.accountCode));
+    const pageStage =
+      stage === "RECEIVED" && accountRows.length > 0 && hasMissingAccount ? "NEW" : stage;
+
+    return res.json({ success: true, data: preview, stage: pageStage });
   } catch (error) {
     console.error("Preview bonus error:", error);
     return res.status(500).json({
@@ -365,6 +376,10 @@ const recordBonusReceivedDates = async (app, zcql, { isin, recordDateISO, receiv
  * account row each, Status RECEIVABLE). The rows are recomputed here rather
  * than taken from the browser, and an uploaded Ex-Entitlement file must have
  * this bonus (ISIN + record date).
+ *
+ * For a bonus that is already applied, only accounts with no account row are
+ * sent (an account that turned up later, e.g. a back-dated trade). Accounts
+ * already Received are never touched.
  */
 export const sendBonusReceivable = async (req, res) => {
   try {
@@ -380,29 +395,36 @@ export const sendBonusReceivable = async (req, res) => {
     }
 
     const bonusEvent = { isin, recordDateISO, r1, r2 };
-    if (await isBonusApplied(zcql, bonusEvent)) {
-      return res
-        .status(409)
-        .json({ success: false, code: "ALREADY_SENT", message: "This bonus has already been applied." });
-    }
-    if ((await readBonusAccountRows(zcql, bonusEvent)).length > 0) {
+    const alreadyApplied = await isBonusApplied(zcql, bonusEvent);
+    const existing = await readBonusAccountRows(zcql, bonusEvent);
+    if (existing.some((r) => r.status === BONUS_STATUS.RECEIVABLE)) {
       return res.status(409).json({
         success: false,
         code: "ALREADY_SENT",
         message: "These accounts are already Receivable. Compare with the Corporate Benefit Collection file next.",
       });
     }
+    const alreadyAppliedMessage = "This bonus has already been applied.";
+    // Applied before this reconciliation existed: no rows to tell which accounts are missing.
+    if (alreadyApplied && existing.length === 0) {
+      return res.status(409).json({ success: false, code: "ALREADY_SENT", message: alreadyAppliedMessage });
+    }
+
+    const previewRows = await computeBonusPreviewRows(zcql, { isin, r1, r2, recordDateISO });
+    const listedAccounts = new Set(existing.map((r) => r.accountCode));
+    const rowsToSend = previewRows.filter((row) => !listedAccounts.has(row.accountCode));
+    if (rowsToSend.length === 0) {
+      if (alreadyApplied) {
+        return res.status(409).json({ success: false, code: "ALREADY_SENT", message: alreadyAppliedMessage });
+      }
+      return res.status(409).json({ success: false, code: "NO_HOLDINGS", message: "No eligible holdings on the record date." });
+    }
 
     // Throws NO_CUSTODIAN_ROWS (caught below) when no uploaded file has this bonus.
     await readLatestCorpActionRows(app, { caType: "bonus", isin, recordDateISO });
 
-    const previewRows = await computeBonusPreviewRows(zcql, { isin, r1, r2, recordDateISO });
-    if (previewRows.length === 0) {
-      return res.status(409).json({ success: false, code: "NO_HOLDINGS", message: "No eligible holdings on the record date." });
-    }
-
     const table = app.datastore().table("Bonus_Record");
-    const newRows = previewRows.map((row) => ({
+    const newRows = rowsToSend.map((row) => ({
       ISIN: isin,
       SecurityCode: securityCode || "",
       SecurityName: securityName || "",
@@ -420,11 +442,14 @@ export const sendBonusReceivable = async (req, res) => {
         await table.insertRows(newRows.slice(i, i + ACCOUNT_ROW_CHUNK));
       }
     } catch (insertErr) {
-      // A half-sent bonus would show as Receivable with accounts missing. The
-      // bonus is not applied (checked above), so every account row of it was
-      // inserted by this call — remove them and let the user send again.
+      // A half-sent bonus would show as Receivable with accounts missing. No
+      // account row was Receivable before this call (checked above), so the
+      // Receivable rows are exactly the ones inserted here — remove only those
+      // (Received rows of an applied bonus stay) and let the user send again.
       try {
-        await zcql.executeZCQLQuery(`DELETE FROM Bonus_Record WHERE ${bonusAccountWhere(bonusEvent)}`);
+        await zcql.executeZCQLQuery(
+          `DELETE FROM Bonus_Record WHERE ${bonusAccountWhere(bonusEvent)} AND Status = '${BONUS_STATUS.RECEIVABLE}'`,
+        );
       } catch (cleanupErr) {
         console.error("[BonusController] Could not remove a half-sent receivable:", cleanupErr.message);
       }

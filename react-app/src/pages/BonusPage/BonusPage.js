@@ -204,24 +204,15 @@ function BonusPage() {
           clearInterval(interval);
           setApplySuccess(true);
 
+          // Keep the form and reload the preview, as after Send as Receivable:
+          // the job has marked the accounts Received, so the table shows them.
           setTimeout(() => {
-            setIsin("");
-            setSearchQuery("");
-            setSecurityCode("");
-            setSecurityName("");
-            setRatio1("");
-            setRatio2("");
-            setRecordDate("");
-            setEffectiveDate("");
-            setPreviewData([]);
-            setStep("form");
-            setExportDownloadUrl("");
-            setExportError("");
             setApplying(false);
             setApplySuccess(false);
             setApplyJobName(null);
             setApplyStatus(null);
             setSuccess(true);
+            fetchPreview();
           }, 800);
         } else if (data.status === "FAILED" || data.status === "ERROR") {
           clearInterval(interval);
@@ -236,6 +227,10 @@ function BonusPage() {
     }, 10000);
 
     return () => clearInterval(interval);
+    // fetchPreview is left out on purpose: it is a new function every render, so
+    // listing it would restart this poll each time. The form it reads does not
+    // change while a bonus is being applied.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [applyJobName, applying, applyStatus]);
 
   const q = searchQuery.toLowerCase();

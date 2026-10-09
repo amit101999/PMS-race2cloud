@@ -1,4 +1,5 @@
 import { computeBonusPreviewRows } from "../../../util/analytics/bonusPreviewCalc.js";
+import { BONUS_STATUS, readBonusAccountRows } from "../../../util/analytics/bonusAccountRows.js";
 
 export const exportBonusPreviewFile = async (req, res) => {
   try {
@@ -38,10 +39,21 @@ export const exportBonusPreviewFile = async (req, res) => {
       return res.json({ success: false, message: "No eligible accounts" });
     }
 
-    let csv =
-      "ISIN,VIRTUAL_CODE,ACTUAL_CODE,CURRENT_HOLDING,BONUS_SHARES,NEW_HOLDING,DELTA\n";
+    // Each account's custodian reconciliation status (blank = not sent yet).
+    const accountRows = await readBonusAccountRows(zcql, { isin, recordDateISO, r1, r2 });
+    const statusByAccount = new Map(accountRows.map((r) => [r.accountCode, r.status]));
+    const statusOf = (row) => statusByAccount.get(row.accountCode) || "";
+
+    // Once every account is Received the bonus is fully booked, so the
+    // difference is no longer useful and the column is left out.
+    const showDifference = preview.some((row) => statusOf(row) !== BONUS_STATUS.RECEIVED);
+
+    let csv = showDifference
+      ? "ISIN,VIRTUAL_CODE,ACTUAL_CODE,CURRENT_HOLDING,BONUS_SHARES,NEW_HOLDING,DIFFERENCE,STATUS\n"
+      : "ISIN,VIRTUAL_CODE,ACTUAL_CODE,CURRENT_HOLDING,BONUS_SHARES,NEW_HOLDING,STATUS\n";
     for (const row of preview) {
-      csv += `"${row.isin}","${row.accountCode}","${row.actualCode}","${row.currentHolding}","${row.bonusShares}","${row.newHolding}","${row.delta}"\n`;
+      const difference = showDifference ? `"${row.delta}",` : "";
+      csv += `"${row.isin}","${row.accountCode}","${row.actualCode}","${row.currentHolding}","${row.bonusShares}","${row.newHolding}",${difference}"${statusOf(row)}"\n`;
     }
 
     /* ================= UPLOAD ================= */

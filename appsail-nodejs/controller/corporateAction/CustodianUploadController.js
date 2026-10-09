@@ -425,7 +425,10 @@ const DIFFERENCE_FOLDER = "CA-Differences";
 const DIFFERENCE_FOLDERS = {
   split: { entitlement: `${DIFFERENCE_FOLDER}/split-entitlement`, benefit: `${DIFFERENCE_FOLDER}/split-benefit` },
   bonus: { entitlement: `${DIFFERENCE_FOLDER}/bonus-entitlement`, benefit: `${DIFFERENCE_FOLDER}/bonus-benefit` },
-  dividend: { benefit: `${DIFFERENCE_FOLDER}/dividend-benefit` },
+  dividend: {
+    entitlement: `${DIFFERENCE_FOLDER}/dividend-entitlement`,
+    benefit: `${DIFFERENCE_FOLDER}/dividend-benefit`,
+  },
 };
 const DIFFERENCE_KEY_PATTERN =
   /^CA-Differences\/(split|bonus|dividend)-(entitlement|benefit)\/(\d{4}-\d{2}-\d{2})\/(\d+)-([^/]+)$/;
@@ -437,6 +440,13 @@ const saveDifferenceFile = async (bucket, key, csv) => {
   await bucket.putObject(key, csv, { contentType: "text/csv", overwrite: true });
   return stratusSignedUrlToString(await bucket.generatePreSignedUrl(key, "GET", STRATUS_GET_URL_OPTS));
 };
+
+/**
+ * Store one stage's comparison file in its history folder, for a page that
+ * runs its own comparison (the Dividend page's stage 1). Returns the signed URL.
+ */
+export const saveComparisonHistory = (catalystApp, { caType, stage, recordDateISO, isin, csv }) =>
+  saveDifferenceFile(getBucket(catalystApp), differenceKey(caType, stage, recordDateISO, isin), csv);
 
 /**
  * POST /api/split/compare-custodian and /api/bonus/compare-custodian
@@ -516,18 +526,23 @@ export const compareWithCustodian = (caType) => async (req, res) => {
 };
 
 /**
- * The accounts of one split / bonus still waiting for their shares, with the
- * quantity the custodian should report as received for each.
+ * The accounts of one split / bonus, split into those still waiting for their
+ * shares (receivable) and those already confirmed (received), each with the
+ * quantity the custodian should report as received.
  */
-const RECEIVABLE_ROWS = {
-  split: async (zcql, event) =>
-    (await readSplitAccountRows(zcql, event))
-      .filter((r) => r.status === SPLIT_STATUS.RECEIVABLE)
-      .map((r) => ({ accountCode: r.accountCode, expectedQty: r.newHolding })),
-  bonus: async (zcql, event) =>
-    (await readBonusAccountRows(zcql, event))
-      .filter((r) => r.status === BONUS_STATUS.RECEIVABLE)
-      .map((r) => ({ accountCode: r.accountCode, expectedQty: r.bonusShares })),
+const ACCOUNT_ROWS_BY_STATUS = {
+  split: async (zcql, event) => {
+    const rows = await readSplitAccountRows(zcql, event);
+    const pick = (status) =>
+      rows.filter((r) => r.status === status).map((r) => ({ accountCode: r.accountCode, expectedQty: r.newHolding }));
+    return { receivable: pick(SPLIT_STATUS.RECEIVABLE), received: pick(SPLIT_STATUS.RECEIVED) };
+  },
+  bonus: async (zcql, event) => {
+    const rows = await readBonusAccountRows(zcql, event);
+    const pick = (status) =>
+      rows.filter((r) => r.status === status).map((r) => ({ accountCode: r.accountCode, expectedQty: r.bonusShares }));
+    return { receivable: pick(BONUS_STATUS.RECEIVABLE), received: pick(BONUS_STATUS.RECEIVED) };
+  },
 };
 
 const NOT_RECEIVABLE_MESSAGES = {
@@ -563,7 +578,7 @@ export const compareWithBenefit = (caType) => async (req, res) => {
     const catalystApp = req.catalystApp;
     const zcql = catalystApp.zcql();
 
-    const receivable = await RECEIVABLE_ROWS[caType](zcql, { isin, recordDateISO, r1, r2 });
+    const { receivable, received } = await ACCOUNT_ROWS_BY_STATUS[caType](zcql, { isin, recordDateISO, r1, r2 });
     if (receivable.length === 0) {
       return fail(res, 409, { code: "NOT_RECEIVABLE", message: NOT_RECEIVABLE_MESSAGES[caType](isin, recordDateISO) });
     }
@@ -573,13 +588,16 @@ export const compareWithBenefit = (caType) => async (req, res) => {
     // Our rows are per virtual code; the custodian knows the actual (UCC) code.
     const virtualToActual = await buildVirtualToActualMap(
       zcql,
-      receivable.map((r) => r.accountCode),
+      [...receivable, ...received].map((r) => r.accountCode),
     );
-    const { rows, counts } = compareReceipts({
-      receivableRows: receivable.map((r) => ({
+    const toActual = (accountRows) =>
+      accountRows.map((r) => ({
         accountCode: virtualToActual.get(r.accountCode) || r.accountCode,
         expectedQty: r.expectedQty,
-      })),
+      }));
+    const { rows, counts } = compareReceipts({
+      receivableRows: toActual(receivable),
+      receivedRows: toActual(received),
       allocationRows,
       isin,
       isinName: String(req.body?.securityName || ""),
@@ -623,9 +641,9 @@ export const compareDividendWithBenefit = async (req, res) => {
     const catalystApp = req.catalystApp;
     const zcql = catalystApp.zcql();
 
-    const receivable = (await readDividendAccountRows(zcql, { isin, recordDateISO })).filter(
-      (r) => r.status === DIVIDEND_STATUS.RECEIVABLE,
-    );
+    const accountRows = await readDividendAccountRows(zcql, { isin, recordDateISO });
+    const receivable = accountRows.filter((r) => r.status === DIVIDEND_STATUS.RECEIVABLE);
+    const received = accountRows.filter((r) => r.status === DIVIDEND_STATUS.RECEIVED);
     if (receivable.length === 0) {
       return fail(res, 409, {
         code: "NOT_RECEIVABLE",
@@ -644,13 +662,16 @@ export const compareDividendWithBenefit = async (req, res) => {
     // Our rows are per virtual code; the custodian knows the actual (UCC) code.
     const virtualToActual = await buildVirtualToActualMap(
       zcql,
-      receivable.map((r) => r.accountCode),
+      [...receivable, ...received].map((r) => r.accountCode),
     );
-    const { rows, counts } = compareDividendReceipts({
-      receivableRows: receivable.map((r) => ({
+    const toActual = (accountRows) =>
+      accountRows.map((r) => ({
         accountCode: virtualToActual.get(r.accountCode) || r.accountCode,
         expectedAmount: r.amount,
-      })),
+      }));
+    const { rows, counts } = compareDividendReceipts({
+      receivableRows: toActual(receivable),
+      receivedRows: toActual(received),
       allocationRows,
       isin,
       isinName: String(req.body?.securityName || ""),

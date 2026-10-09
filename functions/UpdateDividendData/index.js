@@ -383,12 +383,15 @@ module.exports = async (jobRequest, context) => {
 
       try {
         // The amounts sent as Receivable may be stale (e.g. a back-dated trade
-        // since); store what is actually credited.
+        // since); store what is actually credited. Dividend_Amount stays gross;
+        // Tax_Amount is the custodian's deduction and Net_Amount the cash credited.
         await zcql.executeZCQLQuery(`
           UPDATE Dividend_Record SET
             Holding = ${holding},
             Rate = ${rate},
             Dividend_Amount = ${dividendAmount},
+            Tax_Amount = ${Math.round(tax * 100) / 100},
+            Net_Amount = ${cashAmount},
             PaymentDate = '${paymentDateISO}',
             Security_Code = '${esc(securityCode)}'
           WHERE ROWID = ${recordRowId}

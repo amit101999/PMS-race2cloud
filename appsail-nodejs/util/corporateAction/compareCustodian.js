@@ -25,6 +25,9 @@ export const RECEIPT_STATUS = {
   QTY_MISMATCH: "QTY_MISMATCH",
   NOT_IN_BENEFIT_FILE: "NOT_IN_BENEFIT_FILE",
   MISSING_IN_FA: "MISSING_IN_FA",
+  // The custodian lists a client whose shares we already marked Received
+  // earlier for this event — not a break, nothing to compare.
+  ALREADY_RECEIVED: "ALREADY_RECEIVED",
 };
 
 const CSV_HEADERS = [
@@ -74,7 +77,27 @@ export const DIVIDEND_RECEIPT_STATUS = {
   AMOUNT_MISMATCH: "AMOUNT_MISMATCH",
   NOT_IN_BENEFIT_FILE: "NOT_IN_BENEFIT_FILE",
   MISSING_IN_FA: "MISSING_IN_FA",
+  // Paid by an earlier Confirm and listed again in a newer file — not a break.
+  ALREADY_RECEIVED: "ALREADY_RECEIVED",
 };
+
+/** Dividend stage 1 (the Dividend page's own reconciliation grid), one row per account. */
+const DIVIDEND_ENTITLEMENT_CSV_HEADERS = [
+  "ISIN",
+  "ACCOUNT_CODE",
+  "ACTUAL_CODE",
+  "RECORD_DATE",
+  "FA_HOLDING",
+  "CUSTODIAN_HOLDING",
+  "FA_RATE",
+  "CUSTODIAN_RATE",
+  "FA_AMOUNT",
+  "CUSTODIAN_AMOUNT",
+  "DIFFERENCE",
+  "FA_PAYMENT_DATE",
+  "CUSTODIAN_PAYMENT_DATE",
+  "STATUS",
+];
 
 const DIVIDEND_RECEIPT_CSV_HEADERS = [
   "ISIN",
@@ -251,18 +274,28 @@ export const compareHoldings = ({
  * shares for a bonus) is compared with the custodian's "Received Quantity".
  * CA Qty, Balance Qty and Received Date are carried along for the reader.
  *
+ * Clients already Received for this event (a split that gained a late account)
+ * still appear in the custodian file. They are shown as Already Received, with
+ * our quantity and no difference, instead of Missing in FA.
+ *
  * @param {Array<{ accountCode: string, expectedQty: number }>} receivableRows
  *        one per virtual code; accountCode is already the ACTUAL code
+ * @param {Array<{ accountCode: string, expectedQty: number }>} [receivedRows] same shape, already Received
  * @param {Array<{ accountCode, isinName, caRefNo, caQty, receivedQty, balanceQty, receivedDate, eventStatus }>} allocationRows
  * @returns {{ rows: object[], counts: object }} every client, differences first
  */
-export const compareReceipts = ({ receivableRows, allocationRows, isin, isinName, recordDateISO }) => {
-  const faByAccount = new Map(); // actual code → CA qty
-  for (const row of receivableRows) {
-    const account = String(row.accountCode || "").trim().toUpperCase();
-    if (!account) continue;
-    faByAccount.set(account, (faByAccount.get(account) || 0) + (Number(row.expectedQty) || 0));
-  }
+export const compareReceipts = ({ receivableRows, receivedRows = [], allocationRows, isin, isinName, recordDateISO }) => {
+  const sumByAccount = (accountRows) => {
+    const byAccount = new Map(); // actual code → CA qty
+    for (const row of accountRows) {
+      const account = String(row.accountCode || "").trim().toUpperCase();
+      if (!account) continue;
+      byAccount.set(account, (byAccount.get(account) || 0) + (Number(row.expectedQty) || 0));
+    }
+    return byAccount;
+  };
+  const faByAccount = sumByAccount(receivableRows);
+  const receivedByAccount = sumByAccount(receivedRows);
 
   // The custodian can list one client more than once (e.g. two DP accounts).
   const custodyByAccount = new Map();
@@ -294,14 +327,37 @@ export const compareReceipts = ({ receivableRows, allocationRows, isin, isinName
     qtyMismatch: 0,
     notInBenefitFile: 0,
     missingInFa: 0,
+    alreadyReceived: 0,
   };
   const rows = [];
+  const alreadyReceivedRows = [];
 
   for (const account of new Set([...faByAccount.keys(), ...custodyByAccount.keys()])) {
     const inFa = faByAccount.has(account);
     const custody = custodyByAccount.get(account);
     const faCaQty = round4(faByAccount.get(account) || 0);
     const receivedQty = round4(custody?.receivedQty || 0);
+
+    if (!inFa && receivedByAccount.has(account)) {
+      counts.total += 1;
+      counts.alreadyReceived += 1;
+      alreadyReceivedRows.push({
+        isin,
+        isinName: custodyIsinName || isinName || "",
+        accountCode: account,
+        caRefNo: [...custody.caRefNos].join(" "),
+        recordDate: recordDateISO,
+        faCaQty: round4(receivedByAccount.get(account)),
+        custodianCaQty: round4(custody.caQty),
+        receivedQty,
+        balanceQty: round4(custody.balanceQty),
+        receivedDate: custody.receivedDate || "",
+        difference: null, // nothing to compare: these shares were confirmed earlier
+        eventStatus: [...custody.eventStatuses].join(" "),
+        status: RECEIPT_STATUS.ALREADY_RECEIVED,
+      });
+      continue;
+    }
 
     let status = RECEIPT_STATUS.MATCHED;
     if (!custody) status = RECEIPT_STATUS.NOT_IN_BENEFIT_FILE;
@@ -332,7 +388,8 @@ export const compareReceipts = ({ receivableRows, allocationRows, isin, isinName
   }
 
   sortDifferencesFirst(rows, RECEIPT_STATUS.MATCHED);
-  return { rows, counts };
+  alreadyReceivedRows.sort((a, b) => a.accountCode.localeCompare(b.accountCode));
+  return { rows: [...rows, ...alreadyReceivedRows], counts };
 };
 
 const round2 = (n) => Math.round(n * 100) / 100;
@@ -344,18 +401,35 @@ const round2 = (n) => Math.round(n * 100) / 100;
  * is compared with its "Received Amount"; a difference under one paisa is
  * rounding, not a break.
  *
+ * Clients paid by an earlier Confirm still appear in a newer file. They are
+ * shown as Already Received, with our amount and no difference, instead of
+ * Missing in FA (same rule as compareReceipts for Split / Bonus).
+ *
  * @param {Array<{ accountCode: string, expectedAmount: number }>} receivableRows
  *        one per virtual code; accountCode is already the ACTUAL code
+ * @param {Array<{ accountCode: string, expectedAmount: number }>} [receivedRows] same shape, already Received
  * @param {Array<{ accountCode, isinName, caRefNo, receivedAmount, caTaxAmt, receivedDate, eventStatus }>} allocationRows
  * @returns {{ rows: object[], counts: object }} every client, differences first
  */
-export const compareDividendReceipts = ({ receivableRows, allocationRows, isin, isinName, recordDateISO }) => {
-  const faByAccount = new Map(); // actual code → our amount
-  for (const row of receivableRows) {
-    const account = String(row.accountCode || "").trim().toUpperCase();
-    if (!account) continue;
-    faByAccount.set(account, (faByAccount.get(account) || 0) + (Number(row.expectedAmount) || 0));
-  }
+export const compareDividendReceipts = ({
+  receivableRows,
+  receivedRows = [],
+  allocationRows,
+  isin,
+  isinName,
+  recordDateISO,
+}) => {
+  const sumByAccount = (accountRows) => {
+    const byAccount = new Map(); // actual code → our amount
+    for (const row of accountRows) {
+      const account = String(row.accountCode || "").trim().toUpperCase();
+      if (!account) continue;
+      byAccount.set(account, (byAccount.get(account) || 0) + (Number(row.expectedAmount) || 0));
+    }
+    return byAccount;
+  };
+  const faByAccount = sumByAccount(receivableRows);
+  const receivedByAccount = sumByAccount(receivedRows);
 
   // The custodian can list one client more than once (e.g. two DP accounts).
   const custodyByAccount = new Map();
@@ -385,8 +459,10 @@ export const compareDividendReceipts = ({ receivableRows, allocationRows, isin, 
     amountMismatch: 0,
     notInBenefitFile: 0,
     missingInFa: 0,
+    alreadyReceived: 0,
   };
   const rows = [];
+  const alreadyReceivedRows = [];
 
   for (const account of new Set([...faByAccount.keys(), ...custodyByAccount.keys()])) {
     const inFa = faByAccount.has(account);
@@ -396,6 +472,28 @@ export const compareDividendReceipts = ({ receivableRows, allocationRows, isin, 
     const faNetAmount = round2(faAmount - caTaxAmt);
     const receivedAmount = round2(custody?.receivedAmount || 0);
     const difference = round2(Math.abs(faNetAmount - receivedAmount));
+
+    if (!inFa && receivedByAccount.has(account)) {
+      const paidAmount = round2(receivedByAccount.get(account));
+      counts.total += 1;
+      counts.alreadyReceived += 1;
+      alreadyReceivedRows.push({
+        isin,
+        isinName: custodyIsinName || isinName || "",
+        accountCode: account,
+        caRefNo: [...custody.caRefNos].join(" "),
+        recordDate: recordDateISO,
+        faAmount: paidAmount,
+        caTaxAmt,
+        faNetAmount: round2(paidAmount - caTaxAmt),
+        receivedAmount,
+        receivedDate: custody.receivedDate || "",
+        difference: null, // nothing to compare: this client was paid earlier
+        eventStatus: [...custody.eventStatuses].join(" "),
+        status: DIVIDEND_RECEIPT_STATUS.ALREADY_RECEIVED,
+      });
+      continue;
+    }
 
     let status = DIVIDEND_RECEIPT_STATUS.MATCHED;
     if (!custody) status = DIVIDEND_RECEIPT_STATUS.NOT_IN_BENEFIT_FILE;
@@ -426,7 +524,8 @@ export const compareDividendReceipts = ({ receivableRows, allocationRows, isin, 
   }
 
   sortDifferencesFirst(rows, DIVIDEND_RECEIPT_STATUS.MATCHED);
-  return { rows, counts };
+  alreadyReceivedRows.sort((a, b) => a.accountCode.localeCompare(b.accountCode));
+  return { rows: [...rows, ...alreadyReceivedRows], counts };
 };
 
 const csvCell = (v) => {
@@ -465,6 +564,25 @@ export const comparisonToCsv = (rows, { withCaQty = false } = {}) =>
         r.difference,
         r.status,
       ]);
+
+/** Dividend stage 1: the reconciled rows of every event of the Dividend page's compare. */
+export const dividendEntitlementToCsv = (rows) =>
+  toCsv(DIVIDEND_ENTITLEMENT_CSV_HEADERS, rows, (r) => [
+    r.isin,
+    r.accountCode,
+    r.actualCode,
+    r.recordDate,
+    r.holdingSys,
+    r.holdingFile,
+    r.rateSys,
+    r.rateFile,
+    r.grossSys,
+    r.grossFile,
+    r.grossSys !== null && r.grossFile !== null ? round2(r.grossSys - r.grossFile) : "",
+    r.paymentDateSys,
+    r.paymentDateFile,
+    r.status,
+  ]);
 
 export const dividendReceiptsToCsv = (rows) =>
   toCsv(DIVIDEND_RECEIPT_CSV_HEADERS, rows, (r) => [

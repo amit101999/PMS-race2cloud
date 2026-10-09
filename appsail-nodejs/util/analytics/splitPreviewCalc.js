@@ -152,6 +152,10 @@ export async function computeSplitPreviewRows(zcql, { isin, r1, r2, recordDateIS
       // is not yet effective overwrites (and then wrongly drops) the real one.
       const eff = holdingsEffectiveDate(h);
       if (eff && eff >= cutoff) continue;
+      // Once this split is applied, its own SPLIT row is dated on the record
+      // date. It is the result, not the holding on the record date — counting
+      // it would split the position a second time (100 → 200 shown as 200 → 400).
+      if (String(h.TYPE || "").trim().toUpperCase() === "SPLIT" && eff === recordDateISO) continue;
       latestByAccount.set(acc, h); // last row per account wins
       if (!rowsByAccount.has(acc)) rowsByAccount.set(acc, []);
       rowsByAccount.get(acc).push(h);

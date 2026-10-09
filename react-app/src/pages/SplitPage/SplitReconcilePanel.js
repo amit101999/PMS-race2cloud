@@ -15,8 +15,10 @@ const STATUS_VIEW = {
     MISSING_IN_CUSTODY: { badge: "badge--warn", label: "Missing in Custodian" },
     NOT_IN_BENEFIT_FILE: { badge: "badge--warn", label: "Not in Benefit File" },
     MISSING_IN_FA: { badge: "badge--warn", label: "Missing in FA" },
+    ALREADY_RECEIVED: { badge: "badge--neutral", label: "Already Received" },
 };
-const MATCHED_STATUSES = ["MATCHED"];
+// Not breaks: highlighted rows are only the ones that need attention.
+const MATCHED_STATUSES = ["MATCHED", "ALREADY_RECEIVED"];
 
 const numberFormat = new Intl.NumberFormat(undefined, { maximumFractionDigits: 4 });
 
@@ -202,6 +204,14 @@ const SplitReconcilePanel = ({
             { key: "notInFile", label: "Not in Benefit File", value: counts.notInBenefitFile, badge: "badge--warn" },
             { key: "fa", label: "Missing in FA", value: counts.missingInFa, badge: "badge--warn" },
         ];
+        if (counts.alreadyReceived > 0) {
+            summary.push({
+                key: "received",
+                label: "Already Received",
+                value: counts.alreadyReceived,
+                badge: "badge--neutral",
+            });
+        }
     } else if (counts) {
         summary = [
             { key: "total", label: "Total", value: counts.total, badge: "badge--neutral" },
@@ -338,7 +348,14 @@ const SplitReconcilePanel = ({
                                                 <tr key={r.accountCode} className={isBreak ? "cc-row-break" : undefined}>
                                                     <td translate="no">{r.accountCode}</td>
                                                     <td title={r.caRefNo}>{r.caRefNo || "—"}</td>
-                                                    <CompareCell fa={r.faCaQty} custodian={r.receivedQty} />
+                                                    {r.status === "ALREADY_RECEIVED" ? (
+                                                        // Confirmed earlier: show both figures, no difference.
+                                                        <td className="num">
+                                                            {qty(r.faCaQty)} / {qty(r.receivedQty)} / <span className="muted">—</span>
+                                                        </td>
+                                                    ) : (
+                                                        <CompareCell fa={r.faCaQty} custodian={r.receivedQty} />
+                                                    )}
                                                     <td className="num">{qty(r.balanceQty)}</td>
                                                     <td>{r.receivedDate || "—"}</td>
                                                     <td>
