@@ -1056,3 +1056,11 @@ Its current style and structure are the standard. Preserve them.
 - Use tables only for lists of named things (types, files, reports, rules, terms): 2–3 columns with a header row.
 - Use an en dash ( – ) after bold labels, and curly quotes.
 - Do not restyle, reorder or rewrite sections unrelated to the change.
+
+---
+
+# Developer Module Map (docs/developer-module-map.md)
+
+- When a change adds, removes, renames or newly shares a file, background function or database table, update the module map in the same task.
+- When editing a file listed as shared or copied, check the modules listed against it, and update every copy of copied code together (or say why a copy differs).
+- Keep the existing layout: shared index tables first, then one section per module using the same template.
