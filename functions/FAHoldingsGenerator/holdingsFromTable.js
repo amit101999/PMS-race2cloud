@@ -349,21 +349,13 @@ function recomputeHoldingsSnapshot(rows) {
     .map((x) => x.r);
 
   let lots = []; // FIFO queue of { qty, price }
-  // First row of a MERGER / DEMERGER event closes the prior position; the rest
-  // of that same event accumulate onto it. See the replace branch below.
+  // First row of a SPLIT / MERGER / DEMERGER event closes the prior position;
+  // the rest of that same event accumulate onto it. See the replace branch below.
   let lastReplaceEventKey = null;
 
   for (const h of ordered) {
     const typ = String(h.TYPE || "").trim().toUpperCase();
     const qty = Math.abs(Number(h.QUANTITY) || 0);
-
-    if (typ === "SPLIT") {
-      // Non-additive: QUANTITY is the post-split total, not a delta.
-      const anchorQty = Number(h.HOLDING) || 0;
-      const anchorWap = Number(h.WAP) || 0;
-      lots = anchorQty > QTY_EPS ? [{ qty: anchorQty, price: anchorWap }] : [];
-      continue;
-    }
 
     if (typ === "DIV" || typ === "DIV+") continue; // cash only, no quantity effect
 
@@ -391,8 +383,15 @@ function recomputeHoldingsSnapshot(rows) {
      * into one "event" per lot — an undercount. Deliberate: the rebuild keys on
      * the same `recordDate || trandate` fallback and undercounts identically, so
      * re-derived and stored HOLDING still agree. Fix the data, not one side.
+     *
+     * SPLIT follows the same rule: the rebuild writes one row per surviving
+     * lot (QUANTITY / PRICE are that lot's post-split size and cost), all
+     * dated on the split date. Keeping the lots separate is what lets a later
+     * sell consume the oldest lot first. Collapsing them into one lot at the
+     * row's running WAP blended the costs, so a split followed by a sell showed
+     * a different WAP / holding value here than the stored ledger.
      */
-    if (isHoldingsReplaceType(typ)) {
+    if (typ === "SPLIT" || isHoldingsReplaceType(typ)) {
       const eventKey = `${typ}|${holdingsEffectiveDate(h)}`;
       if (eventKey !== lastReplaceEventKey) {
         lots = [];

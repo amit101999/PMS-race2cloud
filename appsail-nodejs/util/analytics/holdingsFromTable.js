@@ -398,14 +398,12 @@ const QTY_EPS = 1e-6;
  * this function agree and the caller can go back to reading `HOLDING` directly.
  *
  * ACCURACY: exact for buys and sells (the migration's target). BONUS quantities
- * are deltas and accumulate correctly too. SPLIT restates the position rather
- * than adding to it, so a split re-anchors the running lots on that row's stored
- * snapshot and accumulation resumes from there — accurate after the split, and
- * inherently only as good as the stored value at the split itself. MERGER and
- * DEMERGER likewise restate: the first row of an event clears the prior lots and
- * the remaining rows of that event accumulate onto the empty queue, matching the
- * rebuild job. That restatement is exact — the per-lot rows carry the full
- * post-event position, so nothing is inherited from a stored snapshot.
+ * are deltas and accumulate correctly too. SPLIT, MERGER and DEMERGER restate
+ * the position rather than adding to it: the first row of an event clears the
+ * prior lots and the remaining rows of that event accumulate onto the empty
+ * queue, matching the rebuild job. That restatement is exact — the per-lot rows
+ * carry the full post-event position, so nothing is inherited from a stored
+ * snapshot.
  *
  * `rows` must already be effective-date filtered by the caller, and must include
  * CA_DATE so merger / demerger rows date and group by their event rather than by
@@ -426,21 +424,13 @@ export function recomputeHoldingsSnapshot(rows) {
     .map((x) => x.r);
 
   let lots = []; // FIFO queue of { qty, price }
-  // First row of a MERGER / DEMERGER event closes the prior position; the rest
-  // of that same event accumulate onto it. See the replace branch below.
+  // First row of a SPLIT / MERGER / DEMERGER event closes the prior position;
+  // the rest of that same event accumulate onto it. See the replace branch below.
   let lastReplaceEventKey = null;
 
   for (const h of ordered) {
     const typ = String(h.TYPE || "").trim().toUpperCase();
     const qty = Math.abs(Number(h.QUANTITY) || 0);
-
-    if (typ === "SPLIT") {
-      // Non-additive: QUANTITY is the post-split total, not a delta.
-      const anchorQty = Number(h.HOLDING) || 0;
-      const anchorWap = Number(h.WAP) || 0;
-      lots = anchorQty > QTY_EPS ? [{ qty: anchorQty, price: anchorWap }] : [];
-      continue;
-    }
 
     if (typ === "DIV" || typ === "DIV+") continue; // cash only, no quantity effect
 
@@ -483,8 +473,15 @@ export function recomputeHoldingsSnapshot(rows) {
      * function. Do NOT "fix" only this side — that reintroduces the mismatch.
      * The real fix is backfilling Record_Date on legacy Demerger_Record /
      * Merger rows and re-running the rebuild so CA_DATE is populated.
+     *
+     * SPLIT follows the same rule: the rebuild writes one row per surviving
+     * lot (QUANTITY / PRICE are that lot's post-split size and cost), all
+     * dated on the split date. Keeping the lots separate is what lets a later
+     * sell consume the oldest lot first. Collapsing them into one lot at the
+     * row's running WAP blended the costs, so a split followed by a sell showed
+     * a different WAP / holding value here than the stored ledger.
      */
-    if (isHoldingsReplaceType(typ)) {
+    if (typ === "SPLIT" || isHoldingsReplaceType(typ)) {
       const eventKey = `${typ}|${holdingsEffectiveDate(h)}`;
       if (eventKey !== lastReplaceEventKey) {
         lots = [];
