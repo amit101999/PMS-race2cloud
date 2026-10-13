@@ -342,6 +342,9 @@ module.exports = async (jobRequest, context) => {
      *          - Tran Date = RecordDate, Set Date = RecordDate (both store/display
      *            the record date so the Cash Passbook UI shows the dividend's
      *            entitlement date in both date columns).
+     *          - The full passbook rebuild (Cal_CB_Per_TNX,
+     *            fetchReceivedDividendEvents) re-creates this row from
+     *            Dividend_Record; change both together.
      * ---- */
     let updatedCount = 0;
     let receivedCount = 0;
