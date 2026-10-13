@@ -163,22 +163,24 @@ export const getExportAllHistory = async (req, res) => {
     // ZCQL uses * as LIKE wildcard (not %); _ is literal, so 'EA_*' does not
     // match 'EAC_...'. Run separate queries per format: scheme-wise new (EA_),
     // consolidated (EAC_), and old format (EXPORT_ALL_).
+    // Order by MODIFIEDTIME, not ROWID: a re-export reuses its date's old Jobs
+    // row, so ROWID order would leave a fresh re-export of an old date off the list.
     let newJobs = [];
     let consolidatedJobs = [];
     let oldJobs = [];
     try {
       newJobs = await zcql.executeZCQLQuery(
-        `SELECT jobName, status, MODIFIEDTIME FROM Jobs WHERE jobName LIKE 'EA_*' ORDER BY ROWID DESC LIMIT ${limit}`
+        `SELECT jobName, status, MODIFIEDTIME FROM Jobs WHERE jobName LIKE 'EA_*' ORDER BY MODIFIEDTIME DESC LIMIT ${limit}`
       );
     } catch (e) { console.error("Error fetching new jobs:", e); }
     try {
       consolidatedJobs = await zcql.executeZCQLQuery(
-        `SELECT jobName, status, MODIFIEDTIME FROM Jobs WHERE jobName LIKE 'EAC_*' ORDER BY ROWID DESC LIMIT ${limit}`
+        `SELECT jobName, status, MODIFIEDTIME FROM Jobs WHERE jobName LIKE 'EAC_*' ORDER BY MODIFIEDTIME DESC LIMIT ${limit}`
       );
     } catch (e) { console.error("Error fetching consolidated jobs:", e); }
     try {
       oldJobs = await zcql.executeZCQLQuery(
-        `SELECT jobName, status, MODIFIEDTIME FROM Jobs WHERE jobName LIKE 'EXPORT_ALL_*' ORDER BY ROWID DESC LIMIT ${limit}`
+        `SELECT jobName, status, MODIFIEDTIME FROM Jobs WHERE jobName LIKE 'EXPORT_ALL_*' ORDER BY MODIFIEDTIME DESC LIMIT ${limit}`
       );
     } catch (e) { console.error("Error fetching old jobs:", e); }
 
