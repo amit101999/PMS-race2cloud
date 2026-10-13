@@ -1,8 +1,10 @@
 /**
  * Cal_CB_Per_TNX: DELETE + full rebuild of Cash_Balance_Per_Transaction per account.
  *
- * - Reads cash-affecting rows from Transaction only (no Dividend_Record).
- * - DELETE all passbook rows for the account (repeat DELETE until COUNT=0; Catalyst ~300/round), then rebuild 2020–2026 in 6-month chunks.
+ * - Reads cash-affecting rows from Transaction, plus RECEIVED Dividend_Record rows
+ *   (the DELETE below also removes the DIVIDEND credits UpdateDividendData wrote,
+ *   so the rebuild must put them back or the dividend cash is lost).
+ * - DELETE all passbook rows for the account (repeat DELETE until COUNT=0; Catalyst ~300/round), then rebuild from 2020 onwards in 6-month chunks.
  * - Accounts: job param accountCodesJson, pairsJson (account column), or LEGACY_CLIENT_IDS.
  */
 
@@ -14,7 +16,10 @@ const LEGACY_CLIENT_IDS = [
   
   ];
 const GLOBAL_START = "2020-01-01";
-const GLOBAL_END = "2026-12-31";
+// The last chunk has no end date, so trades after today (e.g. a T+1 settlement)
+// and every future year are always included. A fixed end year silently dropped
+// anything later from a rebuild.
+const OPEN_END = "9999-12-31";
 const CHUNK_MONTHS = 6;
 
 const CASH_ADD = [
@@ -120,6 +125,11 @@ function sortCashEvents(allEvents) {
     const dA = new Date(a.impactDate).getTime();
     const dB = new Date(b.impactDate).getTime();
     if (dA !== dB) return dA - dB;
+    // A dividend goes after the other entries of its record date — where
+    // UpdateDividendData places it — so a rebuild reproduces the same passbook.
+    const divA = a.type === "DIVIDEND";
+    const divB = b.type === "DIVIDEND";
+    if (divA !== divB) return divA ? 1 : -1;
     if (a.isInflow !== b.isInflow) return a.isInflow ? -1 : 1;
     if (a.executionPriority !== b.executionPriority) {
       return a.executionPriority - b.executionPriority;
@@ -191,6 +201,56 @@ async function fetchBatched(zcql, baseQuery, mapper) {
     offset += BATCH_SIZE;
   }
   return rows;
+}
+
+/**
+ * Every dividend already credited to the account, as passbook cash-in events.
+ * Same row shape UpdateDividendData inserts: both dates = record date, amount =
+ * cash actually credited (dividend minus tax), price = rate, quantity = holding.
+ * Paged by ROWID keyset (ZCQL OFFSET is 1-based and repeats rows).
+ */
+async function fetchReceivedDividendEvents(zcql, accountCode) {
+  const events = [];
+  let lastRowId = "0";
+  while (true) {
+    const batch = await zcql.executeZCQLQuery(`
+      SELECT ROWID, ISIN, RecordDate, Rate, Holding, Dividend_Amount, Tax_Amount, Net_Amount, Security_Code
+      FROM Dividend_Record
+      WHERE WS_Account_code = '${esc(accountCode)}'
+        AND Status = 'RECEIVED'
+        AND ROWID > ${lastRowId}
+      ORDER BY ROWID ASC
+      LIMIT ${BATCH_SIZE}
+    `);
+    if (!batch || batch.length === 0) break;
+    for (const row of batch) {
+      const d = row.Dividend_Record || row;
+      lastRowId = String(d.ROWID);
+      const recordDate = String(d.RecordDate || "").slice(0, 10);
+      if (!recordDate) continue;
+      const credited =
+        d.Net_Amount != null && d.Net_Amount !== ""
+          ? Number(d.Net_Amount)
+          : (Number(d.Dividend_Amount) || 0) - (Number(d.Tax_Amount) || 0);
+      events.push({
+        rowId: d.ROWID,
+        trandate: recordDate,
+        setdate: recordDate,
+        executionPriority: 999,
+        type: "DIVIDEND",
+        securityName: d.Security_Code || "",
+        netAmount: Math.round((Number(credited) || 0) * 100) / 100,
+        impactDate: recordDate,
+        isInflow: true,
+        qty: Number(d.Holding) || 0,
+        price: Number(d.Rate) || 0,
+        isin: String(d.ISIN ?? "").trim(),
+        stt: 0,
+      });
+    }
+    if (batch.length < BATCH_SIZE) break;
+  }
+  return events;
 }
 
 function generateDateChunks(startISO, endISO, months) {
@@ -353,8 +413,12 @@ async function deleteCashPassbookForAccount(zcql, accountCode) {
   return { deletedRounds: rounds, initialCount: initial };
 }
 
-/** DELETE all passbook rows for account, then full rebuild from Transaction (2020–2026 chunks). */
+/** DELETE all passbook rows for account, then full rebuild from Transaction + received dividends (6-month chunks from 2020). */
 async function rebuildCashPassbookForAccount(zcql, accountCode) {
+  // Read the dividends before deleting anything, so a read failure leaves the
+  // existing passbook untouched.
+  const dividendEvents = await fetchReceivedDividendEvents(zcql, accountCode);
+
   await deleteCashPassbookForAccount(zcql, accountCode);
 
   const verifyEmpty = await countPassbookRowsForAccount(zcql, accountCode);
@@ -364,7 +428,9 @@ async function rebuildCashPassbookForAccount(zcql, accountCode) {
     );
   }
 
-  const chunks = generateDateChunks(GLOBAL_START, GLOBAL_END, CHUNK_MONTHS);
+  const today = new Date().toISOString().split("T")[0];
+  const chunks = generateDateChunks(GLOBAL_START, today, CHUNK_MONTHS);
+  chunks[chunks.length - 1].end = OPEN_END;
   let state = { balanceP: 0, sequence: 0, usedOpeningCsPlus: false };
   let isFirstChunk = true;
   let totalInserted = 0;
@@ -379,7 +445,10 @@ async function rebuildCashPassbookForAccount(zcql, accountCode) {
       end,
     );
 
-    const allEvents = [...inflowRows, ...outflowRows];
+    const chunkDividends = dividendEvents.filter(
+      (e) => e.impactDate >= start && e.impactDate <= end,
+    );
+    const allEvents = [...inflowRows, ...outflowRows, ...chunkDividends];
     if (allEvents.length === 0) {
       continue;
     }
@@ -443,7 +512,7 @@ module.exports = async (jobRequest, context) => {
     }
 
     console.log(
-      `Cal_CB_Per_TNX: ${accounts.length} account(s) | mode=${mode} | run=fullRebuild (Transaction only)`,
+      `Cal_CB_Per_TNX: ${accounts.length} account(s) | mode=${mode} | run=fullRebuild (Transaction + received dividends)`,
     );
 
     for (let ai = 0; ai < accounts.length; ai++) {

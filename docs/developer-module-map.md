@@ -123,7 +123,7 @@ A table links modules even when they share no code file. If you change how a col
 | `Bhav_Copy` | Bhav Copy upload, Update ISIN | Analytics, holdings reports, `FAHoldingsGenerator`, `ExportAllCustomerHoldingData` |
 | `Split`, `Split_Account` | Split (`SplitController.js`), `RebuildHoldingtable` (`Split_Account`), Update ISIN (`Split`) | Holdings functions, custodian check, transaction export, corporate action reports, Merger preview |
 | `Bonus`, `Bonus_Record` | `UpdateBonusTable`, Bonus (`Bonus_Record` status), Update ISIN | Holdings functions, custodian check, transaction export, corporate action reports, Merger preview |
-| `Dividend`, `Dividend_Record` | `UpdateDividendData`, Dividend (`Dividend_Record` status), Update ISIN | Custodian check, transaction export, corporate action reports |
+| `Dividend`, `Dividend_Record` | `UpdateDividendData`, Dividend (`Dividend_Record` status), Update ISIN | Custodian check, transaction export, corporate action reports, `Cal_CB_Per_TNX` (re-adds RECEIVED dividends to the passbook on a full rebuild) |
 | `Merger`, `Merger_Record` | `MegerFn`, Update ISIN | Holdings functions (`Merger`), Merger preview, corporate action reports |
 | `Demerger`, `Demerger_Record` | `DemergerFn`, Update ISIN | Holdings functions (`Demerger_Record`), Merger preview, corporate action reports |
 | `CA_Custodian_Upload`, `CA_Ex_Entitlement`, `CA_Benefit_Collection` | Custodian Upload (`util/corporateAction/custodianTables.js`) | Split, Bonus, Dividend custodian checks |
@@ -229,14 +229,14 @@ Client cash passbook. Business guide 3.6.
 - **Shared files:** `exportCashBalance.js` (Reports), `util/allAccountCodes.js`, `util/stratusSignedUrl.js`, `hooks/GetAllCodes.js`
 - **Background functions:**
   - `Cal_CB_Append_TxnUpload`: adds passbook lines after a commit.
-  - `Cal_CB_Per_TNX`: manual full rebuild.
+  - `Cal_CB_Per_TNX`: manual full rebuild from `Transaction` plus RECEIVED `Dividend_Record` rows (from 2020 onwards, no end date).
   - `ExportCashBalSingleClient` (pool `Export`).
   - `CashCalculation` (pool `Finance`) fills `Cash_Ledger`.
   - `UpdateDividendData` (Dividend module) adds dividend credits.
 - **Tables:** reads `Cash_Balance_Per_Transaction`. The functions above write it, and `CashCalculation` writes `Cash_Ledger`.
 - **Before you change:**
   - `Cal_CB_Append_TxnUpload` and `Cal_CB_Per_TNX` are twins and must follow the same money-in/money-out rules.
-  - Dividend credits land in the same table.
+  - Dividend credits land in the same table. `Cal_CB_Per_TNX` deletes them with everything else and re-adds them from `Dividend_Record`, so a change to how `UpdateDividendData` writes a credit must be mirrored in `fetchReceivedDividendEvents`.
   - The Analytics cash summary reads `Cash_Ledger`, not the passbook.
 
 ### 4.8 Analytics
