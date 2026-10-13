@@ -1,6 +1,6 @@
 const parseCatalystTime = (ct) => {
   if (!ct) return 0;
-  // Catalyst CREATEDTIME is an IST (UTC+05:30) wall-clock string like
+  // Catalyst CREATEDTIME/MODIFIEDTIME is an IST (UTC+05:30) wall-clock string like
   // "2026-06-19 17:41:28:675". Parse it explicitly as IST so the AppSail
   // server's own timezone (UTC) doesn't shift it +5:30. Without the explicit
   // offset the time renders 5.5h ahead in the UI after a refresh.
@@ -33,17 +33,19 @@ export const exportAllData = async (req, res) => {
     const jobName = jobNameFor(mode, dateStr);
     const fileName = fileNameFor(mode, dateStr);
 
-    // Check if a job for this date already exists
+    // Check if a job for this date already exists. There is one Jobs row per
+    // jobName, reused by every re-export, so job age is measured from
+    // MODIFIEDTIME (last status change), not CREATEDTIME (first-ever export).
     const existing = await zcql.executeZCQLQuery(
-      `SELECT ROWID, status, CREATEDTIME FROM Jobs WHERE jobName = '${jobName}' LIMIT 1`
+      `SELECT ROWID, status, MODIFIEDTIME FROM Jobs WHERE jobName = '${jobName}' LIMIT 1`
     );
 
     if (existing.length) {
       const oldStatus = existing[0].Jobs.status;
-      const createdTime = existing[0].Jobs.CREATEDTIME;
+      const updatedTime = existing[0].Jobs.MODIFIEDTIME;
 
       const STALE_TIMEOUT_MS = 60 * 60 * 1000;
-      const jobAge = Date.now() - parseCatalystTime(createdTime);
+      const jobAge = Date.now() - parseCatalystTime(updatedTime);
       const isStale = jobAge > STALE_TIMEOUT_MS;
 
       // If still running AND not stale, don't allow re-export
@@ -53,8 +55,8 @@ export const exportAllData = async (req, res) => {
           fileName,
           asOnDate: dateStr,
           status: oldStatus,
-          createdAt: createdTime
-            ? new Date(parseCatalystTime(createdTime)).toISOString()
+          createdAt: updatedTime
+            ? new Date(parseCatalystTime(updatedTime)).toISOString()
             : new Date().toISOString(),
           message: "Export is already in progress for this date",
         });
@@ -115,7 +117,7 @@ export const getExportAllJobStatus = async (req, res) => {
     const jobName = jobNameFor(mode, dateStr);
 
     const result = await zcql.executeZCQLQuery(
-      `SELECT ROWID, status, CREATEDTIME FROM Jobs WHERE jobName = '${jobName}' LIMIT 1`
+      `SELECT ROWID, status, MODIFIEDTIME FROM Jobs WHERE jobName = '${jobName}' LIMIT 1`
     );
 
     if (!result.length) {
@@ -123,10 +125,10 @@ export const getExportAllJobStatus = async (req, res) => {
     }
 
     let status = result[0].Jobs.status;
-    const createdTime = result[0].Jobs.CREATEDTIME;
+    const updatedTime = result[0].Jobs.MODIFIEDTIME;
 
     const STALE_TIMEOUT_MS = 60 * 60 * 1000;
-    const jobAge = Date.now() - parseCatalystTime(createdTime);
+    const jobAge = Date.now() - parseCatalystTime(updatedTime);
 
     if ((status === "PENDING" || status === "RUNNING") && jobAge > STALE_TIMEOUT_MS) {
       try {
@@ -161,22 +163,24 @@ export const getExportAllHistory = async (req, res) => {
     // ZCQL uses * as LIKE wildcard (not %); _ is literal, so 'EA_*' does not
     // match 'EAC_...'. Run separate queries per format: scheme-wise new (EA_),
     // consolidated (EAC_), and old format (EXPORT_ALL_).
+    // Order by MODIFIEDTIME, not ROWID: a re-export reuses its date's old Jobs
+    // row, so ROWID order would leave a fresh re-export of an old date off the list.
     let newJobs = [];
     let consolidatedJobs = [];
     let oldJobs = [];
     try {
       newJobs = await zcql.executeZCQLQuery(
-        `SELECT jobName, status, CREATEDTIME FROM Jobs WHERE jobName LIKE 'EA_*' ORDER BY ROWID DESC LIMIT ${limit}`
+        `SELECT jobName, status, MODIFIEDTIME FROM Jobs WHERE jobName LIKE 'EA_*' ORDER BY MODIFIEDTIME DESC LIMIT ${limit}`
       );
     } catch (e) { console.error("Error fetching new jobs:", e); }
     try {
       consolidatedJobs = await zcql.executeZCQLQuery(
-        `SELECT jobName, status, CREATEDTIME FROM Jobs WHERE jobName LIKE 'EAC_*' ORDER BY ROWID DESC LIMIT ${limit}`
+        `SELECT jobName, status, MODIFIEDTIME FROM Jobs WHERE jobName LIKE 'EAC_*' ORDER BY MODIFIEDTIME DESC LIMIT ${limit}`
       );
     } catch (e) { console.error("Error fetching consolidated jobs:", e); }
     try {
       oldJobs = await zcql.executeZCQLQuery(
-        `SELECT jobName, status, CREATEDTIME FROM Jobs WHERE jobName LIKE 'EXPORT_ALL_*' ORDER BY ROWID DESC LIMIT ${limit}`
+        `SELECT jobName, status, MODIFIEDTIME FROM Jobs WHERE jobName LIKE 'EXPORT_ALL_*' ORDER BY MODIFIEDTIME DESC LIMIT ${limit}`
       );
     } catch (e) { console.error("Error fetching old jobs:", e); }
 
@@ -189,8 +193,8 @@ export const getExportAllHistory = async (req, res) => {
     for (const row of allResults) {
       const jobName = row.Jobs.jobName;
       let status = row.Jobs.status;
-      const createdTime = row.Jobs.CREATEDTIME;
-      const createdAtMs = parseCatalystTime(createdTime);
+      const updatedTime = row.Jobs.MODIFIEDTIME;
+      const updatedAtMs = parseCatalystTime(updatedTime);
 
       let asOnDate;
       let mode = "scheme";
@@ -203,7 +207,7 @@ export const getExportAllHistory = async (req, res) => {
         asOnDate = jobName.replace("EXPORT_ALL_", "");
       }
 
-      const jobAge = now - createdAtMs;
+      const jobAge = now - updatedAtMs;
       if ((status === "PENDING" || status === "RUNNING") && jobAge > STALE_TIMEOUT_MS) {
         try {
           await zcql.executeZCQLQuery(
@@ -221,10 +225,10 @@ export const getExportAllHistory = async (req, res) => {
         mode,
         status,
         createdAt:
-          createdAtMs > 0
-            ? new Date(createdAtMs).toISOString()
+          updatedAtMs > 0
+            ? new Date(updatedAtMs).toISOString()
             : new Date().toISOString(),
-        _sortMs: createdAtMs,
+        _sortMs: updatedAtMs,
       });
     }
 
@@ -266,6 +270,17 @@ export const downloadExportFile = async (req, res) => {
 
     const stratus = catalystApp.stratus();
     const bucket = stratus.bucket("upload-data-bucket");
+
+    // A signed URL is issued even for a missing key, so the browser would land
+    // on a raw 404. The file can be missing while a re-export of the same date
+    // is rebuilding it (the old file is deleted first) or after a failed run.
+    const fileExists = await bucket.headObject(fileName, { throwErr: false });
+    if (!fileExists) {
+      return res.status(404).json({
+        status: "NOT_FOUND",
+        message: "Export file is not available. If an export for this date is running, wait for it to finish; otherwise export again.",
+      });
+    }
 
     const downloadUrl = await bucket.generatePreSignedUrl(fileName, "GET", {
       expiresIn: 3600,
