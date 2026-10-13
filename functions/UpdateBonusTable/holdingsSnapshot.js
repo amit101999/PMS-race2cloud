@@ -18,6 +18,14 @@
 
 const QTY_EPS = 1e-6;
 
+// Decimals are stored in binary, so 190.88 - 190 gives 0.8799999999999955.
+// Rounding each step to 6 decimals keeps HOLDING equal to a hand calculation
+// (same rule as the FIFO engine). `=== 0` turns -0 into 0.
+const roundQty = (n) => {
+  const v = Math.round((Number(n) || 0) * 1e6) / 1e6;
+  return v === 0 ? 0 : v;
+};
+
 function isHoldingsBuyType(type) {
   return /^BY-|SQB|OPI/i.test(String(type || ""));
 }
@@ -113,8 +121,8 @@ function recomputeHoldingsSnapshot(rows) {
       while (remaining > QTY_EPS && lots.length) {
         const lot = lots[0];
         const used = Math.min(lot.qty, remaining);
-        lot.qty -= used;
-        remaining -= used;
+        lot.qty = roundQty(lot.qty - used);
+        remaining = roundQty(remaining - used);
         if (lot.qty <= QTY_EPS) lots.shift();
       }
       continue;
@@ -179,7 +187,7 @@ function recomputeHoldingsSnapshot(rows) {
     }
   }
 
-  const holding = lots.reduce((s, l) => s + l.qty, 0);
+  const holding = roundQty(lots.reduce((s, l) => s + l.qty, 0));
   const cost = lots.reduce((s, l) => s + l.qty * l.price, 0);
   const wap = holding > QTY_EPS ? cost / holding : 0;
 

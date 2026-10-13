@@ -104,21 +104,21 @@ function TransactionPage({ stock, accountCode, asOnDate, onClose }) {
     return num.toLocaleString("en-IN");
   };
 
-  // Corporate actions intentionally round share counts (Math.floor on
-  // demerger/merger ratios, whole bonus/split shares), so their quantities are
-  // shown as whole numbers. Normal transactions (OPI, SL+, BY-, SQB, ...) can
-  // legitimately be fractional and must be displayed with their real decimals.
-  const CA_TYPES = ["BONUS", "SPLIT", "MERGER", "DEMERGER", "RIGHTS"];
-  const isCorporateAction = (type) =>
-    CA_TYPES.includes(String(type || "").toUpperCase());
-
-  const formatQuantity = (value, type) => {
+  // Shown the same way as the holdings list (HoldingCards), so both screens agree.
+  // Quantities are not floored for corporate actions: a split keeps its fractions,
+  // and bonus / merger / demerger quantities are already whole when calculated.
+  const formatQuantity = (value) => {
     const num = Number(value);
     if (value === null || value === undefined || value === "" || isNaN(num)) return "-";
     const snapped = Math.abs(num) < 1e-6 ? 0 : num;
-    return isCorporateAction(type)
-      ? Math.floor(snapped).toLocaleString("en-IN")
-      : snapped.toLocaleString("en-IN", { maximumFractionDigits: 3 });
+    return snapped.toLocaleString("en-IN", { maximumFractionDigits: 3 });
+  };
+
+  // Rounds to 2 decimals, never cuts off: cutting off showed 879.9999 as 879.99.
+  const formatAmount = (value) => {
+    const num = Number(value);
+    if (value === null || value === undefined || value === "" || isNaN(num)) return "-";
+    return num.toLocaleString("en-IN", { maximumFractionDigits: 2 });
   };
 
   // Everything below is deliberately derived from the FULL list, not the visible
@@ -191,7 +191,7 @@ function TransactionPage({ stock, accountCode, asOnDate, onClose }) {
           </div>
           <div className="hd-card blue">
             <p>WEIGHTED AVG BUY PRICE</p>
-            <h3>{Math.trunc(avgPrice * 100) / 100}</h3>
+            <h3>{formatAmount(avgPrice)}</h3>
           </div>
         </div>
 
@@ -247,7 +247,7 @@ function TransactionPage({ stock, accountCode, asOnDate, onClose }) {
                       </td>
                       <td>{tx.isin || "-"}</td>
                       <td className="num">
-                        {formatQuantity(tx.qty, tx.tranType)}
+                        {formatQuantity(tx.qty)}
                         <span>
                           {/^BY-|SQB|OPI/i.test(String(tx.tranType || "")) &&
                           tx.isActive === false
@@ -255,13 +255,13 @@ function TransactionPage({ stock, accountCode, asOnDate, onClose }) {
                             : ""}
                         </span>
                       </td>
-                      <td className="num">{Math.trunc(tx.price * 100) / 100}</td>
+                      <td className="num">{formatAmount(tx.price)}</td>
                       <td className="num">{formatCurrency(tx.netAmount)}</td>
-                      <td className="num">{formatQuantity(tx.holdings, tx.tranType)}</td>
+                      <td className="num">{formatQuantity(tx.holdings)}</td>
                       <td className="num">
-                        {Math.trunc(tx.averageCostOfHoldings * 100) / 100}
+                        {formatAmount(tx.averageCostOfHoldings)}
                       </td>
-                      <td className="num">{Math.trunc(tx.costOfHoldings * 100) / 100}</td>
+                      <td className="num">{formatAmount(tx.costOfHoldings)}</td>
                       <td
                         className={
                           tx.profitLoss !== null && tx.profitLoss !== undefined

@@ -71,6 +71,14 @@ const toISTDateStr = (epochMs) =>
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// Decimals are stored in binary, so adding holdings leaves leftovers
+// (10.1 + 20.2 = 30.299999999999997). Rounding to 6 decimals keeps the total
+// equal to a hand calculation (same rule as the FIFO engine). `=== 0` turns -0 into 0.
+const roundQty = (n) => {
+  const v = Math.round((Number(n) || 0) * 1e6) / 1e6;
+  return v === 0 ? 0 : v;
+};
+
 /**
  * Retry a flaky async op with capped exponential backoff (500ms, 1s).
  * Re-throws the last error if every attempt fails — the caller then handles it
@@ -194,7 +202,7 @@ async function buildConsolidatedGroupCsv({
       const hold = Number(row.currentHolding) || 0;
       const existing = byIsin.get(isin);
       if (existing) {
-        existing.currentHolding += hold;
+        existing.currentHolding = roundQty(existing.currentHolding + hold);
       } else {
         byIsin.set(isin, {
           isin,

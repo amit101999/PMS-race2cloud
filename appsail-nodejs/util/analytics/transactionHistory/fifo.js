@@ -14,16 +14,21 @@ const EVENT_TYPE_PRIORITY = {
 };
 
 /**
- * Quantity epsilon for normal (non-corporate-action) FIFO math. Snaps tiny
- * floating-point residue (e.g. 0.533 - 0.533 = 1e-16) to exactly zero so
- * fully-sold positions end at 0 and consumed lots leave the queue. Genuine
- * fractional quantities (e.g. 5.533) are preserved. Corporate-action rounding
- * (Math.floor / ratio logic) is intentional and unaffected.
+ * JavaScript stores decimals in binary, so 190.88 - 190 gives 0.8799999999999955
+ * instead of 0.88, and that error grows with every later step (0.88 x 1000 =
+ * 879.9999999999955). Rounding each result removes the leftover so the figures
+ * match a hand calculation. Real quantities have at most 3-4 decimals, so 6 is
+ * safe; amounts keep 4 and screens show 2. Leftovers such as 0.533 - 0.533 =
+ * 1e-16 become exactly 0, so fully sold lots leave the queue. The `=== 0` check
+ * turns -0 into 0 so a fully sold position never displays as "-0".
  */
-const QTY_EPS = 1e-6;
-const snapQty = (n) => {
-  const v = Number(n) || 0;
-  return Math.abs(v) < QTY_EPS ? 0 : v;
+const roundQty = (n) => {
+  const v = Math.round((Number(n) || 0) * 1e6) / 1e6;
+  return v === 0 ? 0 : v;
+};
+const roundAmt = (n) => {
+  const v = Math.round((Number(n) || 0) * 1e4) / 1e4;
+  return v === 0 ? 0 : v;
 };
 
 export const runFifoEngine = (
@@ -187,9 +192,9 @@ export const runFifoEngine = (
   const isSell = (t) => /^SL\+|SQS|OPO|NF-/.test(String(t).toUpperCase());
 
   const getCostOfHoldings = () =>
-    buyQueue.reduce((sum, lot) => sum + lot.qty * lot.price, 0);
+    roundAmt(buyQueue.reduce((sum, lot) => sum + lot.qty * lot.price, 0));
 
-  const getWAP = () => (holdings > 0 ? getCostOfHoldings() / holdings : 0);
+  const getWAP = () => (holdings > 0 ? roundAmt(getCostOfHoldings() / holdings) : 0);
 
   /* ---------------- PROCESS EVENTS ---------------- */
   for (const e of events) {
@@ -224,7 +229,7 @@ export const runFifoEngine = (
           isActive: true,
         });
 
-        holdings += qty;
+        holdings = roundQty(holdings + qty);
 
         output.push({
           lotId,
@@ -254,17 +259,17 @@ export const runFifoEngine = (
           const lot = buyQueue[0];
           const used = Math.min(lot.qty, remaining);
 
-          fifoCost += used * lot.price;
-          lot.qty -= used;
-          remaining -= used;
+          fifoCost = roundAmt(fifoCost + used * lot.price);
+          lot.qty = roundQty(lot.qty - used);
+          remaining = roundQty(remaining - used);
 
-          if (snapQty(lot.qty) === 0) {
+          if (lot.qty === 0) {
             lot.isActive = false; // 🔥 mark inactive
             buyQueue.shift();
           }
         }
 
-        holdings = snapQty(holdings - sellQty);
+        holdings = roundQty(holdings - sellQty);
 
         output.push({
           trandate: t.trandate,
@@ -277,7 +282,7 @@ export const runFifoEngine = (
           holdings,
           costOfHoldings: getCostOfHoldings(),
           averageCostOfHoldings: getWAP(),
-          profitLoss: sellQty * price - fifoCost,
+          profitLoss: roundAmt(sellQty * price - fifoCost),
           isActive: false,
           isin: t.ISIN || t.isin,
         });
@@ -300,7 +305,7 @@ export const runFifoEngine = (
         isActive: true,
       });
 
-      holdings += qty;
+      holdings = roundQty(holdings + qty);
 
       output.push({
         lotId,
@@ -346,7 +351,7 @@ export const runFifoEngine = (
 
       for (let i = 0; i < activeLots.length; i++) {
         const oldLot = activeLots[i];
-        const newQty = oldLot.qty * multiplier;
+        const newQty = roundQty(oldLot.qty * multiplier);
         const newPrice = oldLot.price / multiplier;
         const newLotId = ++lotCounter;
 
@@ -359,9 +364,9 @@ export const runFifoEngine = (
           isActive: true,
         });
 
-        runningHoldings += newQty;
-        runningCost += newQty * newPrice;
-        const runningWAP = runningHoldings > 0 ? runningCost / runningHoldings : 0;
+        runningHoldings = roundQty(runningHoldings + newQty);
+        runningCost = roundAmt(runningCost + newQty * newPrice);
+        const runningWAP = runningHoldings > 0 ? roundAmt(runningCost / runningHoldings) : 0;
 
         const buyRowIndex = output.findIndex((r) => r.lotId === oldLot.lotId);
         let insertIndex = output.length;
@@ -484,7 +489,7 @@ export const runFifoEngine = (
         isActive: true,
       });
 
-      holdings += qty;
+      holdings = roundQty(holdings + qty);
 
       output.push({
         lotId,

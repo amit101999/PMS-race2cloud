@@ -70,6 +70,22 @@ const snapQty = (n) => {
   return Math.abs(v) < QTY_EPS ? 0 : v;
 };
 
+/**
+ * Decimals are stored in binary, so 190.88 - 190 gives 0.8799999999999955 and
+ * 0.88 x 1000 gives 879.9999999999955. Rounding every quantity (6 decimals) and
+ * amount (4 decimals) as it is calculated keeps the saved figures equal to a hand
+ * calculation, so all screens and exports agree. Same rule as the AppSail FIFO
+ * engine (util/analytics/transactionHistory/fifo.js). `=== 0` turns -0 into 0.
+ */
+const roundQty = (n) => {
+  const v = Math.round((Number(n) || 0) * 1e6) / 1e6;
+  return v === 0 ? 0 : v;
+};
+const roundAmt = (n) => {
+  const v = Math.round((Number(n) || 0) * 1e4) / 1e4;
+  return v === 0 ? 0 : v;
+};
+
 /** When tracking is enabled, written to JobStatusPerAccount.jobType unless params.jobType overrides. */
 const HOLDINGS_JOB_TYPE_DEFAULT = "HOLDINGS_FULL_REBUILD";
 
@@ -554,15 +570,15 @@ function reconstructBuyQueueFromHoldings(rows) {
       while (remaining > 0 && queue.length) {
         const lot = queue[0];
         const used = Math.min(lot.qty, remaining);
-        lot.qty -= used;
-        remaining -= used;
+        lot.qty = roundQty(lot.qty - used);
+        remaining = roundQty(remaining - used);
         if (snapQty(lot.qty) === 0) queue.shift();
       }
     }
   }
 
-  const holding = snapQty(queue.reduce((s, l) => s + l.qty, 0));
-  const cost = queue.reduce((s, l) => s + l.qty * l.price, 0);
+  const holding = roundQty(queue.reduce((s, l) => s + l.qty, 0));
+  const cost = roundAmt(queue.reduce((s, l) => s + l.qty * l.price, 0));
   return { queue, holding, cost };
 }
 
@@ -653,9 +669,9 @@ async function appendBuyRowsCheap(zcql, accountCode, isin, newBuyTxns, counters)
       continue;
     }
 
-    holding += qty;
-    cost += qty * price;
-    const wap = holding > 0 ? cost / holding : 0;
+    holding = roundQty(holding + qty);
+    cost = roundAmt(cost + qty * price);
+    const wap = holding > 0 ? roundAmt(cost / holding) : 0;
 
     const row = {
       tranType,
@@ -737,8 +753,8 @@ async function appendTxnsWithQueueReconstruct(
 
     if (isBuyType(tranType)) {
       queue.push({ qty, price });
-      holding += qty;
-      cost += qty * price;
+      holding = roundQty(holding + qty);
+      cost = roundAmt(cost + qty * price);
     } else if (isSellType(tranType)) {
       const sellQty = Math.min(qty, holding);
       let remaining = sellQty;
@@ -746,21 +762,21 @@ async function appendTxnsWithQueueReconstruct(
       while (remaining > 0 && queue.length) {
         const lot = queue[0];
         const used = Math.min(lot.qty, remaining);
-        fifoCost += used * lot.price;
-        lot.qty -= used;
-        remaining -= used;
+        fifoCost = roundAmt(fifoCost + used * lot.price);
+        lot.qty = roundQty(lot.qty - used);
+        remaining = roundQty(remaining - used);
         if (snapQty(lot.qty) === 0) queue.shift();
       }
-      holding = snapQty(holding - sellQty);
-      cost -= fifoCost;
+      holding = roundQty(holding - sellQty);
+      cost = roundAmt(cost - fifoCost);
       if (holding === 0) cost = 0;
-      profitLoss = sellQty * price - fifoCost;
+      profitLoss = roundAmt(sellQty * price - fifoCost);
       isActive = false;
     } else {
       continue;
     }
 
-    const wap = holding > 0 ? cost / holding : 0;
+    const wap = holding > 0 ? roundAmt(cost / holding) : 0;
 
     const row = {
       tranType,

@@ -12,6 +12,14 @@ const snapQty = (n) => {
   return Math.abs(v) < QTY_EPS ? 0 : v;
 };
 
+// Decimals are stored in binary, so adding holdings leaves leftovers
+// (10.1 + 20.2 = 30.299999999999997). Rounding to 6 decimals keeps the total
+// equal to a hand calculation (same rule as the FIFO engine). `=== 0` turns -0 into 0.
+const roundQty = (n) => {
+  const v = Math.round((Number(n) || 0) * 1e6) / 1e6;
+  return v === 0 ? 0 : v;
+};
+
 /**
  * runFifoEngine
  *
@@ -60,8 +68,8 @@ function runFifoEngine(transactions, bonuses, splits, returnHoldingsOnly = false
 
     const type = txn.Tran_Type || txn.tranType || "";
 
-    if (isBuy(type)) holdings += qty;
-    if (isSell(type)) holdings -= qty;
+    if (isBuy(type)) holdings = roundQty(holdings + qty);
+    if (isSell(type)) holdings = roundQty(holdings - qty);
   }
 
   /* ── Process bonuses ── */
@@ -70,7 +78,7 @@ function runFifoEngine(transactions, bonuses, splits, returnHoldingsOnly = false
     if (bonusIsin !== activeIsin) continue;
 
     const qty = Number(bonus.BonusShare || bonus.bonusShare) || 0;
-    holdings += qty;
+    holdings = roundQty(holdings + qty);
   }
 
   /* ── Process splits ── */
@@ -83,7 +91,7 @@ function runFifoEngine(transactions, bonuses, splits, returnHoldingsOnly = false
     if (!ratio1 || !ratio2) continue;
 
     const multiplier = ratio2 / ratio1;
-    holdings = holdings * multiplier;
+    holdings = roundQty(holdings * multiplier);
   }
 
   // Holdings can never go below zero
