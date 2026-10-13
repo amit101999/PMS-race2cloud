@@ -18,6 +18,16 @@ const EVENT_TYPE_PRIORITY = {
   BONUS: 2,
 };
 
+/**
+ * Decimals are stored in binary, so 190.88 - 190 gives 0.8799999999999955.
+ * Rounding each step to 6 decimals keeps holdings equal to a hand calculation
+ * (same rule as transactionHistory/fifo.js). `=== 0` turns -0 into 0.
+ */
+const roundQty = (n) => {
+  const v = Math.round((Number(n) || 0) * 1e6) / 1e6;
+  return v === 0 ? 0 : v;
+};
+
 const isBuy = (type) => /^BY-|SQB|OPI/.test(String(type || "").toUpperCase());
 const isSell = (type) => /^SL\+|SQS|OPO|NF-/.test(String(type || "").toUpperCase());
 
@@ -102,16 +112,16 @@ export const runFifoEngine = (
     if (e.type === "TXN") {
       const qty = Math.abs(Number(e.data.qty) || 0);
       if (!qty) continue;
-      if (isBuy(e.data.tranType)) holdings += qty;
-      if (isSell(e.data.tranType)) holdings -= qty;
+      if (isBuy(e.data.tranType)) holdings = roundQty(holdings + qty);
+      if (isSell(e.data.tranType)) holdings = roundQty(holdings - qty);
     } else if (e.type === "BONUS") {
       const qty = Number(e.data.bonusShare) || 0;
-      holdings += qty;
+      holdings = roundQty(holdings + qty);
     } else if (e.type === "SPLIT") {
       const ratio1 = Number(e.data.ratio1);
       const ratio2 = Number(e.data.ratio2);
       if (!ratio1 || !ratio2) continue;
-      holdings = holdings * (ratio2 / ratio1);
+      holdings = roundQty(holdings * (ratio2 / ratio1));
     }
   }
 

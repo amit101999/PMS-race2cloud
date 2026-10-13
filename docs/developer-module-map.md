@@ -219,6 +219,9 @@ Works out holdings from trades and corporate actions using FIFO. Business guide 
 - **Before you change:**
   - The FIFO engine exists in several functions (Section 2), so change every copy.
   - The same-day order (trades, split, bonus, demerger, merger) and the effective-date rule must stay the same in all of them and in `holdingsFromTable.js`.
+  - Rounding rule: every quantity is rounded to 6 decimals and every amount (cost, WAP, P/L) to 4 decimals as it is calculated (`roundQty` / `roundAmt`). This stops binary leftovers such as 190.88 − 190 = 0.8799999999999955. The rule is in the FIFO engine and its copies, `FifoQty.js`, `CalculateHoldingWorkers` and `holdingsFromTable.js` and its ports. Keep it in any new copy. Screens round to 2 decimals and never cut digits off.
+  - Holdings screens and exports (Analytics account and ISIN views, Export All, `FAHoldingsGenerator`) show the saved `HOLDING`, `WAP` and `HOLDING_VALUE` of the last saved row up to the as-on date. They do not re-derive them, because the `PRICE` column keeps only 4 decimals and a re-derived value can be a few paise off. Corporate action previews (Split, Bonus, Dividend) still use `recomputeHoldingsSnapshot` for the quantity. Old rows saved before the trade-date change need a holdings rebuild to be right.
+  - The rule also covers the differential report FIFO (`functions/ExportDifferentialReport/fifo.js`), the unused `util/export/fifo.js`, and the consolidated totals that add a client's schemes together (`util/analytics/consolidatedHoldings.js`, `ExportAllCustomerHoldingData/index.js`, `FAHoldingsGenerator/index.js`). Not yet covered: the merger and demerger lot code.
 
 ### 4.7 Cash Balance
 Client cash passbook. Business guide 3.6.

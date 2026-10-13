@@ -5,8 +5,6 @@ import {
   fetchHoldingsRowsPaged,
   fetchSecurityListByIsins,
   rollupLastSnapshotByIsin,
-  rollupRecomputedSnapshotByIsin,
-  recomputeHoldingsSnapshot,
 } from "../../../../util/analytics/holdingsFromTable.js";
 import { fetchLastPricesByIsin } from "../../../../util/analytics/bhavPrices.js";
 import { buildVirtualToActualMap } from "../../../../util/mapVirtualToActualCodes.js";
@@ -116,14 +114,12 @@ export const calculateHoldingsSummary = async ({
 
   const rows = await fetchHoldingsRowsPaged(zcql, accountCode, asOnDate, "");
 
-  // As-on-date views must re-derive their totals: the stored HOLDING column is a
-  // running balance frozen in settlement order, so it can contradict the rows the
-  // trade-date rule actually selected. With no as-on-date every row is included and
-  // the stored final balance is already correct, so keep the cheaper path.
-  const useRecomputed = /^\d{4}-\d{2}-\d{2}$/.test(String(asOnDate ?? "").trim());
-  const snapshots = useRecomputed
-    ? rollupRecomputedSnapshotByIsin(rows)
-    : rollupLastSnapshotByIsin(rows);
+  // Show the saved Holdings values as they are (HOLDING, WAP, HOLDING_VALUE),
+  // never re-derived, so every screen shows exactly what the holdings
+  // calculation saved. Re-deriving from the saved PRICE column (4 decimals only)
+  // could be a few paise off. Rows are already cut at the as-on date and in saved
+  // order, so the last row per ISIN is the position on that date.
+  const snapshots = rollupLastSnapshotByIsin(rows);
   const isinList = snapshots.map((s) => s.isin);
 
   const metaByIsin = await fetchSecurityListByIsins(zcql, isinList);
@@ -168,11 +164,8 @@ export const calculateHoldingsByIsin = async ({
   const isinTrim = String(isin ?? "").trim();
   if (!isinTrim) return [];
 
-  const cutoff = /^\d{4}-\d{2}-\d{2}$/.test(String(asOnDate ?? "").trim());
-
   // Already effective-date filtered and in FIFO order per account. Uses keyset
-  // paging — ZCQL's 1-based OFFSET repeated a row at every page boundary, which
-  // the recompute below counted as an extra trade.
+  // paging — ZCQL's 1-based OFFSET repeated a row at every page boundary.
   const rowsByAccount = await fetchHoldingsRowsByAccountForIsin(zcql, isinTrim, asOnDate);
 
   const latestByAccount = new Map();
@@ -182,22 +175,8 @@ export const calculateHoldingsByIsin = async ({
 
   if (latestByAccount.size === 0) return [];
 
-  // Replace the frozen settlement-order totals with ones re-derived in
-  // effective-date order. See `recomputeHoldingsSnapshot` for the reasoning.
-  if (cutoff) {
-    for (const [accountCode, accRows] of rowsByAccount) {
-      const snap = recomputeHoldingsSnapshot(accRows);
-      if (snap.HOLDING <= 0) {
-        latestByAccount.delete(accountCode); // fully closed as at the cutoff
-        continue;
-      }
-      latestByAccount.set(accountCode, {
-        ...latestByAccount.get(accountCode),
-        ...snap,
-      });
-    }
-    if (latestByAccount.size === 0) return [];
-  }
+  // The saved last row is shown as it is (see calculateHoldingsSummary); closed
+  // positions (HOLDING 0) are skipped in the result loop below.
 
   const metaByIsin = await fetchSecurityListByIsins(zcql, [isinTrim]);
   const meta = metaByIsin[isinTrim] || {};

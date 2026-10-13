@@ -2,6 +2,14 @@ import { escHoldingsSql } from "./holdingsFromTable.js";
 
 const CLIENT_IDS_BATCH = 270;
 
+// Decimals are stored in binary, so adding holdings leaves leftovers
+// (10.1 + 20.2 = 30.299999999999997). Rounding to 6 decimals keeps the total
+// equal to a hand calculation (same rule as the FIFO engine). `=== 0` turns -0 into 0.
+const roundQty = (n) => {
+  const v = Math.round((Number(n) || 0) * 1e6) / 1e6;
+  return v === 0 ? 0 : v;
+};
+
 /**
  * Resolve every virtual code (`WS_Account_code`) that maps to a given
  * `Actual_Code`. Holdings are stored scheme-wise (per virtual code), so a
@@ -55,7 +63,7 @@ export function consolidateSummaries(summaries) {
       const hold = Number(row.currentHolding) || 0;
       const existing = byIsin.get(isin);
       if (existing) {
-        existing.currentHolding += hold;
+        existing.currentHolding = roundQty(existing.currentHolding + hold);
       } else {
         byIsin.set(isin, {
           isin,

@@ -383,6 +383,14 @@ export function rollupLastSnapshotByIsin(sortedHoldingsRows) {
 
 const QTY_EPS = 1e-6;
 
+// Decimals are stored in binary, so 190.88 - 190 gives 0.8799999999999955.
+// Rounding each step to 6 decimals keeps HOLDING equal to a hand calculation
+// (same rule as the FIFO engine). `=== 0` turns -0 into 0.
+const roundQty = (n) => {
+  const v = Math.round((Number(n) || 0) * 1e6) / 1e6;
+  return v === 0 ? 0 : v;
+};
+
 /**
  * Re-derive HOLDING / WAP / HOLDING_VALUE from the rows themselves.
  *
@@ -439,8 +447,8 @@ export function recomputeHoldingsSnapshot(rows) {
       while (remaining > QTY_EPS && lots.length) {
         const lot = lots[0];
         const used = Math.min(lot.qty, remaining);
-        lot.qty -= used;
-        remaining -= used;
+        lot.qty = roundQty(lot.qty - used);
+        remaining = roundQty(remaining - used);
         if (lot.qty <= QTY_EPS) lots.shift();
       }
       continue;
@@ -520,7 +528,7 @@ export function recomputeHoldingsSnapshot(rows) {
     }
   }
 
-  const holding = lots.reduce((s, l) => s + l.qty, 0);
+  const holding = roundQty(lots.reduce((s, l) => s + l.qty, 0));
   const cost = lots.reduce((s, l) => s + l.qty * l.price, 0);
   const wap = holding > QTY_EPS ? cost / holding : 0;
 
@@ -529,29 +537,6 @@ export function recomputeHoldingsSnapshot(rows) {
     WAP: Math.round(wap * 100) / 100,
     HOLDING_VALUE: Math.round(cost * 100) / 100,
   };
-}
-
-/**
- * Same contract as `rollupLastSnapshotByIsin`, but `lastRow` carries re-derived
- * HOLDING / WAP / HOLDING_VALUE instead of the frozen settlement-order values.
- * Callers need no other change.
- */
-export function rollupRecomputedSnapshotByIsin(sortedHoldingsRows) {
-  const rowsByIsin = new Map();
-  for (const h of sortedHoldingsRows) {
-    const isin = String(h.ISIN || "").trim();
-    if (!isin) continue;
-    if (!rowsByIsin.has(isin)) rowsByIsin.set(isin, []);
-    rowsByIsin.get(isin).push(h);
-  }
-
-  const out = [];
-  for (const [isin, rows] of rowsByIsin) {
-    const snap = recomputeHoldingsSnapshot(rows);
-    if (snap.HOLDING <= QTY_EPS) continue; // closed position
-    out.push({ isin, lastRow: { ...rows[rows.length - 1], ...snap } });
-  }
-  return out;
 }
 
 /** Map Holdings row → TransactionPage / fifo timeline element shape (append-only fields safe for JSON). */

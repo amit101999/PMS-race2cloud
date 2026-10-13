@@ -37,6 +37,22 @@
 
 const catalyst = require("zcatalyst-sdk-node");
 
+/**
+ * Decimals are stored in binary, so 190.88 - 190 gives 0.8799999999999955 and
+ * 0.88 x 1000 gives 879.9999999999955. Rounding every quantity (6 decimals) and
+ * amount (4 decimals) as it is calculated keeps the saved figures equal to a hand
+ * calculation, so all screens and exports agree. Same rule as the AppSail FIFO
+ * engine (util/analytics/transactionHistory/fifo.js). `=== 0` turns -0 into 0.
+ */
+const roundQty = (n) => {
+  const v = Math.round((Number(n) || 0) * 1e6) / 1e6;
+  return v === 0 ? 0 : v;
+};
+const roundAmt = (n) => {
+  const v = Math.round((Number(n) || 0) * 1e4) / 1e4;
+  return v === 0 ? 0 : v;
+};
+
 /* ============================== CONFIG ============================== */
 
 /** Hard cap on number of (account, ISIN) pairs processed; 0 = unlimited. Useful for first event-fire tests. */
@@ -547,9 +563,9 @@ function runFifoEngine(
   const isSell = (t) => /^SL\+|SQS|OPO|NF-/.test(String(t).toUpperCase());
 
   const getCostOfHoldings = () =>
-    buyQueue.reduce((sum, lot) => sum + lot.qty * lot.price, 0);
+    roundAmt(buyQueue.reduce((sum, lot) => sum + lot.qty * lot.price, 0));
 
-  const getWAP = () => (holdings > 0 ? getCostOfHoldings() / holdings : 0);
+  const getWAP = () => (holdings > 0 ? roundAmt(getCostOfHoldings() / holdings) : 0);
 
   for (const e of events) {
     const t = e.data;
@@ -580,7 +596,7 @@ function runFifoEngine(
           buyDate: normalizeDate(t.trandate),
           isActive: true,
         });
-        holdings += qty;
+        holdings = roundQty(holdings + qty);
         output.push({
           lotId,
           trandate: t.trandate,
@@ -607,16 +623,16 @@ function runFifoEngine(
         while (remaining > 0 && buyQueue.length) {
           const lot = buyQueue[0];
           const used = Math.min(lot.qty, remaining);
-          fifoCost += used * lot.price;
-          lot.qty -= used;
-          remaining -= used;
+          fifoCost = roundAmt(fifoCost + used * lot.price);
+          lot.qty = roundQty(lot.qty - used);
+          remaining = roundQty(remaining - used);
           if (lot.qty === 0) {
             lot.isActive = false;
             buyQueue.shift();
           }
         }
 
-        holdings -= sellQty;
+        holdings = roundQty(holdings - sellQty);
 
         output.push({
           trandate: t.trandate,
@@ -629,7 +645,7 @@ function runFifoEngine(
           holdings,
           costOfHoldings: getCostOfHoldings(),
           averageCostOfHoldings: getWAP(),
-          profitLoss: sellQty * price - fifoCost,
+          profitLoss: roundAmt(sellQty * price - fifoCost),
           isActive: false,
           isin: t.ISIN || t.isin,
         });
@@ -649,7 +665,7 @@ function runFifoEngine(
         buyDate: normalizeDate(e.data.exDate),
         isActive: true,
       });
-      holdings += qty;
+      holdings = roundQty(holdings + qty);
       output.push({
         lotId,
         trandate: e.data.exDate,
@@ -689,7 +705,7 @@ function runFifoEngine(
 
       for (let i = 0; i < activeLots.length; i++) {
         const oldLot = activeLots[i];
-        const newQty = oldLot.qty * multiplier;
+        const newQty = roundQty(oldLot.qty * multiplier);
         const newPrice = oldLot.price / multiplier;
         const newLotId = ++lotCounter;
 
@@ -702,9 +718,9 @@ function runFifoEngine(
           isActive: true,
         });
 
-        runningHoldings += newQty;
-        runningCost += newQty * newPrice;
-        const runningWAP = runningHoldings > 0 ? runningCost / runningHoldings : 0;
+        runningHoldings = roundQty(runningHoldings + newQty);
+        runningCost = roundAmt(runningCost + newQty * newPrice);
+        const runningWAP = runningHoldings > 0 ? roundAmt(runningCost / runningHoldings) : 0;
 
         const buyRowIndex = output.findIndex((r) => r.lotId === oldLot.lotId);
         let insertIndex = output.length;
@@ -818,7 +834,7 @@ function runFifoEngine(
         isActive: true,
       });
 
-      holdings += qty;
+      holdings = roundQty(holdings + qty);
 
       output.push({
         lotId,
@@ -1018,9 +1034,9 @@ async function appendBuyRowsCheap(zcql, accountCode, isin, newBuyTxns, counters)
       continue;
     }
 
-    holding += qty;
-    cost += qty * price;
-    const wap = holding > 0 ? cost / holding : 0;
+    holding = roundQty(holding + qty);
+    cost = roundAmt(cost + qty * price);
+    const wap = holding > 0 ? roundAmt(cost / holding) : 0;
 
     const row = {
       tranType,

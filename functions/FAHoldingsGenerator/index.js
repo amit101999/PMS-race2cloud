@@ -35,7 +35,7 @@ const catalyst = require("zcatalyst-sdk-node");
 const {
   fetchHoldingsRowsPaged,
   fetchSecurityListByIsins,
-  rollupRecomputedSnapshotByIsin,
+  rollupLastSnapshotByIsin,
 } = require("./holdingsFromTable.js");
 const { getAccountActualMapFromDatabase } = require("./allAccountCodes.js");
 
@@ -59,6 +59,14 @@ const withRetry = async (fn, label, attempts = 3) => {
 
 const csvCell = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
 
+// Decimals are stored in binary, so adding holdings leaves leftovers
+// (10.1 + 20.2 = 30.299999999999997). Rounding to 6 decimals keeps the total
+// equal to a hand calculation (same rule as the FIFO engine). `=== 0` turns -0 into 0.
+const roundQty = (n) => {
+  const v = Math.round((Number(n) || 0) * 1e6) / 1e6;
+  return v === 0 ? 0 : v;
+};
+
 /** One actual account code: holdings per ISIN, summed across its virtual codes. */
 const holdingsForGroup = async (zcql, group, asOnDate) => {
   const byIsin = new Map();
@@ -67,8 +75,9 @@ const holdingsForGroup = async (zcql, group, asOnDate) => {
       () => fetchHoldingsRowsPaged(zcql, virtualCode, asOnDate, ""),
       `virtual code ${virtualCode} (group ${group.actualCode})`,
     );
-    for (const { isin, lastRow } of rollupRecomputedSnapshotByIsin(rows)) {
-      byIsin.set(isin, (byIsin.get(isin) || 0) + (Number(lastRow.HOLDING) || 0));
+    // Saved HOLDING as it is, the same figure the holdings screen shows.
+    for (const { isin, lastRow } of rollupLastSnapshotByIsin(rows)) {
+      byIsin.set(isin, roundQty((byIsin.get(isin) || 0) + (Number(lastRow.HOLDING) || 0)));
     }
   }
   return [...byIsin].map(([isin, holding]) => [group.actualCode, isin, holding]);
