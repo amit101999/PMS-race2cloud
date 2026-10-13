@@ -411,6 +411,10 @@ function HoldingsTab() {
         { credentials: "include" }
       );
       const data = await res.json();
+      if (!res.ok) {
+        alert(data.message || "Export file is not available");
+        return;
+      }
       if (data.downloadUrl && data.downloadUrl.signature) {
         window.open(data.downloadUrl.signature, "_blank");
       } else if (data.downloadUrl) {

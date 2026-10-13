@@ -149,21 +149,29 @@ function buildSchemeRow(generatedAt, reportDate, accountCode, actualCode, row) {
   );
 }
 
+// jobName is not unique in the Jobs table, so an INSERT always succeeds.
+// Update the existing row and only insert when none exists — otherwise every
+// re-export adds a duplicate row, and the status/download checks (which read
+// one row by jobName) see the old COMPLETED row while this run is still going.
 async function ensureJobsRowRunning(zcql, jobName) {
   try {
-    await queryWithTimeout(
+    const existing = await queryWithTimeout(
       zcql,
-      `INSERT INTO Jobs (jobName, status) VALUES ('${esc(jobName)}', 'RUNNING')`
+      `SELECT ROWID FROM Jobs WHERE jobName = '${esc(jobName)}' LIMIT 1`
     );
-  } catch (insertErr) {
-    try {
+    if (existing.length) {
       await queryWithTimeout(
         zcql,
         `UPDATE Jobs SET status = 'RUNNING' WHERE jobName = '${esc(jobName)}'`
       );
-    } catch (upErr) {
-      console.warn(`[Jobs] ensure RUNNING failed for ${jobName}:`, upErr.message);
+    } else {
+      await queryWithTimeout(
+        zcql,
+        `INSERT INTO Jobs (jobName, status) VALUES ('${esc(jobName)}', 'RUNNING')`
+      );
     }
+  } catch (err) {
+    console.warn(`[Jobs] ensure RUNNING failed for ${jobName}:`, err.message);
   }
 }
 
@@ -309,15 +317,17 @@ module.exports = async (jobRequest, context) => {
       // as-is instead of rebuilding from scratch. A different day (or any
       // non-COMPLETED status) falls through to the normal rebuild below,
       // which deletes and recreates fileName via ensureObjectDeleted.
+      // The Jobs row is reused across re-exports, so MODIFIEDTIME (when it
+      // was marked COMPLETED) is the generation time, not CREATEDTIME.
       try {
         const priorRows = await queryWithTimeout(
           zcql,
-          `SELECT status, CREATEDTIME FROM Jobs WHERE jobName = '${esc(jobName)}' LIMIT 1`
+          `SELECT status, MODIFIEDTIME FROM Jobs WHERE jobName = '${esc(jobName)}' LIMIT 1`
         );
         if (priorRows.length) {
           const priorStatus = priorRows[0].Jobs.status;
-          const priorCreatedTime = priorRows[0].Jobs.CREATEDTIME;
-          const generatedOn = priorCreatedTime ? toISTDateStr(parseCatalystTime(priorCreatedTime)) : null;
+          const priorCompletedTime = priorRows[0].Jobs.MODIFIEDTIME;
+          const generatedOn = priorCompletedTime ? toISTDateStr(parseCatalystTime(priorCompletedTime)) : null;
 
           if (priorStatus === "COMPLETED" && generatedOn === toISTDateStr(Date.now())) {
             const fileStillThere = await bucket.headObject(fileName, { throwErr: false });
