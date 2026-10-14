@@ -973,6 +973,7 @@ async function rebuildHoldingsForAccount(
   asOnDate,
   counters,
   scopedIsinsSet = null,
+  keepCaRecords = false,
 ) {
   const t0 = Date.now();
   const scoped = scopedIsinsSet && scopedIsinsSet.size > 0;
@@ -1110,6 +1111,10 @@ async function rebuildHoldingsForAccount(
       }
     }
 
+    // A transaction deletion must leave corporate action records exactly as
+    // saved, so it skips the per-account split rows (see keepCaRecords in index.js).
+    if (keepCaRecords) continue;
+
     // Separate try: a Split_Account failure must not undo a good Holdings
     // rebuild, but it still counts as an error so the job reports it.
     try {
@@ -1126,6 +1131,7 @@ async function rebuildHoldingsForAccountList(
   accountCodes,
   asOnDate,
   scopedIsinsSet = null,
+  keepCaRecords = false,
 ) {
   const counters = { pairs: 0, rows: 0, errors: 0 };
   const cutoff = asOnDate !== undefined && asOnDate !== null ? asOnDate : null;
@@ -1138,6 +1144,7 @@ async function rebuildHoldingsForAccountList(
         cutoff,
         counters,
         scopedIsinsSet,
+        keepCaRecords,
       );
     } catch (err) {
       console.error(`[RebuildHoldingtable holdings][${accountCode}]`, err.message);

@@ -32,19 +32,11 @@ const COLUMNS = [
   { key: "QTY", label: "Qty" },
   { key: "RATE", label: "Rate" },
   { key: "Net_Amount", label: "Net Amount" },
-  { key: "CREATEDTIME", label: "Committed At", format: formatCommittedAt },
 ];
 
 function displayValue(val) {
   if (val === null || val === undefined || val === "") return "–";
   return String(val);
-}
-
-// Catalyst returns CREATEDTIME as "YYYY-MM-DD HH:mm:ss:SSS"; drop the milliseconds.
-// Any other shape is shown unchanged.
-function formatCommittedAt(val) {
-  const match = /^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}):\d{3}$/.exec(String(val ?? ""));
-  return match ? match[1] : val;
 }
 
 function formatCount(n) {
@@ -67,12 +59,25 @@ function TransactionDeletionPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
-  // Preview only: marks live in memory and are never sent to the server.
-  // `allMarked` means every row for the current date + filters (all pages).
+  // Rows marked for deletion. `allMarked` means every row for the current
+  // date + filters (all pages); the server then reads them by the same filters.
   const [markedIds, setMarkedIds] = useState(new Set());
   const [allMarked, setAllMarked] = useState(false);
 
-  /* Load the commit dates once and pre-select the newest. */
+  const [deleting, setDeleting] = useState(false);
+  const [deleteMessage, setDeleteMessage] = useState(null); // { type: "ok" | "warn" | "bad", text }
+  // Bumped after a delete so the commit dates, the table and the history reload.
+  const [refreshKey, setRefreshKey] = useState(0);
+
+  const [historyDates, setHistoryDates] = useState([]);
+  const [historyDate, setHistoryDate] = useState("");
+  const [historyPage, setHistoryPage] = useState(1);
+  const [historyRows, setHistoryRows] = useState([]);
+  const [historyTotal, setHistoryTotal] = useState(0);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyError, setHistoryError] = useState("");
+
+  /* Load the commit dates; keep the selected date if it still has rows, else pick the newest. */
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -88,7 +93,9 @@ function TransactionDeletionPage() {
         }
         const list = json.dates || [];
         setDates(list);
-        if (list.length > 0) setSelectedDate(list[0].date);
+        setSelectedDate((current) =>
+          list.some((d) => d.date === current) ? current : list[0]?.date || "",
+        );
       } catch (err) {
         console.error("Commit dates fetch error:", err);
         if (!cancelled) setDatesError("Failed to fetch commit dates.");
@@ -99,7 +106,77 @@ function TransactionDeletionPage() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [refreshKey]);
+
+  /* Load the deletion dates and show the newest (today, right after a delete). */
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setHistoryError("");
+      try {
+        const res = await fetch(`${BASE_URL}/transaction/deletion-dates`);
+        const json = await res.json();
+        if (cancelled) return;
+        if (!res.ok) {
+          setHistoryError(json.message || "Failed to load deletion dates.");
+          return;
+        }
+        const list = json.dates || [];
+        setHistoryDates(list);
+        setHistoryDate(list[0]?.date || "");
+      } catch (err) {
+        console.error("Deletion dates fetch error:", err);
+        if (!cancelled) setHistoryError("Failed to fetch deletion dates.");
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [refreshKey]);
+
+  /* Load one page of rows deleted on the selected history date. */
+  useEffect(() => {
+    if (!historyDate) {
+      setHistoryRows([]);
+      setHistoryTotal(0);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      setHistoryLoading(true);
+      setHistoryError("");
+      try {
+        const params = new URLSearchParams({
+          date: historyDate,
+          page: String(historyPage),
+          pageSize: String(PAGE_SIZE),
+        });
+        const res = await fetch(`${BASE_URL}/transaction/deleted?${params}`);
+        const json = await res.json();
+        if (cancelled) return;
+        if (!res.ok) {
+          setHistoryError(json.message || "Failed to load deleted transactions.");
+          setHistoryRows([]);
+          setHistoryTotal(0);
+        } else {
+          setHistoryRows(json.rows || []);
+          setHistoryTotal(json.total || 0);
+        }
+      } catch (err) {
+        console.error("Deleted transactions fetch error:", err);
+        if (!cancelled) {
+          setHistoryError("Failed to fetch deleted transactions.");
+          setHistoryRows([]);
+          setHistoryTotal(0);
+        }
+      } finally {
+        if (!cancelled) setHistoryLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [historyDate, historyPage, refreshKey]);
 
   /* Load one page of committed rows for the date + applied filters. */
   useEffect(() => {
@@ -142,7 +219,7 @@ function TransactionDeletionPage() {
     return () => {
       cancelled = true;
     };
-  }, [selectedDate, appliedFilters, page]);
+  }, [selectedDate, appliedFilters, page, refreshKey]);
 
   // Marks belong to one date + filter view, so changing either starts fresh.
   const clearMarks = () => {
@@ -196,13 +273,76 @@ function TransactionDeletionPage() {
 
   const markedCount = allMarked ? total : markedIds.size;
 
+  const handleDelete = async () => {
+    const ok = window.confirm(
+      `Delete ${formatCount(markedCount)} marked rows? Holdings and cash of the affected ` +
+        "clients will be recalculated. This cannot be undone.",
+    );
+    if (!ok) return;
+
+    setDeleting(true);
+    setDeleteMessage(null);
+    try {
+      const body = allMarked
+        ? { all: true, date: selectedDate, ...appliedFilters }
+        : { rowIds: [...markedIds] };
+      const res = await fetch(`${BASE_URL}/transaction/delete`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const json = await res.json();
+      const failedAccounts = json.failedAccounts || [];
+
+      if (!res.ok) {
+        setDeleteMessage({ type: "bad", text: json.message || "Delete failed." });
+      } else if (failedAccounts.length > 0) {
+        setDeleteMessage({
+          type: "warn",
+          text:
+            `Deleted ${formatCount(json.deletedCount)} rows, but the holdings and cash ` +
+            `recalculation could not be started for: ${failedAccounts.join(", ")}. ` +
+            "Ask a developer to rebuild these clients.",
+        });
+      } else {
+        setDeleteMessage({
+          type: "ok",
+          text:
+            `Deleted ${formatCount(json.deletedCount)} rows for ${formatCount(json.clientCount)} ` +
+            "clients. Their holdings and cash are being recalculated in the background; " +
+            "this usually takes a few minutes.",
+        });
+      }
+
+      // A failed request can still have deleted some rows part-way.
+      if (res.ok || json.deletedCount > 0) {
+        clearMarks();
+        setPage(1);
+        setHistoryPage(1);
+        setRefreshKey((key) => key + 1);
+      }
+    } catch (err) {
+      console.error("Delete transactions error:", err);
+      setDeleteMessage({
+        type: "bad",
+        text: "Could not reach the server. Check the Deletion History before trying again.",
+      });
+    } finally {
+      setDeleting(false);
+    }
+  };
+
   return (
     <MainLayout title="Transaction Deletion">
       <div className="temp-transaction-container txn-ops ops-page client-page txn-deletion-page">
         <div className="cm-verdict warn">
-          <span className="cm-verdict-lead">Preview only.</span>{" "}
-          Removing rows here only marks them on screen. Nothing is deleted from the database.
+          <span className="cm-verdict-lead">Deleting is permanent.</span>{" "}
+          Deleted trades are removed from the books, and the holdings and cash of those
+          clients are recalculated. Corporate action records are not changed.
         </div>
+        {deleteMessage && (
+          <div className={`cm-verdict ${deleteMessage.type}`}>{deleteMessage.text}</div>
+        )}
 
         {/* Commit date + filters */}
         <div className="temp-transaction-card">
@@ -318,7 +458,7 @@ function TransactionDeletionPage() {
                             <tr key={rowId} className={isMarked ? "txn-row-marked" : ""}>
                               {COLUMNS.map((c) => (
                                 <td key={c.key} className={c.className}>
-                                  {displayValue(c.format ? c.format(row[c.key]) : row[c.key])}
+                                  {displayValue(row[c.key])}
                                 </td>
                               ))}
                               <td className="txn-row-action">
@@ -354,7 +494,7 @@ function TransactionDeletionPage() {
                       type="button"
                       className="cm-primary"
                       onClick={handleSelectAll}
-                      disabled={allMarked}
+                      disabled={allMarked || deleting}
                     >
                       Mark All ({formatCount(total)}) for Removal
                     </button>
@@ -362,7 +502,7 @@ function TransactionDeletionPage() {
                       type="button"
                       className="cm-secondary"
                       onClick={handleRemoveDisplayed}
-                      disabled={allMarked}
+                      disabled={allMarked || deleting}
                     >
                       Remove displayed
                     </button>
@@ -370,9 +510,17 @@ function TransactionDeletionPage() {
                       type="button"
                       className="cm-secondary"
                       onClick={clearMarks}
-                      disabled={markedCount === 0}
+                      disabled={markedCount === 0 || deleting}
                     >
                       Reset
+                    </button>
+                    <button
+                      type="button"
+                      className="txn-delete-btn"
+                      onClick={handleDelete}
+                      disabled={markedCount === 0 || deleting}
+                    >
+                      {deleting ? "Deleting…" : `Delete marked rows (${formatCount(markedCount)})`}
                     </button>
                   </div>
                 </>
@@ -380,6 +528,79 @@ function TransactionDeletionPage() {
             </div>
           </div>
         )}
+
+        {/* Deletion history */}
+        <div className="client-details-section">
+          <div className="temp-transaction-card">
+            <div className="client-details-header">
+              <h3>Deletion History</h3>
+              {historyDate && (
+                <span className="count-pill">
+                  {formatCount(historyTotal)} rows deleted on {historyDate}
+                </span>
+              )}
+            </div>
+
+            <div className="cash-filter-field txn-deletion-history-filter">
+              <label>Deleted On</label>
+              <select
+                value={historyDate}
+                onChange={(e) => {
+                  setHistoryDate(e.target.value);
+                  setHistoryPage(1);
+                }}
+                disabled={historyDates.length === 0}
+              >
+                {historyDates.length === 0 && <option value="">No deletions yet</option>}
+                {historyDates.map((d) => (
+                  <option key={d.date} value={d.date}>
+                    {d.date} ({formatCount(d.count)} rows)
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {historyLoading && <p className="cm-empty">Loading deleted transactions...</p>}
+            {!historyLoading && historyError && (
+              <div className="cm-verdict bad">{historyError}</div>
+            )}
+            {!historyLoading && !historyError && historyDate && historyRows.length > 0 && (
+              <>
+                <div className="data-table-wrap">
+                  <table className="data-table">
+                    <thead>
+                      <tr>
+                        {COLUMNS.map((c) => (
+                          <th key={c.key} className={c.className}>{c.label}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {historyRows.map((row) => (
+                        <tr key={String(row.ROWID)}>
+                          {COLUMNS.map((c) => (
+                            <td key={c.key} className={c.className}>
+                              {displayValue(row[c.key])}
+                            </td>
+                          ))}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+
+                <div className="txn-deletion-pagination">
+                  <Pagination
+                    currentPage={historyPage}
+                    pageSize={PAGE_SIZE}
+                    totalRows={historyTotal}
+                    onPageChange={setHistoryPage}
+                  />
+                </div>
+              </>
+            )}
+          </div>
+        </div>
       </div>
     </MainLayout>
   );

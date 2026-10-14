@@ -91,6 +91,29 @@
   opacity: 0.5;
 }
 
+.txn-delete-btn {
+  border: 1px solid #b91c1c;
+  border-radius: 6px;
+  background: #b91c1c;
+  color: #fff;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.txn-delete-btn:hover:not(:disabled) {
+  background: #991b1b;
+}
+
+.txn-delete-btn:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.txn-deletion-history-filter {
+  max-width: 320px;
+  margin-bottom: 16px;
+}
+
 .txn-deletion-actions {
   display: flex;
   align-items: center;
