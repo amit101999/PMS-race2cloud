@@ -114,9 +114,9 @@ A table links modules even when they share no code file. If you change how a col
 
 | Table | Written by | Read by |
 |---|---|---|
-| `Transaction` | Transaction Upload commit (`TempTransactionUpload.js`), `EnrichTransactionSecurity` (fills security code and name), `UpdateSecurity_ClientMaster`, Update ISIN | Holdings functions, cash functions, Analytics, Reports, Dashboard, Transaction Deletion, Merger preview, custody matching |
-| `Holdings` | `CalculateHoldingWorkers` (after a commit), `RebuildHoldingtable` (after a corporate action), `HoldingUpdateManually`, `CalculateHoldingPerAccount`, `CalculateHoldingsPerAccount`, Update ISIN | Everything that uses `holdingsFromTable.js`, Demerger, `UpdateBonusTable`, `UpdateDividendData`, `ExportDividendAccounts`, `ExportAllCustomerHoldingData`, `FAHoldingsGenerator` |
-| `Cash_Balance_Per_Transaction` (passbook) | `Cal_CB_Append_TxnUpload`, `Cal_CB_Per_TNX`, `UpdateDividendData` (dividend credit), Update ISIN | Cash Balance passbook, cash exports, Dividend (already-paid check) |
+| `Transaction` | Transaction Upload commit (`TempTransactionUpload.js`), `EnrichTransactionSecurity` (fills security code and name), `UpdateSecurity_ClientMaster`, Update ISIN, Transaction Deletion (deletes rows) | Holdings functions, cash functions, Analytics, Reports, Dashboard, Transaction Deletion, Merger preview, custody matching |
+| `Holdings` | `CalculateHoldingWorkers` (after a commit), `RebuildHoldingtable` (after a corporate action or a transaction deletion), `HoldingUpdateManually`, `CalculateHoldingPerAccount`, `CalculateHoldingsPerAccount`, Update ISIN | Everything that uses `holdingsFromTable.js`, Demerger, `UpdateBonusTable`, `UpdateDividendData`, `ExportDividendAccounts`, `ExportAllCustomerHoldingData`, `FAHoldingsGenerator` |
+| `Cash_Balance_Per_Transaction` (passbook) | `Cal_CB_Append_TxnUpload`, `Cal_CB_Per_TNX` (manual, or after a transaction deletion), `UpdateDividendData` (dividend credit), Update ISIN | Cash Balance passbook, cash exports, Dividend (already-paid check) |
 | `Cash_Ledger` | `CashCalculation` | Analytics cash summary (`CashController.js`). This is a different table from the passbook. |
 | `Security_List` | `UpdatesSecurity_ClientMasters` / `UpdateSecurity_ClientMaster` (new ISINs), `MegerFn`, `DemergerFn` (new company ISIN), Update ISIN | Security Master, every corporate action page, Analytics, Reports, `EnrichTransactionSecurity` |
 | `clientIds` (Client Master) | `UpdatesSecurity_ClientMasters` / `UpdateSecurity_ClientMaster` | Client Master, everything that uses `mapVirtualToActualCodes.js`, custody matching, `ExportCorpActionReport`, `FAHoldingsGenerator`, `ExportAllCustomerHoldingData` |
@@ -131,6 +131,7 @@ A table links modules even when they share no code file. If you change how a col
 | `Holding_Comparison_Run` | Holding Comparison controllers, `FAHoldingsGenerator`, `HoldingComparisonRunner`, Transaction Upload field mapping (marks runs out of date when the holding-statement mapping is saved) | Holding Comparison, Notifications |
 | `Jobs`, `JobStatusPerAccount` | Almost every module that starts a background job | Apply-status and export-status endpoints, Notifications |
 | `Notifications` | `NotificationController.js`, `util/notifications.js` | Notification bell |
+| `Transaction_Deletion_Log` | Transaction Deletion (`TransactionController.js`) | Transaction Deletion (Deletion History), `Cal_CB_Per_TNX` (leaves out dividend credits earned through a deleted buy) |
 | `Temp_Transaction`, `Temp_Custodian` | Update ISIN only (rename) | Tables from the older upload flow |
 
 ---
@@ -192,19 +193,23 @@ Upload → Validate → Match → Review Exceptions → Commit. Business guide 3
   - The field mapping code also serves Custodian Upload and Holding Comparison.
   - A change to how `Transaction` rows are written affects holdings, cash, Analytics and Reports.
 
-### 4.5 Transaction Deletion (in progress)
-Preview committed trades by commit date. It is read-only for now and not yet in the business guide.
+### 4.5 Transaction Deletion
+Find committed trades by commit date, delete the wrong ones, and see what was deleted on each day. Business guide 3.5.
 
-- **Screen:** `react-app/src/pages/TransactionDeletion/TransactionDeletionPage.js`
-- **API:** `/api/transaction` → `router/TransactionRouter.js` (`/commit-dates`, `/committed`) → `controller/TransactionController.js`
-- **Own files:** `TransactionDeletionPage.js`
-- **Shared files:** `controller/TransactionController.js` and `router/TransactionRouter.js` also serve the Analytics drill-down. `util/analytics/holdingsFromTable.js`.
-- **Background functions:** none yet.
-- **Tables:** reads `Transaction`, `Holdings` and `Security_List`.
-- **Before you change:** when deleting is added, holdings and the cash passbook for the affected clients will need rebuilding (see 4.6 and 4.7).
+- **Screen:** `react-app/src/pages/TransactionDeletion/TransactionDeletionPage.js`, `TransactionDeletionPage.css`
+- **API:** `/api/transaction` → `router/TransactionRouter.js` (`/commit-dates`, `/committed`, `POST /delete`, `/deletion-dates`, `/deleted`) → `controller/TransactionController.js`
+- **Own files:** the screen files above.
+- **Shared files:** `controller/TransactionController.js` and `router/TransactionRouter.js` also serve the Analytics drill-down. The controller imports `util/analytics/holdingsFromTable.js` for the drill-down only.
+- **Background functions:** after a delete, for each affected client: `RebuildHoldingtable` (pool `CorporateActions`, limited to the ISINs that lost trades, with `keepCaRecords: "true"`) and `Cal_CB_Per_TNX` (pool `UpdateMasters`, whole passbook).
+- **Tables:** deletes from `Transaction`. Writes `Transaction_Deletion_Log` (a copy of every deleted row; the history reads it by its `CREATEDTIME`). The rebuild jobs rewrite `Holdings` and `Cash_Balance_Per_Transaction`.
+- **Before you change:**
+  - Corporate action tables (`Bonus`, `Split`, `Split_Account`, `Merger`, `Demerger_Record`, `Dividend_Record`) are deliberately not changed by a delete. `keepCaRecords` stops `RebuildHoldingtable` from rewriting `Split_Account`; the rebuild replays the rest as saved.
+  - Dividend cash is the one exception: `Cal_CB_Per_TNX` reads `Transaction_Deletion_Log` and leaves out a dividend credit when a deleted buy of that ISIN is dated on or before the record date and no remaining buy is (`dropDividendsEarnedByDeletedBuys`). This applies to every later full rebuild too.
+  - `Cash_Ledger` (Analytics cash summary) is not rebuilt, the same as after an upload commit.
+  - One delete is capped at 5,000 rows (`DELETE_MAX_ROWS`).
 
 ### 4.6 Holdings calculation
-Works out holdings from trades and corporate actions using FIFO. Business guide 3.5. There is no screen of its own. Other modules read the result.
+Works out holdings from trades and corporate actions using FIFO. Business guide 3.6. There is no screen of its own. Other modules read the result.
 
 - **Screen:** none (read through Analytics, Reports and the corporate action previews).
 - **API:** `/api/holding-update` in `appsail-nodejs/index.js` starts a manual rebuild.
@@ -212,7 +217,7 @@ Works out holdings from trades and corporate actions using FIFO. Business guide 
 - **Shared files:** `util/analytics/holdingsFromTable.js` is the read side. See Section 1.
 - **Background functions:**
   - `CalculateHoldingMaster` → `CalculateHoldingWorkers`: adds new trades after a commit.
-  - `RebuildHoldingtable`: full rebuild after Split, Bonus, Merger and Demerger.
+  - `RebuildHoldingtable`: full rebuild after Split, Bonus, Merger and Demerger, and an ISIN-limited rebuild per client after a transaction deletion. The `keepCaRecords` param (sent only by Transaction Deletion) skips the `Split_Account` writer.
   - `HoldingUpdateManually`: manual full rebuild through `/api/holding-update`.
   - `CalculateHoldingPerAccount` (event) and `CalculateHoldingsPerAccount` (job): other entry points to the same FIFO engine.
 - **Tables:** reads `Transaction`, `Bonus`, `Split`, `Merger` and `Demerger_Record`. Writes `Holdings`, `Split_Account`, `Jobs` and `JobStatusPerAccount`.
@@ -224,7 +229,7 @@ Works out holdings from trades and corporate actions using FIFO. Business guide 
   - The rule also covers the differential report FIFO (`functions/ExportDifferentialReport/fifo.js`), the unused `util/export/fifo.js`, and the consolidated totals that add a client's schemes together (`util/analytics/consolidatedHoldings.js`, `ExportAllCustomerHoldingData/index.js`, `FAHoldingsGenerator/index.js`). Not yet covered: the merger and demerger lot code.
 
 ### 4.7 Cash Balance
-Client cash passbook. Business guide 3.6.
+Client cash passbook. Business guide 3.7.
 
 - **Screen:** `react-app/src/pages/CashBalancePage/CashBalancePage.js`
 - **API:** `/api/cash-balance` → `router/cashBalanceRouter/CashbalanceRouter.js` → `controller/cashBalance/cashPassbookController.js`, `exportCashBalance.js`, `calculateBalanceOnce.js`
@@ -232,7 +237,7 @@ Client cash passbook. Business guide 3.6.
 - **Shared files:** `exportCashBalance.js` (Reports), `util/allAccountCodes.js`, `util/stratusSignedUrl.js`, `hooks/GetAllCodes.js`
 - **Background functions:**
   - `Cal_CB_Append_TxnUpload`: adds passbook lines after a commit.
-  - `Cal_CB_Per_TNX`: manual full rebuild from `Transaction` plus RECEIVED `Dividend_Record` rows (from 2020 onwards, no end date).
+  - `Cal_CB_Per_TNX`: full rebuild from `Transaction` plus RECEIVED `Dividend_Record` rows (from 2020 onwards, no end date), leaving out dividends earned only through a deleted buy (`Transaction_Deletion_Log`). Run manually, and per client by Transaction Deletion.
   - `ExportCashBalSingleClient` (pool `Export`).
   - `CashCalculation` (pool `Finance`) fills `Cash_Ledger`.
   - `UpdateDividendData` (Dividend module) adds dividend credits.
@@ -243,7 +248,7 @@ Client cash passbook. Business guide 3.6.
   - The Analytics cash summary reads `Cash_Ledger`, not the passbook.
 
 ### 4.8 Analytics
-Read-only view of one client or one share. Business guide 3.7.
+Read-only view of one client or one share. Business guide 3.8.
 
 - **Screen:** `react-app/src/pages/Analytics/AnalyticsPage.js`, `tabs/holding/HoldingTab.js`, `tabs/transaction/TransactionTab.js`, `tabs/allocations/AllocationTab.js` and `tabs/performance/PerformanceTab.js` (placeholders), `pages/Holding/HoldingCards.js`, `pages/TransactionPage/TransactionPage.js` (drill-down), `hooks/GetHolding.js`
 - **API:** `/api/analytics` → `router/AnalyticsRouter.js` → `controller/analytics/tabs/holding/AnalyticsControllers.js`, `CashController.js`, `controller/analytics/tabs/transaction/transaction.js`. The drill-down uses `/api/transaction/getStockTransactionHistory`.
@@ -254,7 +259,7 @@ Read-only view of one client or one share. Business guide 3.7.
 - **Before you change:** the holdings and transaction controllers also produce the Reports exports, and `functions/ExportAllCustomerHoldingData/analyticsController.js` mirrors the holdings summary.
 
 ### 4.9 Custodian Upload and the two-stage custodian check
-Ex-Entitlement and Benefit Collection files, and the Receivable → Received check. Business guide 3.8–3.10.
+Ex-Entitlement and Benefit Collection files, and the Receivable → Received check. Business guide 3.9–3.11.
 
 - **Screen:** `react-app/src/pages/CustodianUploadPage/CustodianUploadPage.js`, plus `pages/SplitPage/SplitReconcilePanel.js` (the check panel on Split, Bonus and Dividend)
 - **API:** `/api/custodian-upload` → `router/CustodianUploadRouter.js` → `controller/corporateAction/CustodianUploadController.js`. The Split and Bonus routers also use this controller for `compare-custodian`, `compare-benefit` and `history`. The Dividend router uses its `compareDividendWithBenefit`.
@@ -265,7 +270,7 @@ Ex-Entitlement and Benefit Collection files, and the Receivable → Received che
 - **Before you change:** any change to the comparison labels or columns shows up on three pages (Split, Bonus, Dividend) at once.
 
 ### 4.10 Split
-Business guide 3.11.
+Business guide 3.12.
 
 - **Screen:** `react-app/src/pages/SplitPage/SplitPage.js` (+ `SplitReconcilePanel.js`)
 - **API:** `/api/split` → `router/SplitRouter.js` → `controller/uploader/SplitController.js`, `controller/export/exportSplit/exportSplitFile.js`, `CustodianUploadController.js`
@@ -276,7 +281,7 @@ Business guide 3.11.
 - **Before you change:** a split can trigger a bonus recalculation, so re-test Bonus too.
 
 ### 4.11 Bonus
-Business guide 3.12.
+Business guide 3.13.
 
 - **Screen:** `react-app/src/pages/BonusPage/BonusPage.js` (+ `SplitReconcilePanel.js`)
 - **API:** `/api/bonus` → `router/BonusRouter.js` → `controller/BonusController.js`, `controller/export/exportBonus/exportBonusFile.js`, `CustodianUploadController.js`
@@ -287,7 +292,7 @@ Business guide 3.12.
 - **Before you change:** `functions/UpdateBonusTable/holdingsSnapshot.js` must give the same holding as `holdingsFromTable.js`. If they differ, the applied bonus will not match the approved preview.
 
 ### 4.12 Dividend
-Business guide 3.13.
+Business guide 3.14.
 
 - **Screen:** `react-app/src/pages/Dividend/DividendPage.js` (+ `SplitReconcilePanel.js`)
 - **API:** `/api/dividend` → `router/uploaderRouter/DividendUploaderRouter.js` → `controller/uploader/DividendUploader.js`, `controller/export/exportDividend/exportDividendFile.js`, `CustodianUploadController.js`
@@ -298,7 +303,7 @@ Business guide 3.13.
 - **Before you change:** a dividend writes into the cash passbook, so re-test Cash Balance. The `holdingsSnapshot.js` ports must match `holdingsFromTable.js`.
 
 ### 4.13 Merger
-Business guide 3.14.
+Business guide 3.15.
 
 - **Screen:** `react-app/src/pages/MergerPage/MergerPage.js`
 - **API:** `/api/merger` → `router/MergerRouter.js` → `controller/MergerController.js`
@@ -309,7 +314,7 @@ Business guide 3.14.
 - **Before you change:** the preview (`util/merger/*`) and the apply job (`functions/MegerFn/*`) are twins. Per-lot rounding must be the same in both, or the applied result will not match the preview.
 
 ### 4.14 Demerger
-Business guide 3.15.
+Business guide 3.16.
 
 - **Screen:** `react-app/src/pages/DemergerPage/DemergerPage.js`
 - **API:** `/api/demerger` → `router/DemergerRouter.js` → `controller/uploader/DemergerController.js`. The ISIN list comes from `/api/split/getAllSecuritiesList`.
@@ -320,7 +325,7 @@ Business guide 3.15.
 - **Before you change:** `DemergerController.js` (preview) and `functions/DemergerFn/demergerApplyCore.js` (apply) are twins.
 
 ### 4.15 Holding Comparison
-Our holdings vs the custodian's holding statement. Business guide 3.16.
+Our holdings vs the custodian's holding statement. Business guide 3.17.
 
 - **Screen:** `react-app/src/pages/HoldingComparison/HoldingComparison.js` and the `holdingComparison/` folder (`HoldingComparisonPanel.js`, `ExceptionGrid.js`, `PreviousFiles.js`, `api.js`)
 - **API:** `/api/holding-comparison` → `router/holdingComparisonRouter/HoldingComparisonRouter.js` → `controller/holdingComparison/HoldingComparisonUpload.js`, `HoldingComparisonFaHoldings.js`, `HoldingComparisonRun.js`
@@ -331,7 +336,7 @@ Our holdings vs the custodian's holding statement. Business guide 3.16.
 - **Before you change:** `util/holdingComparison/*` is copied into both functions. `FAHoldingsGenerator` also carries copies of `holdingsFromTable.js` and `allAccountCodes.js`.
 
 ### 4.16 Update ISIN
-Rename an ISIN everywhere, or update security details. Business guide 3.17.
+Rename an ISIN everywhere, or update security details. Business guide 3.18.
 
 - **Screen:** `react-app/src/pages/update-isin/UpdateISINPage.js`
 - **API:** `/api/isin` → `router/IsinRouter.js` → `controller/isin/updateIsin.js`
@@ -344,7 +349,7 @@ Rename an ISIN everywhere, or update security details. Business guide 3.17.
   - The target count in `updateIsin.js` must match `ISIN_TARGETS.length`.
 
 ### 4.17 Reports
-CSV exports. Business guide 3.18.
+CSV exports. Business guide 3.19.
 
 - **Screen:** `react-app/src/pages/Reports/ReportsPage.js` and `tabs/` (`Holdings.js`, `Transactionstab.js`, `CashTab.js`, `CorporateActionTab.js`, `TopClientsTab.js`), `notifications/reportJobStatus.js`
 - **API:** `/api/export` → `router/export/ExportRouter.js` → `controller/export/exportHolding/*`, `exportTransaction/exportSingleClient.js`, `exportCashBalance/exportAllClientsCash.js`, `exportCorporateAction/*`. The Cash tab also uses `/api/cash-balance/export*`.
@@ -357,7 +362,7 @@ CSV exports. Business guide 3.18.
   - A new corporate action type needs a handler in `functions/ExportCorpActionReport/handlers/` and an entry in `SUPPORTED_TYPES`.
 
 ### 4.18 Dashboard and Notifications
-Business guide 3.19.
+Business guide 3.20.
 
 - **Screen:** `react-app/src/pages/Dashboard/DashboardPage.js`, `components/dashboard/DashboardComponents.js`, `notifications/NotificationTray.js`, `notifications/JobNotificationContext.js`
 - **API:**

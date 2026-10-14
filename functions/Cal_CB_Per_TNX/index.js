@@ -3,7 +3,9 @@
  *
  * - Reads cash-affecting rows from Transaction, plus RECEIVED Dividend_Record rows
  *   (the DELETE below also removes the DIVIDEND credits UpdateDividendData wrote,
- *   so the rebuild must put them back or the dividend cash is lost).
+ *   so the rebuild must put them back or the dividend cash is lost). Credits
+ *   earned only through a buy deleted on the Transaction Deletion page are left
+ *   out (see dropDividendsEarnedByDeletedBuys).
  * - DELETE all passbook rows for the account (repeat DELETE until COUNT=0; Catalyst ~300/round), then rebuild from 2020 onwards in 6-month chunks.
  * - Accounts: job param accountCodesJson, pairsJson (account column), or LEGACY_CLIENT_IDS.
  */
@@ -253,6 +255,81 @@ async function fetchReceivedDividendEvents(zcql, accountCode) {
   return events;
 }
 
+const DELETION_LOG_TABLE = "Transaction_Deletion_Log";
+
+/* Holdings rules (appsail util/analytics/holdingsFromTable.js): BY-, SQB and OPI
+   add shares; OPI counts from its settlement date, every other trade from its
+   trade date. */
+const isHoldingsBuyType = (type) => /^BY-|SQB|OPI/i.test(String(type || ""));
+
+function holdingsDate(row) {
+  const isOpi = /^OPI/i.test(String(row.Tran_Type || "").trim());
+  const date = isOpi ? row.SETDATE || row.TRANDATE : row.TRANDATE || row.SETDATE;
+  return String(date || "").slice(0, 10);
+}
+
+/** ISIN → earliest holdings date of a buy by the account in `tableName`. */
+async function earliestBuyDateByIsin(zcql, tableName, accountCode, isins) {
+  const isinFilter = isins
+    ? `AND ISIN IN (${isins.map((i) => `'${esc(i)}'`).join(", ")})`
+    : "";
+  const earliest = new Map();
+  let lastRowId = "0";
+  while (true) {
+    const batch = await zcql.executeZCQLQuery(`
+      SELECT ROWID, ISIN, Tran_Type, TRANDATE, SETDATE
+      FROM ${tableName}
+      WHERE WS_Account_code = '${esc(accountCode)}' ${isinFilter}
+        AND ROWID > ${lastRowId}
+      ORDER BY ROWID ASC
+      LIMIT ${BATCH_SIZE}
+    `);
+    if (!batch || batch.length === 0) break;
+    for (const r of batch) {
+      const row = r[tableName] || r;
+      lastRowId = String(row.ROWID);
+      const isin = String(row.ISIN ?? "").trim();
+      const date = holdingsDate(row);
+      if (!isin || !date || !isHoldingsBuyType(row.Tran_Type)) continue;
+      if (!earliest.has(isin) || date < earliest.get(isin)) earliest.set(isin, date);
+    }
+    if (batch.length < BATCH_SIZE) break;
+  }
+  return earliest;
+}
+
+/**
+ * Transaction Deletion: a dividend credit is left out of the passbook when a
+ * deleted buy is what made the client eligible for it — a buy of that ISIN
+ * dated on or before the record date was deleted, and no remaining buy is.
+ * The Dividend_Record row is never changed. Reading the deletion log here
+ * (instead of a job flag) keeps the credit out of every later full rebuild.
+ * If a corrected buy is uploaded again, the next full rebuild brings the
+ * credit back (the upload's own append job never re-adds dividends).
+ */
+async function dropDividendsEarnedByDeletedBuys(zcql, accountCode, dividendEvents) {
+  if (dividendEvents.length === 0) return dividendEvents;
+  const deletedFirst = await earliestBuyDateByIsin(zcql, DELETION_LOG_TABLE, accountCode, null);
+  if (deletedFirst.size === 0) return dividendEvents;
+  const remainingFirst = await earliestBuyDateByIsin(
+    zcql,
+    "Transaction",
+    accountCode,
+    [...deletedFirst.keys()],
+  );
+
+  return dividendEvents.filter((event) => {
+    const deletedDate = deletedFirst.get(event.isin);
+    if (!deletedDate || deletedDate > event.impactDate) return true;
+    const remainingDate = remainingFirst.get(event.isin);
+    if (remainingDate && remainingDate <= event.impactDate) return true;
+    console.log(
+      `[${accountCode}] dividend ${event.isin} ${event.impactDate} left out: earned through a deleted buy`,
+    );
+    return false;
+  });
+}
+
 function generateDateChunks(startISO, endISO, months) {
   const chunks = [];
   let cursor = new Date(startISO + "T00:00:00Z");
@@ -417,7 +494,11 @@ async function deleteCashPassbookForAccount(zcql, accountCode) {
 async function rebuildCashPassbookForAccount(zcql, accountCode) {
   // Read the dividends before deleting anything, so a read failure leaves the
   // existing passbook untouched.
-  const dividendEvents = await fetchReceivedDividendEvents(zcql, accountCode);
+  const dividendEvents = await dropDividendsEarnedByDeletedBuys(
+    zcql,
+    accountCode,
+    await fetchReceivedDividendEvents(zcql, accountCode),
+  );
 
   await deleteCashPassbookForAccount(zcql, accountCode);
 

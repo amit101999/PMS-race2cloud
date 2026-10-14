@@ -136,6 +136,9 @@ async function finalizeCaTrackIfNeeded(zcql, trackKey, subId, outcome) {
  * - accountCodes: comma-separated fallback
  * - asOnDate: optional YYYY-MM-DD cutoff
  * - source: optional tag for logs (e.g. DemergerFn, MegerFn)
+ * - keepCaRecords: "true" rebuilds Holdings only and leaves Split_Account
+ *   untouched. Sent by Transaction Deletion, which must not change any
+ *   corporate action record.
  * - parentStatusKey / subTaskKey: set only when dispatched by UpdateISINWorker;
  *   used to report this chunk's outcome back so the ISIN rename's status
  *   reflects the rebuild actually finishing (see finalizeSubtaskIfNeeded above).
@@ -206,6 +209,7 @@ module.exports = async (jobRequest, context) => {
       if (single) scopedIsins = [single];
     }
     const scopedIsinsSet = scopedIsins.length ? new Set(scopedIsins) : null;
+    const keepCaRecords = String(params.keepCaRecords || "").trim() === "true";
 
     const uniq = [...new Set(accounts)];
     console.log("[RebuildHoldingtable] Start", {
@@ -213,6 +217,7 @@ module.exports = async (jobRequest, context) => {
       accountCount: uniq.length,
       asOnDate,
       scopedIsins: scopedIsinsSet ? scopedIsins : "off",
+      keepCaRecords,
     });
 
     if (!uniq.length) {
@@ -228,6 +233,7 @@ module.exports = async (jobRequest, context) => {
       uniq,
       asOnDate,
       scopedIsinsSet,
+      keepCaRecords,
     );
 
     if (counters.errors > 0) {
