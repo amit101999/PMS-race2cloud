@@ -7,7 +7,7 @@
  *
  * `status` is one of: in_progress | completed | failed | partial_failure.
  *
- * The bell shows the newest 5 rows to every admin and stores nothing in the
+ * The bell shows the newest 10 rows to every admin and stores nothing in the
  * browser, so the list survives a refresh and is the same for everyone.
  *
  * It does NOT poll each job. Instead `listRecentNotifications` reconciles any
@@ -23,7 +23,7 @@ import { TABLE as CM_TABLE } from "./custodyMatch/runStore.js";
 import { RUN_STATUS as CM_RUN_STATUS } from "./custodyMatch/constants.js";
 import { RUN_TABLE as HC_RUN_TABLE } from "./holdingComparison/runStore.js";
 
-const MAX_SHOWN = 5;
+const MAX_SHOWN = 10;
 const PRUNE_AFTER_MS = 24 * 60 * 60 * 1000; // drop every row older than 24 hours
 const PRUNE_EVERY_MS = 60 * 60 * 1000; // ...but only actually sweep once an hour
 const ALLOWED_STATUS = ["in_progress", "completed", "failed", "partial_failure"];
@@ -259,14 +259,27 @@ export async function deleteNotification(zcql, rowId) {
   await zcql.executeZCQLQuery(`DELETE FROM Notifications WHERE ROWID = ${id}`);
 }
 
-export async function clearNotifications(zcql, rowIds) {
-  const ids = (Array.isArray(rowIds) ? rowIds : []).map(onlyDigits).filter(Boolean);
-  for (const id of ids) {
-    try {
-      await zcql.executeZCQLQuery(`DELETE FROM Notifications WHERE ROWID = ${id}`);
-    } catch (e) {
-      console.warn(`[notifications] clear row ${id} failed:`, e.message);
-    }
+/**
+ * "Clear all": delete every notification, not only the ones on screen.
+ *
+ * The bell shows just the newest MAX_SHOWN, so clearing only those let the next
+ * older ones slide into view and "Clear all" took several clicks. A ZCQL DELETE
+ * removes at most 300 rows, so this works in batches until the table is empty.
+ * The batch cap stops a failing delete from looping forever.
+ */
+const CLEAR_BATCH = 200;
+const MAX_CLEAR_BATCHES = 50;
+
+export async function clearNotifications(zcql) {
+  for (let batch = 0; batch < MAX_CLEAR_BATCHES; batch++) {
+    const rows = await zcql.executeZCQLQuery(
+      `SELECT ROWID FROM Notifications LIMIT ${CLEAR_BATCH}`,
+    );
+    const ids = (rows || [])
+      .map((r) => onlyDigits((r.Notifications || r).ROWID))
+      .filter(Boolean);
+    if (ids.length === 0) return;
+    await zcql.executeZCQLQuery(`DELETE FROM Notifications WHERE ROWID IN (${ids.join(",")})`);
   }
 }
 
