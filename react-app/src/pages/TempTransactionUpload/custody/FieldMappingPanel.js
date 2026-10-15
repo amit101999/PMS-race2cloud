@@ -4,6 +4,7 @@ import {
     KIND_BLURB,
     KIND_SHORT,
     PROFILE_LABEL,
+    PROFILE_TYPE,
     SOURCE_BY,
     TRANSFORM_LABEL,
     deleteFieldMap,
@@ -158,7 +159,7 @@ const describeSource = (source) =>
  *   it was never answered     saved by an older version of this screen, which
  *                             allowed a field to be marked as not present
  *
- * @returns {{draft:object, cleared:Array<{label:string,reason:string}>}}
+ * @returns {{draft:object, cleared:Array<{field:string,label:string,reason:string}>}}
  */
 const reconcile = (saved, entries, columns) => {
     const draft = {};
@@ -182,6 +183,7 @@ const reconcile = (saved, entries, columns) => {
         const value = valueForSource(source, columns);
         if (value === "") {
             cleared.push({
+                field: entry.field,
                 label: entry.label,
                 reason: `"${describeSource(source)}" is not a column in this file`,
             });
@@ -191,6 +193,7 @@ const reconcile = (saved, entries, columns) => {
         const column = columns.find((c) => c.index === Number(value));
         if (!isColumnCompatible(column, entry, transformOf(source))) {
             cleared.push({
+                field: entry.field,
                 label: entry.label,
                 reason: mismatchReason(column, entry, transformOf(source)),
             });
@@ -251,15 +254,10 @@ function MappingRow({ entry, source, columns, takenBy, onChange, registerRef, fi
     const selectedColumn =
         value && !absent ? columns.find((c) => c.index === Number(value)) || null : null;
 
-    /*
-     * A column another field has taken is not offered again — except to a field
-     * flagged allowShared. NDPMS has no date column at all: Transaction Date is
-     * the first eight digits of ContractNo, so ContractNo genuinely feeds both
-     * that field and Trade / Contract Ref.
-     */
+    // A column another field has taken is not offered again.
     const available = columns.filter((c) => {
         const owner = takenBy.get(c.index);
-        return !owner || owner === entry.field || entry.allowShared;
+        return !owner || owner === entry.field;
     });
 
     /*
@@ -397,6 +395,7 @@ function MappingRow({ entry, source, columns, takenBy, onChange, registerRef, fi
  * @param {boolean}  props.open
  * @param {File}     [props.file]          the file about to be uploaded; absent = view-only
  * @param {string}   [props.requestedType] the slot the user dropped it into
+ * @param {string}   [props.pickedDate]    yyyy-mm-dd picked for the file; NDPMS rows take it as their Transaction Date
  * @param {Function} [props.onUpload]      ({ profileType, replace }) => Promise, throws ApiError
  * @param {Function} props.onClose
  * @param {Function} [props.onSaved]
@@ -409,6 +408,7 @@ export default function FieldMappingPanel({
     open,
     file = null,
     requestedType = null,
+    pickedDate = null,
     onUpload = null,
     onClose,
     onSaved,
@@ -573,9 +573,6 @@ export default function FieldMappingPanel({
             const value = valueForSource(draft[entry.field], columns);
             // A field answered as absent holds no column, so it claims none.
             if (value === "" || value === ABSENT) continue;
-            // A shared field never claims the column, so the field it borrows
-            // from keeps it and no third field can take it.
-            if (entry.allowShared) continue;
             map.set(Number(value), entry.field);
         }
         return map;
@@ -593,6 +590,17 @@ export default function FieldMappingPanel({
                 );
             }),
         [entries, draft, columns],
+    );
+
+    /*
+     * A cleared field leaves the list as soon as it points at a column that
+     * fits, so each fix shows straight away instead of only after Save.
+     * Emptying it again brings it back.
+     */
+    const stillCleared = cleared.filter(
+        (c) =>
+            valueForSource(draft[c.field], columns) === "" ||
+            badFields.some((entry) => entry.field === c.field),
     );
 
     // Only required fields block saving. Every Transaction Upload field is
@@ -986,14 +994,14 @@ export default function FieldMappingPanel({
                                 </div>
                             ) : null}
 
-                            {cleared.length > 0 ? (
+                            {stillCleared.length > 0 ? (
                                 <div className="fm-error" role="alert">
                                     <strong>
-                                        {cleared.length} field(s) from the saved mapping no longer
+                                        {stillCleared.length} field(s) from the saved mapping no longer
                                         fit this file and have been cleared.
                                     </strong>
                                     <ul className="fm-cleared-list">
-                                        {cleared.map((c) => (
+                                        {stillCleared.map((c) => (
                                             <li key={c.label}>
                                                 <strong>{c.label}</strong> &mdash; {c.reason}
                                             </li>
@@ -1013,17 +1021,43 @@ export default function FieldMappingPanel({
                             <table className={showHints ? "data-table" : "data-table fm-table--plain"}>
                                 <tbody>
                                     {entries.map((entry) => (
-                                        <MappingRow
-                                            key={entry.field}
-                                            entry={entry}
-                                            source={draft[entry.field]}
-                                            columns={columns}
-                                            takenBy={takenBy}
-                                            onChange={setField}
-                                            registerRef={registerFieldRef}
-                                            fieldError={fieldErrors[entry.field]}
-                                            showHints={showHints}
-                                        />
+                                        <React.Fragment key={entry.field}>
+                                            <MappingRow
+                                                entry={entry}
+                                                source={draft[entry.field]}
+                                                columns={columns}
+                                                takenBy={takenBy}
+                                                onChange={setField}
+                                                registerRef={registerFieldRef}
+                                                fieldError={fieldErrors[entry.field]}
+                                                showHints={showHints}
+                                            />
+                                            {/* NDPMS files have no date column, so Transaction
+                                                Date is not mapped: every row takes the date
+                                                picked for the file. Shown in its usual place. */}
+                                            {chosen === PROFILE_TYPE.CUSTODY_NDPMS &&
+                                            entry.field === "isin" ? (
+                                                <tr className="fm-row">
+                                                    <td className="fm-cell-field">
+                                                        <div className="fm-fieldname">Transaction Date</div>
+                                                    </td>
+                                                    <td className="fm-cell-source">
+                                                        <div className="fm-inputs">
+                                                            <select className="fm-select" disabled>
+                                                                <option>
+                                                                    {pickedDate
+                                                                        ? pickedDate.split("-").reverse().join("-")
+                                                                        : "The date picked for the file"}
+                                                                </option>
+                                                            </select>
+                                                        </div>
+                                                        <p className="fm-samples">
+                                                            Filled in from the date picked for this file.
+                                                        </p>
+                                                    </td>
+                                                </tr>
+                                            ) : null}
+                                        </React.Fragment>
                                     ))}
                                 </tbody>
                             </table>

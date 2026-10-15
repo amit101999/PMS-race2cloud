@@ -8,8 +8,8 @@
  * Each scheme sends ONE file. Which layout it uses depends on the account type:
  *
  *   Format 1 (Resident, RESIDENTIAL) — keyed on CLIENT_CODE, trade date in TRADE_DATE.
- *   Format 2 (NRE/NRO, NDPMS)        — keyed on CPCode_UCC, trade date derived
- *                                      from the first 8 digits of ContractNo.
+ *   Format 2 (NRE/NRO, NDPMS)        — keyed on CPCode_UCC, no date column: every
+ *                                      row takes the date picked for the file.
  *   Format 3 (Mutual Funds)          — keyed on UCC, trade date in TradeDate,
  *                                      direction as Subscription / Redemption.
  *
@@ -34,7 +34,6 @@ import {
   WARNING,
 } from "./constants.js";
 import {
-  contractNoDatePart,
   detectSeparator,
   displayNum,
   firstLineOf,
@@ -43,14 +42,12 @@ import {
   normMutualFundTranType,
   normTranType,
   num,
-  parseContractNoDate,
   parseDate,
   splitHeaderCells,
   text,
 } from "./normalize.js";
 import {
   FORMAT_TO_PROFILE_TYPE,
-  TRANSFORM,
   columnNamesFor,
   resolveFieldMap,
 } from "./fieldMap.js";
@@ -272,7 +269,7 @@ export const detectCustodyFormat = (buffer, { profiles = null } = {}) => {
  * @param {string} [opts.scheme]       scheme tag from the filename; stamped on every row and every exception.
  * @param {string} [opts.fileType]     RESIDENTIAL | NDPMS | MUTUAL_FUND, from the filename suffix. Cross-checked against the detected layout.
  * @param {string} [opts.fileName]     for error messages.
- * @param {string} [opts.businessDate] yyyy-mm-dd
+ * @param {string} [opts.businessDate] yyyy-mm-dd, the date picked for the file. Every NDPMS row takes it as its trade date.
  * @param {object} [opts.options]      overrides for DEFAULT_OPTIONS.
  * @param {object} [opts.profiles]     user-defined field mappings, keyed by PROFILE_TYPE.
  */
@@ -357,10 +354,6 @@ export const parseCustodyFile = (
     });
   });
 
-  /* How each field's raw value is interpreted. NDPMS has no date column at all;
-   * its trade date is the first 8 characters of ContractNo. */
-  const transformOf = resolved.transforms;
-
   // Mutual Funds rows use Subscription/Redemption and may leave display cells blank.
   const isMutualFundLayout = format === CUSTODY_FORMAT.MUTUAL_FUND;
 
@@ -436,7 +429,15 @@ export const parseCustodyFile = (
         // ---- transaction date ---------------------------------------------
         let tranDate = null;
         const dateCol = columnOf.tranDate;
-        if (transformOf.tranDate !== TRANSFORM.DATE_FROM_FIRST_8) {
+        if (format === CUSTODY_FORMAT.NDPMS) {
+          // NDPMS files carry no date column: every row is dated the day the
+          // user picked for the file.
+          tranDate = businessDate;
+          if (!tranDate) {
+            fail(rowNumber, ROW_ERROR.MISSING_DATE, "No date was picked for this file.", null, "");
+            rejected = true;
+          }
+        } else {
           const rawDate = cell("tranDate");
           // Every layout accepts any format parseDate reads (20-08-2026,
           // 20-Aug-2026, 2026-08-20, ...) and carries it on as YYYY-MM-DD.
@@ -453,31 +454,6 @@ export const parseCustodyFile = (
               rawDate,
             );
             rejected = true;
-          }
-        } else {
-          const rawContract = cell("tranDate");
-          const digits = contractNoDatePart(rawContract);
-          if (!digits) {
-            fail(
-              rowNumber,
-              ROW_ERROR.BAD_CONTRACT_NO,
-              `${dateCol} "${rawContract}" does not start with an 8-digit date.`,
-              dateCol,
-              rawContract,
-            );
-            rejected = true;
-          } else {
-            tranDate = parseContractNoDate(rawContract);
-            if (!tranDate) {
-              fail(
-                rowNumber,
-                ROW_ERROR.BAD_DATE,
-                `The first 8 digits of ${dateCol} ("${digits}") are not a valid ddmmyyyy date.`,
-                dateCol,
-                rawContract,
-              );
-              rejected = true;
-            }
           }
         }
 

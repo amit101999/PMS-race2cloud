@@ -1393,6 +1393,7 @@ const CustodyMatchPanel = ({
                 open={Boolean(pending)}
                 file={pending?.file || null}
                 requestedType={pending?.profileType || null}
+                pickedDate={custodyDate}
                 onUpload={uploadPending}
                 onClose={() => setPending(null)}
                 onSaved={loadDay}
