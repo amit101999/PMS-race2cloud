@@ -388,6 +388,13 @@ export const parseCustodyFile = (
         const anyValue = Object.values(record).some((v) => text(v) !== "");
         if (!anyValue) return;
 
+        /*
+         * Not a trade. Some custodian files wrap the trades in a header row
+         * (the file date) and a trailer row (the trade count), marked 10 and 30
+         * in Column1. Neither carries an ISIN, a quantity or a buy/sell.
+         */
+        if (!cell("isin") && !cell("quantity") && !cell("tranType")) return;
+
         totalRows += 1;
 
         let rejected = false;
