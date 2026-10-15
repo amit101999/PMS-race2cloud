@@ -112,9 +112,14 @@ const signatureFor = (format, profiles) => {
 /**
  * Work out which layout a custodian file uses, from its header row.
  *
+ * @param {Buffer} buffer
+ * @param {object} [opts]
+ * @param {object} [opts.profiles]       saved field mappings, keyed by PROFILE_TYPE.
+ * @param {string} [opts.expectedFormat] the layout the user picked. Settles a file
+ *        that more than one layout's mapping claims; see the tie-break below.
  * @returns {{format:string|null, headerIndex:object, rawHeaders:string[], separator:string, fileError:object|null}}
  */
-export const detectCustodyFormat = (buffer, { profiles = null } = {}) => {
+export const detectCustodyFormat = (buffer, { profiles = null, expectedFormat = null } = {}) => {
   const empty = {
     format: null,
     headerIndex: {},
@@ -179,7 +184,19 @@ export const detectCustodyFormat = (buffer, { profiles = null } = {}) => {
     format: f,
     signature: signatureFor(f, profiles),
   }));
-  const found = signatures.filter((s) => normHeader(s.signature) in headerIndex);
+  let found = signatures.filter((s) => normHeader(s.signature) in headerIndex);
+
+  /*
+   * Two layouts' mappings can name the same account column — for example an
+   * NRE/NRO mapping saved with CLIENT_CODE while a Resident file was open. Every
+   * file carrying that column then matches both layouts. When the layout the
+   * user picked is one of them, the file is read as that layout. A single match
+   * on a DIFFERENT layout is untouched, so a file in the wrong slot is still
+   * refused as the wrong account type.
+   */
+  if (found.length > 1 && expectedFormat && found.some((s) => s.format === expectedFormat)) {
+    found = found.filter((s) => s.format === expectedFormat);
+  }
 
   if (found.length !== 1) {
     const expected = signatures.map((s) => s.signature);
@@ -191,7 +208,9 @@ export const detectCustodyFormat = (buffer, { profiles = null } = {}) => {
         code: FILE_ERROR.UNKNOWN_CUSTODY_FORMAT,
         message:
           found.length > 1
-            ? `Unknown column names — this file has ${found.map((s) => s.signature).join(" and ")}. Check the mapping.`
+            ? `This file matches more than one mapping — ${found
+                .map((s) => `${LAYOUT_LABEL[s.format]} (${s.signature})`)
+                .join(" and ")}. Each type's mapping must use its own account code column. Check the mapping.`
             : `Unknown column names — expected one of ${expected.join(", ")}. Check the mapping.`,
         rawHeaders,
         expected,
@@ -285,7 +304,10 @@ export const parseCustodyFile = (
   } = {},
 ) => {
   const cfg = { ...DEFAULT_OPTIONS, ...options };
-  const detected = detectCustodyFormat(buffer, { profiles });
+  const detected = detectCustodyFormat(buffer, {
+    profiles,
+    expectedFormat: fileType ? CUSTODY_TYPE_TO_FORMAT[fileType] : null,
+  });
 
   const emptyResult = (fileError) => ({
     ok: false,

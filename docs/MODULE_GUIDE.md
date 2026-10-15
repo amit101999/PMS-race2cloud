@@ -241,7 +241,7 @@ Every day the operator loads the trades, checks them against the custodian, and 
 **What a commit changes elsewhere.** New clients and securities appear in the Masters. Holdings and the cash passbook of every client in the file update. Analytics and reports show the new position. If a committed trade is dated **before** a corporate action already applied on the same share, the commit does **not** apply that corporate action to it: it only adds rows on top and does not replay corporate actions. The operator re-opens the action on its page (Split, Bonus or Dividend). The late client shows with no status, and **Send as Receivable** then **Confirm & Apply** apply the action to that client only (see 4.9, "Late clients").
 
 ---
-
+ 
 ### 4.5 Holdings engine
 
 **Business purpose.** Work out what every client owns, share by share, at any date. Nobody types holdings in. They are calculated from trades and corporate actions.
