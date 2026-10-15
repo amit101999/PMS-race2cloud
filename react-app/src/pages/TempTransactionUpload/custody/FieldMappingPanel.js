@@ -373,11 +373,12 @@ function MappingRow({ entry, source, columns, takenBy, onChange, registerRef, fi
                 ) : null}
 
                 {/* A few real values from the picked column — for date fields only,
-                    where they show the user which date format the file uses. */}
+                    where they show the user which date format the file uses. Each
+                    value once: a file covering one day repeats the same date. */}
                 {isDateField && !badPick && selectedColumn?.samples?.length > 0 ? (
                     <p className="fm-samples">
                         e.g.{" "}
-                        {selectedColumn.samples
+                        {[...new Set(selectedColumn.samples)]
                             .slice(0, 3)
                             .map((sample) => previewValue(sample, transform))
                             .join(", ")}
@@ -895,10 +896,13 @@ export default function FieldMappingPanel({
                                 >
                                     {uploading ? "Replacing…" : "Replace it"}
                                 </button>
+                                {/* Keeping the stored file ends this upload, so the
+                                    panel closes just as it does after Replace. The
+                                    mapping was already saved before Upload. */}
                                 <button
                                     type="button"
                                     className="fm-ghost"
-                                    onClick={() => setConflict(null)}
+                                    onClick={onClose}
                                     disabled={uploading}
                                 >
                                     Keep the stored file
