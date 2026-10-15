@@ -65,17 +65,6 @@ export const PROFILE_TYPE = {
 
 export const PROFILE_TYPES = Object.values(PROFILE_TYPE);
 
-/**
- * The transaction-file profiles, as opposed to the custodian ones.
- *
- * Both describe the same 26 canonical fields and both are rewritten into the
- * 26-column template before import; they differ only in which column of the
- * user's file feeds each field.
- */
-export const FA_PROFILE_TYPES = [PROFILE_TYPE.FA, PROFILE_TYPE.FA_MUTUAL_FUND];
-
-export const isFaProfileType = (type) => FA_PROFILE_TYPES.includes(type);
-
 /** Stored blobs carry this so a later shape change can migrate rather than misread. */
 export const PROFILE_VERSION = 1;
 
@@ -278,15 +267,13 @@ const CORP_ACTION_REQUIRED_FIELDS = [
  * Transaction Date + Transaction Type, compared on Quantity). They must point
  * at a real column: they cannot be left unanswered and cannot be declared
  * absent, because without them the comparison has nothing to compare.
+ * NDPMS has four: its Transaction Date is the date picked for the file.
  *
  * `required` marks a field the mapping screen will not let the user leave
  * unanswered. Every field carries it — but "answered" includes answering
  * SOURCE_BY.ABSENT, so a file that genuinely lacks a column is still mappable.
  * The two flags are deliberately separate: `matchKey` decides what makes a
  * FILE unreadable, `required` decides what makes a MAPPING incomplete.
- *
- * `allowShared` lets a field reuse a column another field has already taken.
- * Only NDPMS `ref` has it, and for a concrete reason — see the note there.
  *
  * `kind` is what a column's contents are checked against before the mapping is
  * accepted; it does not change how the column is located.
@@ -363,18 +350,13 @@ export const FIELD_CATALOG = {
     { field: "brokerCode", label: "Broker Code", kind: "code", required: true },
   ],
 
+  /*
+   * No Transaction Date here: NDPMS files carry no date column, so every row
+   * takes the date the user picked for the file (see parseCustodyFile).
+   */
   [PROFILE_TYPE.CUSTODY_NDPMS]: [
     { field: "actualCode", label: "Actual Code", kind: "code", required: true, matchKey: true },
     { field: "isin", label: "ISIN", kind: "isin", required: true, matchKey: true },
-    {
-      field: "tranDate",
-      label: "Transaction Date",
-      kind: "date",
-      required: true,
-      matchKey: true,
-      // NDPMS carries no date column; it is derived from ContractNo.
-      allowTransforms: [TRANSFORM.NONE, TRANSFORM.DATE_FROM_FIRST_8],
-    },
     { field: "tranType", label: "Transaction Type", kind: "type", required: true, matchKey: true },
     { field: "quantity", label: "Quantity", kind: "number", required: true, matchKey: true },
 
@@ -383,21 +365,7 @@ export const FIELD_CATALOG = {
     { field: "stt", label: "STT", kind: "number", required: true },
     { field: "netAmount", label: "Net Amount", kind: "number", required: true },
     { field: "settlementDate", label: "Settlement Date", kind: "date", required: true },
-    {
-      field: "ref",
-      label: "Trade / Contract Ref",
-      kind: "text",
-      required: true,
-      /*
-       * The one field allowed to reuse a column another field has taken.
-       *
-       * NDPMS files have no date column at all — Transaction Date is the first
-       * eight digits of ContractNo — so ContractNo legitimately feeds both this
-       * field and tranDate. Without this flag the shipped NDPMS mapping could
-       * not be rebuilt through the screen at all.
-       */
-      allowShared: true,
-    },
+    { field: "ref", label: "Trade / Contract Ref", kind: "text", required: true },
     { field: "exchange", label: "Exchange", kind: "text", required: true },
     { field: "brokerCode", label: "Broker Code", kind: "code", required: true },
   ],
@@ -554,11 +522,6 @@ export const DEFAULT_PROFILES = {
   [PROFILE_TYPE.CUSTODY_NDPMS]: {
     actualCode: byName("CPCode_UCC"),
     isin: byName("ISIN"),
-    tranDate: {
-      by: SOURCE_BY.NAME,
-      name: "ContractNo",
-      transform: TRANSFORM.DATE_FROM_FIRST_8,
-    },
     tranType: byName("TranType"),
     quantity: byName("Quantity"),
 
@@ -1110,17 +1073,23 @@ export const toStoredProfile = (type, profile, { updatedBy = "", updatedAtMs = D
  * @returns {{profile:object, isDefault:boolean, updatedAtMs:number|null, updatedBy:string}}
  */
 /*
- * Net Rate and Net Amount are no longer mapped on the transaction files: the
- * import derives them (RATE ± brokerage, × quantity) when the cells are blank.
- * Mappings saved before that still carry the two fields; drop them on read so
- * such a mapping stays valid instead of silently falling back to the default.
+ * Fields that are no longer mapped. Mappings saved before still carry them;
+ * drop them on read so such a mapping stays valid instead of silently falling
+ * back to the default.
+ *
+ * Net Rate and Net Amount on the transaction files: the import derives them
+ * (RATE ± brokerage, × quantity) when the cells are blank.
+ * Transaction Date on NDPMS: every row takes the date picked for the file.
  */
-const RETIRED_FA_FIELDS = ["netRate", "netAmount"];
+const RETIRED_FIELDS = {
+  [PROFILE_TYPE.FA]: ["netRate", "netAmount"],
+  [PROFILE_TYPE.FA_MUTUAL_FUND]: ["netRate", "netAmount"],
+  [PROFILE_TYPE.CUSTODY_NDPMS]: ["tranDate"],
+};
 
 const withoutRetiredFields = (type, profile) => {
-  if (!isFaProfileType(type)) return profile;
   const kept = { ...profile };
-  for (const field of RETIRED_FA_FIELDS) delete kept[field];
+  for (const field of RETIRED_FIELDS[type] || []) delete kept[field];
   return kept;
 };
 

@@ -560,8 +560,7 @@ export const uploadCustodyFile = async (req, res) => {
       scheme,
       fileType,
       fileName: file.name,
-      // Settles an NDPMS ContractNo whose first 8 digits read as a valid date
-      // in both orders; the picked date is the only outside fact we have.
+      // NDPMS files have no date column, so their rows take this date.
       businessDate,
       profiles,
     });
