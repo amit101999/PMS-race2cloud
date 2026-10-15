@@ -44,7 +44,7 @@ function mapRow(n) {
 }
 
 export function JobNotificationProvider({ children }) {
-  const [jobs, setJobs] = useState([]); // newest first, max 5
+  const [jobs, setJobs] = useState([]); // newest first, max 10
   const jobsRef = useRef([]);
   const timerRef = useRef(null);
   const mountedRef = useRef(true);
@@ -135,14 +135,12 @@ export function JobNotificationProvider({ children }) {
     [applyList, refresh],
   );
 
+  // The server clears every notification, not only the ones shown here.
   const clearAll = useCallback(() => {
-    const ids = jobsRef.current.map((j) => j.rowId).filter(Boolean);
-    if (!ids.length) return;
+    if (!jobsRef.current.length) return;
     fetch(`${ENDPOINT}/clear`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
       credentials: "include",
-      body: JSON.stringify({ ids }),
     })
       .then((r) => r.json())
       .catch(() => ({}))

@@ -63,7 +63,7 @@ export async function clearAllNotifications(req, res) {
   const zcql = getZcql(req, res);
   if (!zcql) return;
   try {
-    await clearNotifications(zcql, req.body?.ids);
+    await clearNotifications(zcql);
     const notifications = await listRecentNotifications(zcql);
     res.json({ success: true, notifications });
   } catch (err) {
