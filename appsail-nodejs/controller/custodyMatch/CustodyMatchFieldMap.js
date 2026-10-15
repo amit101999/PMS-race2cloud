@@ -435,7 +435,12 @@ export const previewHeaders = async (req, res) => {
          * is indistinguishable from a file we have no opinion about.
          */
         const profiles = req.catalystApp ? await loadFieldMapProfiles(req.catalystApp) : null;
-        const detected = detectCustodyFormat(file.data, { profiles });
+        // The picked type settles a file that two mappings claim, the same
+        // tie-break the upload applies.
+        const expectedFormat = Object.keys(FORMAT_TO_PROFILE_TYPE).find(
+          (format) => FORMAT_TO_PROFILE_TYPE[format] === asked,
+        );
+        const detected = detectCustodyFormat(file.data, { profiles, expectedFormat });
         detectedType = detected.format ? FORMAT_TO_PROFILE_TYPE[detected.format] || null : null;
       } catch {
         // Detection is a convenience. A file it cannot place still maps fine
