@@ -653,14 +653,37 @@ const CustodyMatchPanel = ({
         }
     };
 
+    /* The upload notes describe the last uploaded file, so they go once the
+       user confirms removing a file or moves to another date / file type. */
     const removeCustodyFile = (file) =>
         removeFile(
             file,
             `${file.originalFileName} (${file.scheme}, ${rangeLabel(file)})`,
-            setAddError,
+            (error) => {
+                setAddWarnings([]);
+                setAddError(error);
+            },
         );
 
+    const changeCustodyDate = (date) => {
+        setAddWarnings([]);
+        setCustodyDate(date);
+    };
+
     /* ── transaction file ─────────────────────────────────────────────── */
+
+    /* The upload notes describe the last uploaded file, so they go once the
+       user confirms removing a file or moves to another date / file type. */
+    const removeFaFile = (file) =>
+        removeFile(file, file.originalFileName, (error) => {
+            setFaWarnings([]);
+            setFaError(error);
+        });
+
+    const changeFaDate = (date) => {
+        setFaWarnings([]);
+        setFaDate(date);
+    };
 
     /** Same contract as uploadCustody: the mapping panel owns the errors. */
     const uploadFa = async (file, { fileType, replace = false }) => {
@@ -906,16 +929,34 @@ const CustodyMatchPanel = ({
         setPending({ kind: "custody", file: f, fileType: draft.fileType, profileType });
     };
 
-    /** Same idea for the transaction file: Browse and drop both land here. */
-    const handleFaFilePicked = (f) => {
+    /**
+     * Same idea for the transaction file: Browse and drop both land here.
+     * An Equity file picked as Mutual Funds (or the reverse) is refused before
+     * the mapping window opens; the server tells them apart by TDS / Stamp Duty.
+     */
+    const handleFaFilePicked = async (f) => {
         if (!f) return;
         setFaError(null);
-        setPending({
-            kind: "fa",
-            file: f,
-            fileType: faFileType,
-            profileType: PROFILE_FOR_FA_FILE_TYPE[faFileType],
-        });
+        const profileType = PROFILE_FOR_FA_FILE_TYPE[faFileType];
+        setFaBusy(true);
+        try {
+            const preview = await api.previewHeaders(f, profileType);
+            if (preview?.detectedType && preview.detectedType !== profileType) {
+                setFaError({
+                    message:
+                        faFileType === api.FA_FILE_TYPE.MUTUAL_FUND
+                            ? "Wrong file type — Mutual Funds selected, but TDS and Stamp Duty are empty in every row, so it is an Equity transaction file."
+                            : "Wrong file type — Equity selected, but this file has TDS / Stamp Duty amounts, so it is a Mutual Funds transaction file.",
+                });
+                return;
+            }
+        } catch (err) {
+            setFaError({ message: err.message, detail: err.detail });
+            return;
+        } finally {
+            setFaBusy(false);
+        }
+        setPending({ kind: "fa", file: f, fileType: faFileType, profileType });
     };
 
     const custodyZoneDisabled = addBusy || Boolean(run?.isRunning);
@@ -1014,6 +1055,7 @@ const CustodyMatchPanel = ({
                             value={draft.fileType}
                             onChange={(e) => {
                                 setAddError(null);
+                                setAddWarnings([]);
                                 setDraft((d) => ({ ...d, fileType: e.target.value }));
                             }}
                             disabled={custodyZoneDisabled}
@@ -1032,7 +1074,7 @@ const CustodyMatchPanel = ({
                         {renderDateInput(
                             "Date the custodian file is for",
                             custodyDate,
-                            setCustodyDate,
+                            changeCustodyDate,
                             addBusy || pending?.kind === "custody",
                         )}
                     </div>
@@ -1138,6 +1180,7 @@ const CustodyMatchPanel = ({
                             value={faFileType}
                             onChange={(e) => {
                                 setFaError(null);
+                                setFaWarnings([]);
                                 setFaFileType(e.target.value);
                             }}
                             disabled={faZoneDisabled}
@@ -1153,7 +1196,7 @@ const CustodyMatchPanel = ({
                         {renderDateInput(
                             "Date the transaction file is for",
                             faDate,
-                            setFaDate,
+                            changeFaDate,
                             faBusy || pending?.kind === "fa",
                         )}
                     </div>
@@ -1228,7 +1271,7 @@ const CustodyMatchPanel = ({
                                         <button
                                             type="button"
                                             className="up-file-remove"
-                                            onClick={() => removeFile(f, f.originalFileName, setFaError)}
+                                            onClick={() => removeFaFile(f)}
                                             disabled={faBusy || run?.isRunning || Boolean(removingKey)}
                                             aria-label={`Remove ${f.originalFileName}`}
                                         >

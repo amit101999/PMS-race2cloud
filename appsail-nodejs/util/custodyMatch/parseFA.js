@@ -75,7 +75,6 @@ const COL = {
   stt: 14, // TRANEXPENSE -> STT
   ref: 17, // TRANSREF
   description: 18,
-  netAmount: 23, // second "filler" -> Net_Amount
 };
 
 /**
@@ -224,7 +223,8 @@ export const parseFaFile = (
     const usedIndexes = new Set(Object.values(resolved.index));
     rawHeaders.forEach((header, i) => {
       if (usedIndexes.has(i) || !String(header || "").trim()) return;
-      // "filler" and friends belong to the template but feed nothing.
+      // Template columns left unmapped (an unanswered "filler", SETDATEFLAG …)
+      // are expected, not worth a warning.
       if (templateColumns.has(String(header).trim().toLowerCase())) return;
       headerWarnings.push({
         row: null,
@@ -389,6 +389,44 @@ export const parseFaFile = (
           rejected = true;
         }
 
+        /*
+         * Rate must be filled in: the import works out net rate and net amount
+         * from it, and a blank rate would store the trade at zero cost. Zero is
+         * allowed, as on the custodian files. The fee columns are optional, so
+         * only a filled cell is checked.
+         */
+        const amountChecks = [
+          { field: "rate", required: true },
+          // Stored in a number column, so text there would fail the import.
+          { field: "mktRate", required: false },
+          // Both sit under a heading of "filler", so the message names the field too.
+          { field: "transactionFee", required: false, name: "Transaction Fee" },
+          { field: "transactionFeeServiceTax", required: false, name: "Transaction Fee Service Tax" },
+        ];
+        for (const { field, required, name } of amountChecks) {
+          if (!(field in at)) continue;
+          const column = name ? `${colName[field]} (${name})` : colName[field];
+          const raw = get(field);
+          const value = num(raw);
+          if (!raw) {
+            if (!required) continue;
+            fail(rowNumber, ROW_ERROR.MISSING_VALUE, `${column} is blank.`, column, "");
+            rejected = true;
+          } else if (value === null) {
+            fail(rowNumber, ROW_ERROR.BAD_NUMBER, `${column} "${raw}" is not a number.`, column, raw);
+            rejected = true;
+          } else if (value < 0) {
+            fail(
+              rowNumber,
+              ROW_ERROR.NEGATIVE_NUMBER,
+              `${column} cannot be negative; found ${raw}.`,
+              column,
+              raw,
+            );
+            rejected = true;
+          }
+        }
+
         if (rejected) return;
 
         // The original 26 cells, so the consolidated file can be produced by
@@ -468,6 +506,54 @@ export const parseFaFile = (
           }),
         ),
       );
+  });
+};
+
+/**
+ * Is this transaction file the Equity file or the Mutual Funds file?
+ *
+ * Only the mutual fund file reports deductions, so a number in its TDS or Stamp
+ * Duty column on any row marks it as the Mutual Funds file. The columns are
+ * found through the saved Mutual Funds mapping; an Equity file usually has no
+ * such columns at all and always reads as Equity.
+ *
+ * @param {Buffer} buffer
+ * @param {object} [opts]
+ * @param {object} [opts.profiles] saved field mappings, keyed by PROFILE_TYPE.
+ * @returns {Promise<string>} PROFILE_TYPE.FA or PROFILE_TYPE.FA_MUTUAL_FUND
+ */
+export const detectFaFileType = (buffer, { profiles = null } = {}) => {
+  if (!buffer || buffer.length === 0) return Promise.resolve(PROFILE_TYPE.FA);
+
+  const headerLine = firstLineOf(buffer);
+  const separator = detectSeparator(headerLine);
+  const rawHeaders = splitHeaderCells(headerLine, separator);
+  const { index } = resolveFieldMap(
+    PROFILE_TYPE.FA_MUTUAL_FUND,
+    profiles?.[PROFILE_TYPE.FA_MUTUAL_FUND] || null,
+    rawHeaders,
+  );
+  const deductionColumns = [index.tds, index.stampDuty].filter((i) => i !== undefined);
+  if (deductionColumns.length === 0) return Promise.resolve(PROFILE_TYPE.FA);
+
+  return new Promise((resolve, reject) => {
+    let found = false;
+    const stream = Readable.from(buffer).pipe(csvParser({ separator, headers: false, skipLines: 1 }));
+    stream
+      .on("data", (arr) => {
+        if (found) return;
+        if (deductionColumns.some((i) => num(arr[i]) !== null)) {
+          found = true;
+          stream.destroy();
+          resolve(PROFILE_TYPE.FA_MUTUAL_FUND);
+        }
+      })
+      .on("end", () => {
+        if (!found) resolve(PROFILE_TYPE.FA);
+      })
+      .on("error", (err) => {
+        if (!found) reject(err);
+      });
   });
 };
 

@@ -23,7 +23,7 @@ import {
   ROW_ERROR,
 } from "../../util/custodyMatch/constants.js";
 import { PROFILE_TYPE } from "../../util/custodyMatch/fieldMap.js";
-import { parseFaFile, validateFaHeader } from "../../util/custodyMatch/parseFA.js";
+import { detectFaFileType, parseFaFile, validateFaHeader } from "../../util/custodyMatch/parseFA.js";
 import { parseCustodyFile } from "../../util/custodyMatch/parseCustody.js";
 import {
   BUCKET_NAME,
@@ -389,6 +389,20 @@ export const uploadFaFile = async (req, res) => {
     const headerError = validateFaHeader(file.data, { profile: faProfile, type: profileType });
     if (headerError) {
       return fail(res, 400, { ...headerError, fileName: file.name });
+    }
+
+    // The screen blocks this when the file is picked; checked again here so a
+    // file sent any other way cannot land in the wrong slot.
+    const fileProfileType = await detectFaFileType(file.data, { profiles });
+    if (fileProfileType !== profileType) {
+      return fail(res, 400, {
+        code: "FA_FILE_TYPE_MISMATCH",
+        message:
+          profileType === PROFILE_TYPE.FA
+            ? "Wrong file type — Equity selected, but this file has TDS / Stamp Duty amounts, so it is a Mutual Funds transaction file."
+            : "Wrong file type — Mutual Funds selected, but TDS and Stamp Duty are empty in every row, so it is an Equity transaction file.",
+        fileName: file.name,
+      });
     }
 
     const forDate = readUploadDate(req.body?.businessDate);

@@ -12,7 +12,7 @@
 
 export * from "./constants.js";
 export * from "./normalize.js";
-export { validateFaHeader, parseFaFile, faRowsToConsolidatedCsv } from "./parseFA.js";
+export { validateFaHeader, parseFaFile, faRowsToConsolidatedCsv, detectFaFileType } from "./parseFA.js";
 export {
   detectCustodyFormat,
   parseCustodyFile,
@@ -60,6 +60,7 @@ export {
   isColumnCompatible,
   resolveFieldMap,
   isDefaultProfile,
+  isFaProfileType,
   columnNamesFor,
   toStoredProfile,
   fromStoredProfile,

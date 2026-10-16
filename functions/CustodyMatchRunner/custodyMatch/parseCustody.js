@@ -9,7 +9,8 @@
  *
  *   Format 1 (Resident, RESIDENTIAL) — keyed on CLIENT_CODE, trade date in TRADE_DATE.
  *   Format 2 (NRE/NRO, NDPMS)        — keyed on CPCode_UCC, no date column: every
- *                                      row takes the date picked for the file.
+ *                                      row takes the date picked for the file, and the
+ *                                      file's own date (row 2, B2) must equal it.
  *   Format 3 (Mutual Funds)          — keyed on UCC, trade date in TradeDate,
  *                                      direction as Subscription / Redemption.
  *
@@ -391,6 +392,8 @@ export const parseCustodyFile = (
     const warnings = [...headerWarnings];
     let totalRows = 0;
     let lineNumber = 1; // row 1 is the header
+    // NDPMS only: the raw file date from the header row (B2), or null if none was seen.
+    let fileDateRaw = null;
 
     const fail = (rowNumber, code, message, column, value) => {
       rowErrors.push({ row: rowNumber, code, message, column, value, fileName });
@@ -415,7 +418,17 @@ export const parseCustodyFile = (
          * (the file date) and a trailer row (the trade count), marked 10 and 30
          * in Column1. Neither carries an ISIN, a quantity or a buy/sell.
          */
-        if (!cell("isin") && !cell("quantity") && !cell("tranType")) return;
+        if (!cell("isin") && !cell("quantity") && !cell("tranType")) {
+          /*
+           * NDPMS rows take the picked date, so the file's own date is the only
+           * proof it belongs to that day. It sits in the header row (B2), under
+           * the account code column, as 20260909.
+           */
+          if (format === CUSTODY_FORMAT.NDPMS && totalRows === 0 && fileDateRaw === null) {
+            fileDateRaw = cell("actualCode");
+          }
+          return;
+        }
 
         totalRows += 1;
 
@@ -636,6 +649,33 @@ export const parseCustodyFile = (
             }),
           );
           return;
+        }
+
+        if (format === CUSTODY_FORMAT.NDPMS) {
+          const fileDate = parseDate(fileDateRaw);
+          if (!fileDate) {
+            resolve(
+              emptyResult({
+                code: FILE_ERROR.FILE_DATE_MISSING,
+                message: `The file date in row 2 (${columnOf.actualCode}) is ${
+                  fileDateRaw ? `"${fileDateRaw}", which is not a readable date` : "missing"
+                }. NRE/NRO/NDPMS files must carry their date in the first row, for example 20260909.`,
+                value: fileDateRaw || "",
+              }),
+            );
+            return;
+          }
+          if (businessDate && fileDate !== businessDate) {
+            resolve(
+              emptyResult({
+                code: FILE_ERROR.FILE_DATE_MISMATCH,
+                message: `This file is for ${fileDate} (row 2), but ${businessDate} was picked. Pick ${fileDate}, or upload the file for ${businessDate}.`,
+                fileDate,
+                businessDate,
+              }),
+            );
+            return;
+          }
         }
 
         resolve({

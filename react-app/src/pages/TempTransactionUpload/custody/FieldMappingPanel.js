@@ -123,8 +123,8 @@ const valueForSource = (source, columns) => {
  * Build the source a picked column should be stored as.
  *
  * A repeated heading is addressed by POSITION, anything else by NAME. The FA
- * template carries three columns literally called "filler" and the first two
- * are Net Rate and Net Amount, so a name would not say which. A unique name is
+ * template carries three columns literally called "filler" (Sub Folio,
+ * Transaction Fee, Transaction Fee Service Tax), so a name would not say which. A unique name is
  * the better record for every other column: it survives the custodian
  * reordering their export, which a position does not.
  */
