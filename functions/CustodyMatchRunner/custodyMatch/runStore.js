@@ -253,17 +253,33 @@ export const findImportedRunForDate = async (catalystApp, businessDate, marker) 
   return runs.find((r) => String(r.stageDetail || "").startsWith(marker)) || null;
 };
 
-/** ROWID for a runId — every update needs it, and runId alone will not do. */
-const findRunRowId = async (catalystApp, runId) => {
+/** ROWID and current status for a runId — every update needs the ROWID, and runId alone will not do. */
+const findRunRow = async (catalystApp, runId) => {
   const rows = unwrap(
     await catalystApp
       .zcql()
       .executeZCQLQuery(
-        `SELECT ROWID FROM ${TABLE.RUN} WHERE runId = '${esc(runId)}' LIMIT 1`,
+        `SELECT ROWID, status FROM ${TABLE.RUN} WHERE runId = '${esc(runId)}' LIMIT 1`,
       ),
     TABLE.RUN,
   );
-  return rows[0]?.ROWID || null;
+  return rows[0] || null;
+};
+
+/** stageDetail prefix of a run whose file has been handed to the import. */
+export const IMPORTED_MARKER = "Imported into production";
+
+/**
+ * Take the import mark off a run whose background import failed, so the date can
+ * be committed again. Only a run still carrying the mark is touched.
+ */
+export const releaseImportMarker = async (catalystApp, runId) => {
+  const run = await getRun(catalystApp, runId);
+  if (!run || !String(run.stageDetail || "").startsWith(IMPORTED_MARKER)) return false;
+  await updateRun(catalystApp, runId, {
+    stageDetail: "Import failed — check the Transaction table, then commit again",
+  });
+  return true;
 };
 
 /** `CM-<epochms>` — sorts chronologically and is unique enough for one screen. */
@@ -315,8 +331,20 @@ export const createRun = async (
 
 /** Patch a run by runId. Unknown keys are dropped rather than sent to the SDK. */
 const updateRun = async (catalystApp, runId, patch) => {
-  const rowId = await findRunRowId(catalystApp, runId);
-  if (!rowId) throw new Error(`No ${TABLE.RUN} row for runId "${runId}".`);
+  const current = await findRunRow(catalystApp, runId);
+  if (!current) throw new Error(`No ${TABLE.RUN} row for runId "${runId}".`);
+  const rowId = current.ROWID;
+
+  /*
+   * A file or mapping changed while the job was working, so its answer is about
+   * files that are no longer stored. Writing RUNNING or COMPLETED over that would
+   * let Match reuse the stale answer and Commit import a file it never compared.
+   */
+  if ("status" in patch && current.status === RUN_STATUS.SUPERSEDED) {
+    throw Object.assign(new Error(`Run ${runId} was superseded while it was working.`), {
+      code: "RUN_SUPERSEDED",
+    });
+  }
 
   const allowed = new Set([...RUN_COLS_A, ...RUN_COLS_B].filter((c) => c !== "ROWID"));
   const clean = { ROWID: rowId };
