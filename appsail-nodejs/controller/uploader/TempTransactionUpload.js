@@ -577,6 +577,13 @@ function parseCsvRows(text, separator) {
   return rows;
 }
 
+/*
+ * Codes stored in capitals, whatever case the file used. Holdings, cash and the
+ * security list key on these values, so "inzztest0054" and "INZZTEST0054" would
+ * otherwise become two different securities.
+ */
+const UPPERCASE_SOURCE_COLUMNS = new Set(["BROKERACID", "SYMBOLCODE", "EXCHG"]);
+
 /** CSV cell for the bulk-write file: quoted when it holds a comma, quote or line break. */
 function csvCell(value) {
   const s = String(value ?? "");
@@ -633,7 +640,8 @@ function normalizeCsvForBulkUpload(fileBuffer) {
 
     const outCells = [];
     for (const m of headerMappings) {
-      const raw = m.idx < cells.length ? cells[m.idx] : "";
+      let raw = m.idx < cells.length ? cells[m.idx] : "";
+      if (UPPERCASE_SOURCE_COLUMNS.has(originalHeaders[m.idx])) raw = raw.toUpperCase();
       for (let t = 0; t < m.targets.length; t++) outCells.push(csvCell(raw));
     }
     outCells.push(derived.netRate, derived.netAmount);
@@ -732,8 +740,9 @@ function extractDistinctBrokerAccountIsinPairsFromCsv(fileBuffer) {
     };
 
     parser.on("data", (row) => {
-      const acc = String(getCell(row, "BROKERACID") ?? "").trim();
-      const isin = String(getCell(row, "SYMBOLCODE") ?? "").trim();
+      // Capitals, as normalizeCsvForBulkUpload stores them.
+      const acc = String(getCell(row, "BROKERACID") ?? "").trim().toUpperCase();
+      const isin = String(getCell(row, "SYMBOLCODE") ?? "").trim().toUpperCase();
       if (!acc || !isin) return;
       const key = `${acc}\t${isin}`;
       if (seen.has(key)) return;

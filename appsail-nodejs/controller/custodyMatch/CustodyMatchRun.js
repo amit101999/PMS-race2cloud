@@ -19,7 +19,7 @@ import {
   loadFieldMapProfiles,
   signedGetUrl,
 } from "../../util/custodyMatch/storage.js";
-import { PROFILE_TYPE, isDefaultProfile } from "../../util/custodyMatch/fieldMap.js";
+import { PROFILE_TYPE } from "../../util/custodyMatch/fieldMap.js";
 import { faRowsToConsolidatedCsv, parseFaFile } from "../../util/custodyMatch/parseFA.js";
 import {
   IMPORTED_MARKER,
@@ -637,26 +637,19 @@ export const proceedToImport = async (req, res) => {
     }
 
     /*
-     * What the import is handed.
+     * What the import is handed: every FA file of the day, re-read and rewritten
+     * into the 26-column template.
      *
-     * Normally the ORIGINAL file, byte for byte — whatever was exported is what
-     * reaches the Transaction table, and every cell the matcher never looked at
-     * survives untouched.
+     * Always rewritten, even a single file on the built-in template. The import
+     * stores dates exactly as given and only checks the first few rows, while
+     * parseFaFile converts every date (10-10-2026, 10-Oct-2026 …) to YYYY-MM-DD.
+     * Handing over the original bytes let unconverted dates reach Transaction.
+     * The rewrite also lays out a custom-mapped file in the template, and joins
+     * the regular and mutual fund files — the import takes one file.
      *
-     * The exception is a custom FA mapping. The import accepts one layout only:
-     * the 26 template columns, in order, spelled exactly. A remapped file is by
-     * definition not that, so handing it over unchanged fails on the header
-     * check. Those files are re-laid-out into the template first.
-     *
-     * Deliberately re-read and re-laid-out here rather than reusing the file S1
-     * wrote: that one has virtual codes rewritten to actual ones and holds only
-     * the dates the run compared. The import wants the codes the user exported
-     * and the whole file.
-     *
-     * A day may hold the regular file and the mutual fund file. Both are
-     * imported — they are two halves of the day's transactions — and since the
-     * import takes one file, they are rewritten into a single template-shaped
-     * one. That rewrite is also what reconciles their two layouts.
+     * Deliberately re-read here rather than reusing the file S1 wrote: that one
+     * has virtual codes rewritten to actual ones and holds only the dates the run
+     * compared. The import wants the codes the user exported and the whole file.
      */
     const bucket = getBucket(catalystApp);
     const profiles = await loadFieldMapProfiles(catalystApp);
@@ -664,44 +657,31 @@ export const proceedToImport = async (req, res) => {
     const profileTypeOf = (f) =>
       f.fileType === FA_FILE_TYPE.MUTUAL_FUND ? PROFILE_TYPE.FA_MUTUAL_FUND : PROFILE_TYPE.FA;
 
-    const only = faFiles.length === 1 ? faFiles[0] : null;
-    const passThrough =
-      only &&
-      only.fileType !== FA_FILE_TYPE.MUTUAL_FUND &&
-      isDefaultProfile(PROFILE_TYPE.FA, profiles[PROFILE_TYPE.FA]);
-
-    let data;
-    let importFileName;
-
-    if (passThrough) {
-      // One regular file on the built-in template: hand over the original bytes,
-      // exactly as before the mutual fund file existed.
-      data = await getBuffer(bucket, only.key);
-      importFileName = only.originalFileName || "transaction.csv";
-    } else {
-      const merged = [];
-      for (const f of faFiles) {
-        const type = profileTypeOf(f);
-        const relaid = await parseFaFile(await getBuffer(bucket, f.key), {
-          profile: profiles[type],
-          type,
+    const merged = [];
+    for (const f of faFiles) {
+      const type = profileTypeOf(f);
+      const relaid = await parseFaFile(await getBuffer(bucket, f.key), {
+        profile: profiles[type],
+        type,
+      });
+      if (!relaid.ok) {
+        return fail(res, 409, {
+          code: "FA_RELAYOUT_FAILED",
+          message:
+            "The transaction file no longer reads against the saved field mapping, so it cannot be rewritten into the format the import expects. Check the mapping, upload the file again and re-run the match.",
+          fileName: f.originalFileName,
         });
-        if (!relaid.ok) {
-          return fail(res, 409, {
-            code: "FA_RELAYOUT_FAILED",
-            message:
-              "The transaction file no longer reads against the saved field mapping, so it cannot be rewritten into the format the import expects. Check the mapping, upload the file again and re-run the match.",
-            fileName: f.originalFileName,
-          });
-        }
-        merged.push(...relaid.rows);
       }
-      // TDS and Stamp Duty come only from the mutual fund file; without it the
-      // import file stays the plain 26-column template.
-      const withDeductions = faFiles.some((f) => f.fileType === FA_FILE_TYPE.MUTUAL_FUND);
-      data = Buffer.from(faRowsToConsolidatedCsv(merged, { withDeductions }), "utf8");
-      importFileName = only?.originalFileName || `transactions-${run.businessDate}.csv`;
+      merged.push(...relaid.rows);
     }
+    // TDS and Stamp Duty come only from the mutual fund file; without it the
+    // import file stays the plain 26-column template.
+    const withDeductions = faFiles.some((f) => f.fileType === FA_FILE_TYPE.MUTUAL_FUND);
+    const data = Buffer.from(faRowsToConsolidatedCsv(merged, { withDeductions }), "utf8");
+    const importFileName =
+      faFiles.length === 1 && faFiles[0].originalFileName
+        ? faFiles[0].originalFileName
+        : `transactions-${run.businessDate}.csv`;
 
     // Put back exactly what was there if the import refuses the file, rather
     // than a hardcoded "no differences" that would be a lie on a run that had some.
