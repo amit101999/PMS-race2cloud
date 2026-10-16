@@ -16,6 +16,7 @@ import { Readable } from "stream";
 
 import { FA_HEADERS } from "../../util/custodyMatch/constants.js";
 import { detectCustodyFormat } from "../../util/custodyMatch/parseCustody.js";
+import { detectFaFileType } from "../../util/custodyMatch/parseFA.js";
 import {
   FIELD_CATALOG,
   FORMAT_TO_PROFILE_TYPE,
@@ -27,6 +28,7 @@ import {
   describeColumns,
   fromStoredProfile,
   isDefaultProfile,
+  isFaProfileType,
   readHeaderColumns,
   toStoredProfile,
   validateProfile,
@@ -417,10 +419,18 @@ export const previewHeaders = async (req, res) => {
      * custodian layouts, and the FA file arrives through its own control.
      */
     let detectedType = null;
-    // The holdings and corporate actions files are not deal-allocation layouts,
-    // so detection has nothing to say about them.
-    if (
-      asked !== PROFILE_TYPE.FA &&
+    if (isFaProfileType(asked)) {
+      // Equity vs Mutual Funds transaction file: told apart by TDS / Stamp Duty
+      // amounts, the same check the upload repeats.
+      try {
+        const profiles = req.catalystApp ? await loadFieldMapProfiles(req.catalystApp) : null;
+        detectedType = await detectFaFileType(file.data, { profiles });
+      } catch (detectErr) {
+        console.warn("previewHeaders: could not detect the transaction file type:", detectErr.message);
+      }
+    } else if (
+      // The holdings and corporate actions files are not deal-allocation
+      // layouts, so detection has nothing to say about them.
       asked !== PROFILE_TYPE.CUSTODY_HOLDINGS &&
       asked !== PROFILE_TYPE.CUSTODY_CORP_ACTION &&
       asked !== PROFILE_TYPE.CUSTODY_CORP_ALLOCATION

@@ -298,8 +298,8 @@ async function pollBulkWriteAndComplete(catalystApp, bulkJobId, meta) {
 
 /**
  * Bank / broker export: row-1 headers — exact count (26), order, spelling, and case.
- * Three literal `filler` headers after BankRef match the broker file; first two map by position to NETRATE / Net_Amount.
- * SETDATEFLAG, MKTRATE, and the third `filler` are layout-only (not inserted).
+ * Three literal `filler` headers after BankRef match the broker file; by position they are Sub Folio,
+ * Transaction Fee and Transaction Fee Service Tax. SETDATEFLAG is layout-only (not inserted).
  */
 const EXPECTED_HEADERS_IN_ORDER = [
   "Broker Code",
@@ -330,14 +330,15 @@ const EXPECTED_HEADERS_IN_ORDER = [
   "CashSetdate",
 ];
 
-/** 0-based column indices of literal `filler` in the template (first two → DB, third dropped). */
+/** 0-based column indices of literal `filler` in the template, in order. */
 const FILLER_TEMPLATE_INDICES = EXPECTED_HEADERS_IN_ORDER.map((h, i) =>
   h === "filler" ? i : -1,
 ).filter((i) => i >= 0);
 
 /**
  * CSV header (exact) → Transaction column name(s) for bulk insert.
- * String or string[] (duplicated value). Unmapped columns (SETDATEFLAG, MKTRATE, third filler) dropped in rewrite.
+ * String or string[] (duplicated value). Unmapped columns (SETDATEFLAG) dropped in rewrite.
+ * The three `filler` columns are mapped by position in mapSourceColumnToTargets.
  */
 const HEADER_MAP = {
   "Broker Code": ["WS_client_id", "BROKERCODE"],
@@ -351,6 +352,7 @@ const HEADER_MAP = {
   RATE: "RATE",
   BROKERAGEPERSHARE: "BROKERAGE",
   SERVICETAX: "SERVICETAX",
+  MKTRATE: "MKTRATE",
   CASHSYMBOLCODE: "Security_code",
   TRANEXPENSE: "STT",
   ACCRUEDINTEREST: "ACCRUEDINTEREST",
@@ -383,8 +385,9 @@ function mapSourceColumnToTargets(raw, columnIndex) {
   }
   if (raw !== "filler") return null;
   const ord = FILLER_TEMPLATE_INDICES.indexOf(columnIndex);
-  if (ord === 0) return "NETRATE";
-  if (ord === 1) return "Net_Amount";
+  if (ord === 0) return "SUB_FOLIO";
+  if (ord === 1) return "TOTAL_TRXNFEE";
+  if (ord === 2) return "TOTAL_TRXNFEE_STAX";
   return null;
 }
 
@@ -513,8 +516,8 @@ function isBuyTransType(tranType) {
 }
 
 /**
- * Derive NETRATE / Net_Amount from the raw broker columns. Used when the current
- * broker file format leaves the NETRATE / Net_Amount filler columns blank.
+ * Derive NETRATE / Net_Amount from the raw broker columns. The file has no
+ * column for either, so every row is calculated here.
  * Convention matches the historical rows already in `Transaction`:
  *   NETRATE    = RATE ± BROKERAGEPERSHARE   (+ for buys, − for sells)
  *   Net_Amount = QTY × NETRATE
@@ -582,9 +585,9 @@ function csvCell(value) {
 
 /**
  * Rewrites CSV for bulk insert: maps template headers to Transaction column names;
- * one source column can fill multiple DB columns. Unmapped template columns (e.g. SETDATEFLAG, MKTRATE, third filler) dropped.
- * When the file's NETRATE / Net_Amount filler columns are blank, they are derived
- * automatically from RATE / BROKERAGEPERSHARE / QTY / TRANSTYPE (see deriveNetRateAndAmount).
+ * one source column can fill multiple DB columns. Unmapped template columns (SETDATEFLAG) dropped.
+ * NETRATE and Net_Amount are appended to every row, always derived from
+ * RATE / BROKERAGEPERSHARE / QTY / TRANSTYPE (see deriveNetRateAndAmount).
  */
 function normalizeCsvForBulkUpload(fileBuffer) {
   const text = stripBom(fileBuffer.toString("utf8"));
@@ -611,7 +614,7 @@ function normalizeCsvForBulkUpload(fileBuffer) {
   const rateIdx = srcIdx("RATE");
   const brokIdx = srcIdx("BROKERAGEPERSHARE");
 
-  const newHeaders = headerMappings.flatMap((m) => m.targets);
+  const newHeaders = [...headerMappings.flatMap((m) => m.targets), "NETRATE", "Net_Amount"];
   const outSep = ",";
   const newLines = [newHeaders.join(outSep)];
 
@@ -621,7 +624,6 @@ function normalizeCsvForBulkUpload(fileBuffer) {
     if (cells.length === 1 && cells[0] === "") continue;
     const cellAt = (i) => (i >= 0 && i < cells.length ? cells[i] : "");
 
-    // Auto-fill NETRATE / Net_Amount when the broker file leaves them blank.
     const derived = deriveNetRateAndAmount({
       tranType: cellAt(typeIdx),
       qty: cellAt(qtyIdx),
@@ -632,13 +634,9 @@ function normalizeCsvForBulkUpload(fileBuffer) {
     const outCells = [];
     for (const m of headerMappings) {
       const raw = m.idx < cells.length ? cells[m.idx] : "";
-      for (const target of m.targets) {
-        let v = raw;
-        if (v === "" && target === "NETRATE") v = derived.netRate;
-        else if (v === "" && target === "Net_Amount") v = derived.netAmount;
-        outCells.push(csvCell(v));
-      }
+      for (let t = 0; t < m.targets.length; t++) outCells.push(csvCell(raw));
     }
+    outCells.push(derived.netRate, derived.netAmount);
     newLines.push(outCells.join(outSep));
   }
 

@@ -65,6 +65,10 @@ export const PROFILE_TYPE = {
 
 export const PROFILE_TYPES = Object.values(PROFILE_TYPE);
 
+/** The two transaction-file (fund accounting) profiles, as opposed to the custodian ones. */
+export const isFaProfileType = (type) =>
+  type === PROFILE_TYPE.FA || type === PROFILE_TYPE.FA_MUTUAL_FUND;
+
 /** Stored blobs carry this so a later shape change can migrate rather than misread. */
 export const PROFILE_VERSION = 1;
 
@@ -313,6 +317,16 @@ const FA_FIELDS = [
   { field: "chequeNumber", label: "Cheque Number", kind: "text", required: true },
   { field: "chequeDetail", label: "Cheque Detail", kind: "text", required: true },
   { field: "bankRef", label: "Bank Ref", kind: "text", required: true },
+  // The three template columns headed "filler". Often blank, so they may be
+  // left unanswered on the mapping screen.
+  { field: "subFolio", label: "filler/Sub Folio", kind: "text", required: false },
+  { field: "transactionFee", label: "filler/Transaction_Fee", kind: "number", required: false },
+  {
+    field: "transactionFeeServiceTax",
+    label: "filler/Transaction_Fee_Service_Tax",
+    kind: "number",
+    required: false,
+  },
   { field: "cashSetdate", label: "Cash Settlement Date", kind: "date", required: true },
 ];
 
@@ -488,8 +502,15 @@ const FA_DEFAULT_PROFILE = {
   chequeNumber: byIndex(19),
   chequeDetail: byIndex(20),
   bankRef: byIndex(21),
+  // The three "filler" columns, in order.
+  subFolio: byIndex(22),
+  transactionFee: byIndex(23),
+  transactionFeeServiceTax: byIndex(24),
   cashSetdate: byIndex(25),
 };
+
+/** Fields added after mappings were first saved; see withNewFillerFields. */
+const FA_FILLER_FIELDS = ["subFolio", "transactionFee", "transactionFeeServiceTax"];
 
 export const DEFAULT_PROFILES = {
   [PROFILE_TYPE.FA]: FA_DEFAULT_PROFILE,
@@ -1077,8 +1098,8 @@ export const toStoredProfile = (type, profile, { updatedBy = "", updatedAtMs = D
  * drop them on read so such a mapping stays valid instead of silently falling
  * back to the default.
  *
- * Net Rate and Net Amount on the transaction files: the import derives them
- * (RATE ± brokerage, × quantity) when the cells are blank.
+ * Net Rate and Net Amount on the transaction files: the import always derives
+ * them (RATE ± brokerage, × quantity).
  * Transaction Date on NDPMS: every row takes the date picked for the file.
  */
 const RETIRED_FIELDS = {
@@ -1093,6 +1114,21 @@ const withoutRetiredFields = (type, profile) => {
   return kept;
 };
 
+/*
+ * The three filler fields are optional, so a transaction mapping saved before
+ * they existed is never asked about them, and their values would silently stop
+ * reaching the import. Give such a mapping the standard filler positions; the
+ * mapping screen shows them and the user can still change them.
+ */
+const withNewFillerFields = (type, profile) => {
+  if (!isFaProfileType(type)) return profile;
+  const filled = { ...profile };
+  for (const field of FA_FILLER_FIELDS) {
+    if (!filled[field]) filled[field] = { ...FA_DEFAULT_PROFILE[field] };
+  }
+  return filled;
+};
+
 export const fromStoredProfile = (type, blob) => {
   const fallback = {
     profile: defaultProfile(type),
@@ -1104,7 +1140,7 @@ export const fromStoredProfile = (type, blob) => {
   if (!blob || typeof blob !== "object" || !blob.profile) return fallback;
   if (blob.version !== PROFILE_VERSION) return fallback;
 
-  const profile = withoutRetiredFields(type, blob.profile);
+  const profile = withNewFillerFields(type, withoutRetiredFields(type, blob.profile));
   if (!validateProfile(type, profile).ok) return fallback;
 
   return {
@@ -1128,8 +1164,9 @@ export const FA_DEFAULT_COLUMNS = FA_HEADERS.map((name, index) => ({
  *
  * The inverse of the FA default profile, and the thing that lets a file in ANY
  * layout be rewritten into the template the production import still expects.
- * The three "filler" columns (23-25) have no field. The first two are NETRATE and
- * Net_Amount, which the import derives when blank; the third it drops anyway.
+ * The three "filler" columns (23-25) are Sub Folio, Transaction Fee and
+ * Transaction Fee Service Tax. NETRATE and Net_Amount have no column: the
+ * import always calculates them.
  */
 export const FA_TEMPLATE_SLOT = Object.fromEntries(
   Object.entries(DEFAULT_PROFILES[PROFILE_TYPE.FA]).map(([field, source]) => [field, source.index]),

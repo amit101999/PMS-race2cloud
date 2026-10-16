@@ -192,6 +192,8 @@ Upload → Validate → Match → Review Exceptions → Commit. Business guide 3
   - The trade file headers in `TempTransactionUpload.js` must match `util/custodyMatch/constants.js`.
   - The field mapping code also serves Custodian Upload and Holding Comparison.
   - A change to how `Transaction` rows are written affects holdings, cash, Analytics and Reports.
+  - The three FA `filler` columns are the optional Sub Folio, Transaction Fee and Transaction Fee Service Tax fields. The import writes them to `SUB_FOLIO`, `TOTAL_TRXNFEE` and `TOTAL_TRXNFEE_STAX`, and always calculates `NETRATE` / `Net_Amount` itself (`TempTransactionUpload.js`). `MKTRATE` (Market Rate) is saved to `MKTRATE`; only SETDATEFLAG is dropped. `SUB_FOLIO` must exist in every environment, or the commit fails.
+  - Equity vs Mutual Funds transaction file is decided by `detectFaFileType` in `parseFA.js` (a TDS or Stamp Duty amount on any row means Mutual Funds). It runs in the field-map preview when the file is picked and again in `uploadFaFile`.
 
 ### 4.5 Transaction Deletion
 Find committed trades by commit date, delete the wrong ones, and see what was deleted on each day. Business guide 3.5.
