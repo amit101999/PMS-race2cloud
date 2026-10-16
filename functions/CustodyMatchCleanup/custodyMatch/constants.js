@@ -264,6 +264,10 @@ export const FILE_ERROR = {
   UNMAPPED_COLUMNS: "UNMAPPED_COLUMNS",
   /** The file's headings do not match the saved mapping for this file type. */
   HEADER_MAPPING_MISMATCH: "HEADER_MAPPING_MISMATCH",
+  /** An NRE/NRO/NDPMS file has no readable file date in its first row (B2). */
+  FILE_DATE_MISSING: "FILE_DATE_MISSING",
+  /** An NRE/NRO/NDPMS file's own date (B2) is not the date picked for it. */
+  FILE_DATE_MISMATCH: "FILE_DATE_MISMATCH",
 };
 
 /** Row-level failures. The row is rejected; the rest of the file still parses. */
