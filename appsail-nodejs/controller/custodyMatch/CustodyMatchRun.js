@@ -10,7 +10,7 @@
  *   Gate 2  POST /run/:id/proceed — status COMPLETED_CLEAN AND exceptionCount === 0
  */
 
-import { FA_FILE_TYPE, FILE_SIDE, RUN_STATUS, STAGE } from "../../util/custodyMatch/constants.js";
+import { FA_FILE_TYPE, FILE_SIDE, RUN_STATUS } from "../../util/custodyMatch/constants.js";
 import {
   buildRunDatesKey,
   getBucket,
@@ -22,16 +22,17 @@ import {
 import { PROFILE_TYPE, isDefaultProfile } from "../../util/custodyMatch/fieldMap.js";
 import { faRowsToConsolidatedCsv, parseFaFile } from "../../util/custodyMatch/parseFA.js";
 import {
+  IMPORTED_MARKER,
   allExceptions,
   createRun,
   exceptionTypeCounts,
+  failRun,
   getLatestRunForDate,
   getRun,
   isGateOpen,
   listRunsWithExceptions,
   newRunId,
   pageExceptions,
-  setStage,
   setStageDetail,
   findImportedRunForDate,
   listFiles,
@@ -46,9 +47,6 @@ import { uploadDayFiles } from "./CustodyMatchUpload.js";
 
 const JOB_POOL = "CustodyMatch";
 const JOB_TARGET = "CustodyMatchRunner";
-
-/** Marks a run whose file has been handed to the import pipeline. See the note on proceedToImport. */
-const IMPORTED_MARKER = "Imported into production";
 
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -234,10 +232,13 @@ export const startRun = async (req, res) => {
         params: { runId, businessDate, uploadDate },
       });
     } catch (submitErr) {
-      // The run row exists but nothing will pick it up — say so rather than
-      // leaving the screen polling a run that will never move.
+      // The run row exists but nothing will pick it up. FAILED, not RUNNING, so
+      // the screen stops polling and Retry can queue it again.
       console.error("[CustodyMatchRun] submitJob:", submitErr);
-      await setStage(catalystApp, runId, STAGE.VALIDATE, "Could not queue the job");
+      await failRun(catalystApp, runId, {
+        errorCode: "JOB_SUBMIT_FAILED",
+        errorMessage: `Could not queue the job: ${submitErr.message}`,
+      });
       return fail(res, 502, {
         code: "JOB_SUBMIT_FAILED",
         runId,
@@ -722,7 +723,8 @@ export const proceedToImport = async (req, res) => {
 
     const syntheticReq = {
       catalystApp,
-      body: {},
+      // Lets a background import failure take the mark back off this run.
+      body: { custodyRunId: runId },
       query: {},
       headers: {},
       files: { file: { name: importFileName, data } },

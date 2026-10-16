@@ -535,6 +535,15 @@ module.exports = async (jobRequest, context) => {
   } catch (error) {
     const code = error?.code || "UNEXPECTED_ERROR";
     const message = error?.message || String(error);
+
+    // A file or mapping changed mid-run (runStore refuses the status write).
+    // The run stays SUPERSEDED; succeeding stops Catalyst retrying it.
+    if (code === "RUN_SUPERSEDED") {
+      log("superseded while working — stopping; the date must be matched again");
+      context.closeWithSuccess();
+      return;
+    }
+
     console.error(`CustodyMatchRunner failed (${code}):`, message);
 
     try {

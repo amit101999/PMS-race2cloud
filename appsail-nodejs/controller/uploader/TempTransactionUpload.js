@@ -2,6 +2,7 @@ import csv from "csv-parser";
 import { PassThrough, Readable } from "stream";
 
 import { stratusSignedUrlToString } from "../../util/stratusSignedUrl.js";
+import { releaseImportMarker } from "../../util/custodyMatch/runStore.js";
 
 const BUCKET_NAME = "client-transaction-files";
 const TABLE_NAME = "Transaction";
@@ -119,6 +120,20 @@ async function failTxnUploadPipeline(catalystApp, pipelineJobName, reason) {
   console.error(`[TxnUploadPipeline] FAILED: ${reason}`);
   if (!pipelineJobName) return;
   await updateJobsStatus(catalystApp.zcql(), pipelineJobName, "FAILED");
+}
+
+/**
+ * The bulk job reported FAILED: take the "Imported" mark off the matching run so
+ * the date can be committed again. Not called on a poll timeout — the job may
+ * still finish, and unlocking then could import the date twice.
+ */
+async function releaseCustodyRun(catalystApp, custodyRunId) {
+  if (!custodyRunId) return;
+  try {
+    await releaseImportMarker(catalystApp, custodyRunId);
+  } catch (e) {
+    console.warn(`[TxnUploadPipeline] could not reopen run ${custodyRunId}:`, e.message);
+  }
 }
 
 /**
@@ -261,6 +276,7 @@ async function pollBulkWriteAndComplete(catalystApp, bulkJobId, meta) {
           meta.pipelineJobName,
           JSON.stringify(res),
         );
+        await releaseCustodyRun(catalystApp, meta.custodyRunId);
         return;
       }
       if (!isBulkInProgressStatus(st) && norm) {
@@ -516,6 +532,55 @@ function deriveNetRateAndAmount({ tranType, qty, rate, brokeragePerShare }) {
 }
 
 /**
+ * Splits CSV text into rows of cells, honouring double quotes: a quoted cell may
+ * hold the separator, a line break, or a doubled "" for a literal quote. Cutting
+ * each line at every comma instead shifts every column after a value such as
+ * "TATA MOTORS LTD, DVR" into the wrong Transaction field.
+ */
+function parseCsvRows(text, separator) {
+  const rows = [];
+  let row = [];
+  let cell = "";
+  let inQuotes = false;
+
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (inQuotes) {
+      if (ch === '"' && text[i + 1] === '"') {
+        cell += '"';
+        i++;
+      } else if (ch === '"') {
+        inQuotes = false;
+      } else {
+        cell += ch;
+      }
+    } else if (ch === '"') {
+      inQuotes = true;
+    } else if (ch === separator) {
+      row.push(cell);
+      cell = "";
+    } else if (ch === "\n" || ch === "\r") {
+      if (ch === "\r" && text[i + 1] === "\n") i++;
+      row.push(cell);
+      rows.push(row);
+      row = [];
+      cell = "";
+    } else {
+      cell += ch;
+    }
+  }
+  row.push(cell);
+  rows.push(row);
+  return rows;
+}
+
+/** CSV cell for the bulk-write file: quoted when it holds a comma, quote or line break. */
+function csvCell(value) {
+  const s = String(value ?? "");
+  return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+
+/**
  * Rewrites CSV for bulk insert: maps template headers to Transaction column names;
  * one source column can fill multiple DB columns. Unmapped template columns (e.g. SETDATEFLAG, MKTRATE, third filler) dropped.
  * When the file's NETRATE / Net_Amount filler columns are blank, they are derived
@@ -523,15 +588,12 @@ function deriveNetRateAndAmount({ tranType, qty, rate, brokeragePerShare }) {
  */
 function normalizeCsvForBulkUpload(fileBuffer) {
   const text = stripBom(fileBuffer.toString("utf8"));
-  const lines = text.split(/\r?\n/);
-  if (!lines.length) return fileBuffer;
+  const separator = detectSeparator(getFirstLineText(fileBuffer));
+  const rows = parseCsvRows(text, separator).map((cells) =>
+    cells.map((c) => c.trim().replace(/^\uFEFF/, "")),
+  );
 
-  const firstLine = lines[0] ?? "";
-  const separator = detectSeparator(firstLine);
-  const splitLine = (line) =>
-    line.split(separator).map((c) => c.trim().replace(/^\uFEFF/, ""));
-
-  const originalHeaders = splitLine(lines[0]);
+  const originalHeaders = rows[0];
   const headerMappings = [];
   for (let i = 0; i < originalHeaders.length; i++) {
     const raw = originalHeaders[i];
@@ -553,10 +615,10 @@ function normalizeCsvForBulkUpload(fileBuffer) {
   const outSep = ",";
   const newLines = [newHeaders.join(outSep)];
 
-  for (let r = 1; r < lines.length; r++) {
-    const line = lines[r];
-    if (!line.trim()) continue;
-    const cells = splitLine(line);
+  for (let r = 1; r < rows.length; r++) {
+    const cells = rows[r];
+    // A blank line reads as one empty cell.
+    if (cells.length === 1 && cells[0] === "") continue;
     const cellAt = (i) => (i >= 0 && i < cells.length ? cells[i] : "");
 
     // Auto-fill NETRATE / Net_Amount when the broker file leaves them blank.
@@ -574,7 +636,7 @@ function normalizeCsvForBulkUpload(fileBuffer) {
         let v = raw;
         if (v === "" && target === "NETRATE") v = derived.netRate;
         else if (v === "" && target === "Net_Amount") v = derived.netAmount;
-        outCells.push(v);
+        outCells.push(csvCell(v));
       }
     }
     newLines.push(outCells.join(outSep));
@@ -822,6 +884,8 @@ export const uploadTempTransaction = async (req, res) => {
     const objectKey = `transactions/TxnUpload-${uploadMs}-${file.name}`;
     const originalObjectKey = `transactions-original/TxnUpload-${uploadMs}-${file.name}`;
     pipelineJobName = `TxnCsv_${uploadMs}`.slice(0, 48);
+    // Set when the commit comes from custody matching (CustodyMatchRun.js).
+    const custodyRunId = String(req.body?.custodyRunId || "").trim();
 
     const bucket = catalystApp.stratus().bucket(BUCKET_NAME);
 
@@ -902,6 +966,7 @@ export const uploadTempTransaction = async (req, res) => {
       importStartedAtMs: String(uploadMs),
       objectKey,
       hasPairs: String(hasPairs),
+      custodyRunId,
     };
     const callbackUrl =
       `${APPSAIL_BASE_URL}/api/transaction-uploader/bulk-callback` +
@@ -940,6 +1005,7 @@ export const uploadTempTransaction = async (req, res) => {
       importStartedAtMs: String(uploadMs),
       objectKey,
       hasPairs,
+      custodyRunId,
     };
 
     void pollBulkWriteAndComplete(catalystApp, bulkJob.job_id, pipelineMeta).catch(
@@ -1026,6 +1092,7 @@ export const handleBulkCallback = async (req, res) => {
       importStartedAtMs: String(p.importStartedAtMs || "").trim(),
       objectKey: String(p.objectKey || "").trim(),
       hasPairs: p.hasPairs === "true" || p.hasPairs === true,
+      custodyRunId: String(p.custodyRunId || "").trim(),
     };
 
     console.log(
@@ -1038,6 +1105,7 @@ export const handleBulkCallback = async (req, res) => {
         meta.pipelineJobName,
         "bulk callback FAILED",
       );
+      await releaseCustodyRun(catalystApp, meta.custodyRunId);
       return;
     }
 
