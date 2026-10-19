@@ -316,12 +316,15 @@ const CustodyMatchPanel = ({
        always sent these; the screen was dropping them. */
     const [faWarnings, setFaWarnings] = useState([]);
 
-    const [run, setRun] = useState(null);
+    /* One run per date shown, oldest date first. */
+    const [runs, setRuns] = useState([]);
     const [runError, setRunError] = useState(null);
     const [starting, setStarting] = useState(false);
     /* Set when Match handed back a report that already existed. */
     const [reusedNote, setReusedNote] = useState("");
-    const [showFailDetails, setShowFailDetails] = useState(false);
+    /* The failed run whose technical details are open, if any. */
+    const [failDetailsRunId, setFailDetailsRunId] = useState("");
+    const anyRunning = runs.some((r) => r.isRunning);
 
     /* Every date with uploaded files, from the file table. Backs the summary
        and the dialog Match opens. */
@@ -354,40 +357,47 @@ const CustodyMatchPanel = ({
 
     /* ── loading a date ───────────────────────────────────────────────── */
 
-    /* The file date whose match result is shown. Set only when the user starts
-       a match (the first ticked date), so picking an upload date never shows an
-       earlier result on its own. */
-    const [resultDate, setResultDate] = useState("");
+    /* The file dates whose match results are shown, oldest first. Set only when
+       the user starts a match (every ticked date), so picking an upload date
+       never shows an earlier result on its own. */
+    const [resultDates, setResultDates] = useState([]);
 
     // A new upload date starts with no result on screen.
     useEffect(() => {
-        setResultDate("");
+        setResultDates([]);
     }, [uploadDate]);
 
     const loadDay = useCallback(async () => {
         // No date chosen (the screen starts that way, or it was cleared): there
         // is nothing to show, and the previous date's files must not linger.
-        if (!resultDate || !uploadDate) {
+        if (resultDates.length === 0 || !uploadDate) {
             setDay(null);
-            setRun(null);
+            setRuns([]);
             return;
         }
         setDayLoading(true);
         try {
-            // Runs belong to an upload date: the result for this file date under it.
-            const res = await api.getLatestRun(resultDate, uploadDate);
-            setDay(res.day);
+            // Runs belong to an upload date: the result for each file date under it.
+            const results = await Promise.all(
+                resultDates.map((date) => api.getLatestRun(date, uploadDate)),
+            );
+            // Only the stepper reads the day, so the first date's is enough.
+            setDay(results[0].day);
             // A superseded run was matched against files or a mapping that have
             // since changed, so its result no longer describes this date. Treat
             // the date as not yet matched rather than showing a stale result.
-            setRun(res.run?.status === "SUPERSEDED" ? null : res.run);
+            setRuns(
+                results
+                    .map((res) => res.run)
+                    .filter((r) => r && r.status !== "SUPERSEDED"),
+            );
             setRunError(null);
         } catch (err) {
             setRunError({ message: err.message, detail: err.detail });
         } finally {
             setDayLoading(false);
         }
-    }, [resultDate, uploadDate]);
+    }, [resultDates, uploadDate]);
 
     useEffect(() => {
         loadDay();
@@ -480,18 +490,21 @@ const CustodyMatchPanel = ({
     }, [loadSchemes]);
 
     useEffect(() => {
-        if (onRunChange) onRunChange(run);
-    }, [run, onRunChange]);
+        if (onRunChange) onRunChange(runs);
+    }, [runs, onRunChange]);
 
     /* ── polling ──────────────────────────────────────────────────────── */
 
-    const runId = run?.runId;
-    const runIsRunning = run?.isRunning;
+    // A string, so the effect restarts only when the set of moving runs changes.
+    const runningIds = runs
+        .filter((r) => r.isRunning)
+        .map((r) => r.runId)
+        .join(",");
 
     useEffect(() => {
-        // Poll only while the job is actually moving, and always clear on unmount
+        // Poll only while a job is actually moving, and always clear on unmount
         // so a navigation away does not leave a timer calling into a dead screen.
-        if (!runId || !runIsRunning) {
+        if (!runningIds) {
             if (pollRef.current) {
                 clearInterval(pollRef.current);
                 pollRef.current = null;
@@ -501,9 +514,16 @@ const CustodyMatchPanel = ({
 
         pollRef.current = setInterval(async () => {
             try {
-                const res = await api.getRun(runId);
-                // A file or mapping changed mid-run: same rule as loadDay, hide the stale run.
-                setRun(res.run?.status === "SUPERSEDED" ? null : res.run);
+                const latest = await Promise.all(
+                    runningIds.split(",").map((id) => api.getRun(id)),
+                );
+                const byId = new Map(latest.map((res) => [res.run?.runId, res.run]));
+                setRuns((prev) =>
+                    prev
+                        .map((r) => (byId.has(r.runId) ? byId.get(r.runId) : r))
+                        // A file or mapping changed mid-run: same rule as loadDay, hide the stale run.
+                        .filter((r) => r && r.status !== "SUPERSEDED"),
+                );
             } catch (err) {
                 setRunError({ message: err.message, detail: err.detail });
             }
@@ -515,7 +535,7 @@ const CustodyMatchPanel = ({
                 pollRef.current = null;
             }
         };
-    }, [runId, runIsRunning]);
+    }, [runningIds]);
 
     /* ── custodian files ──────────────────────────────────────────────── */
 
@@ -738,7 +758,7 @@ const CustodyMatchPanel = ({
     /* Enabled only when an upload date is picked and a file uploaded that day
        leaves some date with both an FA and a custodian file. The date list is
        reloaded after every upload and remove, so this follows them. */
-    const gateOneOpen = readyDateCount > 0 && !run?.isRunning && !starting;
+    const gateOneOpen = readyDateCount > 0 && !anyRunning && !starting;
 
     let blockerMessage = "";
     if (!uploadDate) {
@@ -751,8 +771,8 @@ const CustodyMatchPanel = ({
 
     /**
      * One match per ticked date, started one after another. Each run is tracked
-     * in the bell; the screen then shows the first date's result. Reports with
-     * differences are also listed under Previous reports.
+     * in the bell, and the screen shows every ticked date's result together.
+     * Reports with differences are also listed under Previous reports.
      */
     const startMatch = async (dates) => {
         setPickerOpen(false);
@@ -762,12 +782,13 @@ const CustodyMatchPanel = ({
 
         const failures = [];
         const reused = [];
-        let firstStarted = null;
+        // Every date that has a run now, started or reused, in date order.
+        const started = [];
 
         for (const date of dates) {
             try {
                 const res = await api.startRun(date, uploadDate);
-                if (!firstStarted) firstStarted = { date, runId: res.runId };
+                started.push({ date, runId: res.runId });
                 if (res.reused) {
                     /* Nothing was re-run: the same files can only say the same thing. */
                     reused.push(date);
@@ -791,10 +812,10 @@ const CustodyMatchPanel = ({
         }
 
         try {
-            if (firstStarted) {
-                const status = await api.getRun(firstStarted.runId);
-                setRun(status.run);
-                setResultDate(firstStarted.date);
+            if (started.length > 0) {
+                const statuses = await Promise.all(started.map((s) => api.getRun(s.runId)));
+                setRuns(statuses.map((s) => s.run).filter(Boolean));
+                setResultDates(started.map((s) => s.date));
             }
             if (reused.length > 0) {
                 setReusedNote(
@@ -834,7 +855,7 @@ const CustodyMatchPanel = ({
             return next;
         });
 
-    const handleRetry = async () => {
+    const handleRetry = async (run) => {
         try {
             await api.retryRun(run.runId);
             trackJob({
@@ -843,7 +864,7 @@ const CustodyMatchPanel = ({
                 message: "Retrying the match in the background.",
             });
             const status = await api.getRun(run.runId);
-            setRun(status.run);
+            setRuns((prev) => prev.map((r) => (r.runId === run.runId ? status.run : r)));
         } catch (err) {
             setRunError({ message: err.message, detail: err.detail });
         }
@@ -959,8 +980,8 @@ const CustodyMatchPanel = ({
         setPending({ kind: "fa", file: f, fileType: faFileType, profileType });
     };
 
-    const custodyZoneDisabled = addBusy || Boolean(run?.isRunning);
-    const faZoneDisabled = faBusy || Boolean(run?.isRunning);
+    const custodyZoneDisabled = addBusy || anyRunning;
+    const faZoneDisabled = faBusy || anyRunning;
 
     /*
      * The date a card's file is for. Every row must carry it, and the file is
@@ -1154,7 +1175,7 @@ const CustodyMatchPanel = ({
                                             type="button"
                                             className="up-file-remove"
                                             onClick={() => removeCustodyFile(f)}
-                                            disabled={run?.isRunning || Boolean(removingKey)}
+                                            disabled={anyRunning || Boolean(removingKey)}
                                             aria-label={`Remove ${f.originalFileName}`}
                                         >
                                             &times;
@@ -1272,7 +1293,7 @@ const CustodyMatchPanel = ({
                                             type="button"
                                             className="up-file-remove"
                                             onClick={() => removeFaFile(f)}
-                                            disabled={faBusy || run?.isRunning || Boolean(removingKey)}
+                                            disabled={faBusy || anyRunning || Boolean(removingKey)}
                                             aria-label={`Remove ${f.originalFileName}`}
                                         >
                                             &times;
@@ -1313,22 +1334,24 @@ const CustodyMatchPanel = ({
                         onClick={handleMatch}
                         disabled={!gateOneOpen}
                     >
-                        {run?.isRunning || starting ? "Matching…" : "Run FA vs Custody Matching"}
+                        {anyRunning || starting ? "Matching…" : "Run FA vs Custody Matching"}
                     </button>
 
                     {/* One short sentence, not the raw blocker list — a greyed-out
                         button with no explanation is the thing users complain about,
                         but a paragraph of reasons is just as unhelpful in a hurry. */}
-                    {blockerMessage && !run?.isRunning ? (
+                    {blockerMessage && !anyRunning ? (
                         <p className="cm-blockers">{blockerMessage}</p>
                     ) : null}
                 </div>
 
-                {run ? (
-                    <div className={`cm-progress ${run.status.toLowerCase()}`}>
-                        {/* One row: status and counts on the left, the run ID badge on the right. */}
+                {/* One block per date shown, oldest first. */}
+                {runs.map((run) => (
+                    <div key={run.runId} className={`cm-progress ${run.status.toLowerCase()}`}>
+                        {/* One row: date, status and counts on the left, the run ID badge on the right. */}
                         <div className="cm-progress-head cm-run-head">
                             <div className="cm-run-summary">
+                                <strong className="cm-run-date mono">{run.businessDate}</strong>
                                 <span className="cm-run-status">
                                     {run.isRunning ? (
                                         <StatusBadge tone={STATUS.PROCESSING}>{run.stageDetail || run.status}</StatusBadge>
@@ -1383,18 +1406,20 @@ const CustodyMatchPanel = ({
                                         "Matching failed. Try again, or view details."}
                                 </p>
                                 <div className="cm-verdict-actions">
-                                    <button type="button" className="cm-secondary" onClick={handleRetry}>
+                                    <button type="button" className="cm-secondary" onClick={() => handleRetry(run)}>
                                         Retry
                                     </button>
                                     <button
                                         type="button"
                                         className="cm-linkbtn"
-                                        onClick={() => setShowFailDetails((v) => !v)}
+                                        onClick={() =>
+                                            setFailDetailsRunId((id) => (id === run.runId ? "" : run.runId))
+                                        }
                                     >
-                                        {showFailDetails ? "Hide details" : "View details"}
+                                        {failDetailsRunId === run.runId ? "Hide details" : "View details"}
                                     </button>
                                 </div>
-                                {showFailDetails ? (
+                                {failDetailsRunId === run.runId ? (
                                     <p className="cm-technical-ref">
                                         {run.error?.message ? <span>{run.error.message}<br /></span> : null}
                                         Stage {run.stage} · <span className="mono">{run.runId}</span>
@@ -1404,12 +1429,12 @@ const CustodyMatchPanel = ({
                             </div>
                         ) : null}
                     </div>
-                ) : null}
+                ))}
 
                 {reusedNote ? <div className="cm-reused" role="status">{reusedNote}</div> : null}
 
                 {runError ? <UploadErrorDetails message={runError.message} detail={runError.detail} /> : null}
-                {dayLoading && !run ? <p className="cm-sub">Loading…</p> : null}
+                {dayLoading && runs.length === 0 ? <p className="cm-sub">Loading…</p> : null}
             </div>
 
             {pickerOpen ? (

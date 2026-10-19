@@ -75,8 +75,13 @@ const shapeRun = (row) => {
 /** ZCQL wraps every row under its table name. */
 const unwrap = (result) => (result || []).map((r) => r?.[RUN_TABLE] ?? r).filter(Boolean);
 
+/*
+ * Newest run first, by creation time. Catalyst ROWIDs do not grow with time, so
+ * ordering by ROWID could put an older run ahead of a newer one over the same
+ * files. ROWID only breaks an exact tie.
+ */
 const selectRuns = async (catalystApp, where, limit = ZCQL_PAGE) => {
-  const sql = `SELECT ${RUN_COLS.join(", ")} FROM ${RUN_TABLE} WHERE ${where} ORDER BY ROWID DESC LIMIT ${toInt(limit)}`;
+  const sql = `SELECT ${RUN_COLS.join(", ")} FROM ${RUN_TABLE} WHERE ${where} ORDER BY CREATEDTIME DESC, ROWID DESC LIMIT ${toInt(limit)}`;
   return unwrap(await catalystApp.zcql().executeZCQLQuery(sql)).map(shapeRun);
 };
 

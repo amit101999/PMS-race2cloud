@@ -14,13 +14,14 @@ const qty = (n) =>
         : Number(n).toLocaleString(undefined, { maximumFractionDigits: 4 });
 
 /**
- * The differential report.
+ * The differential report, for every date on screen.
  *
- * Every row here is a difference somebody has to chase. The export is the file
- * the run actually produced — it carries the virtual codes and both reference
- * numbers needed to chase a break in the source files.
+ * Every row here is a difference somebody has to chase. With one date the
+ * export is the file the run actually produced — it carries the virtual codes
+ * and both reference numbers needed to chase a break in the source files. With
+ * several dates it is one file holding every date's differences.
  */
-const ExceptionGrid = ({ run, onCountChange }) => {
+const ExceptionGrid = ({ runs, onCountChange }) => {
     const [data, setData] = useState({ rows: [], total: 0 });
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState(null);
@@ -29,29 +30,30 @@ const ExceptionGrid = ({ run, onCountChange }) => {
     // of the chosen type rather than whichever of the first ten happen to match.
     const [typeFilter, setTypeFilter] = useState("");
 
-    const runId = run?.runId;
+    // A string, so effects re-run only when the set of runs changes.
+    const runIdsKey = runs.map((r) => r.runId).join(",");
 
-    // A new run has its own set of types; keep a filter from the old one and the
-    // grid could open on a type this run does not have.
+    // A new set of runs has its own types; keep a filter from the old one and the
+    // grid could open on a type these runs do not have.
     useEffect(() => {
         setTypeFilter("");
-    }, [runId]);
+    }, [runIdsKey]);
     /*
      * S5 writes the exceptions before S6 sets the terminal status, so "no longer
      * running" is the point at which they are guaranteed to be readable. It is
-     * also a dependency of the fetch: runId does not change when a run finishes,
+     * also a dependency of the fetch: run ids do not change when a run finishes,
      * so without this the grid keeps the empty result it read while the job was
-     * still working and only fills in after a reload.
+     * still working and only fills in after a reload. Waits for every date, so
+     * the list and its total never cover only some of them.
      */
-    const isRunning = Boolean(run?.isRunning);
+    const anyRunning = runs.some((r) => r.isRunning);
 
     const load = useCallback(async () => {
-        if (!runId || isRunning) return;
+        if (!runIdsKey || anyRunning) return;
         setLoading(true);
         setError(null);
         try {
-            const res = await api.getExceptions(runId, {
-                page: 1,
+            const res = await api.getExceptions(runIdsKey.split(","), {
                 size: PREVIEW_ROWS,
                 exceptionType: typeFilter,
             });
@@ -63,25 +65,28 @@ const ExceptionGrid = ({ run, onCountChange }) => {
         } finally {
             setLoading(false);
         }
-    }, [runId, isRunning, typeFilter, onCountChange]);
+    }, [runIdsKey, anyRunning, typeFilter, onCountChange]);
 
     useEffect(() => {
         load();
     }, [load]);
 
+    const firstDate = runs[0]?.businessDate;
+    const lastDate = runs[runs.length - 1]?.businessDate;
+    const dateSpan = firstDate === lastDate ? firstDate : `${firstDate}_to_${lastDate}`;
+
     const handleExport = async () => {
         setExporting(true);
         setError(null);
         try {
-            const res = await api.exportExceptions(runId);
+            const res = await api.exportExceptions(runIdsKey.split(","));
             if (res.downloadUrl) {
                 window.open(res.downloadUrl, "_blank", "noopener,noreferrer");
             } else if (res.rows) {
-                // The stored difference file was unavailable, so the server sent the
-                // rows instead. Build the CSV here rather than leaving the user
-                // with nothing to hand to whoever has to fix the break — using the
-                // column list the server sent, so a rebuilt export is the same
-                // report as a stored one.
+                // Several dates, or a stored file that was unavailable: the server
+                // sent the rows instead. Build the CSV here — using the column list
+                // the server sent, so a rebuilt export is the same report as a
+                // stored one.
                 const cols = res.columns || Object.keys(res.rows[0] || {});
                 const headers = res.headers || cols;
                 const esc = (v) => {
@@ -95,7 +100,7 @@ const ExceptionGrid = ({ run, onCountChange }) => {
                 const url = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
                 const a = document.createElement("a");
                 a.href = url;
-                a.download = `difference-${run.businessDate}-${runId}.csv`;
+                a.download = res.fileName || `difference-${dateSpan}.csv`;
                 a.click();
                 URL.revokeObjectURL(url);
             }
@@ -106,11 +111,18 @@ const ExceptionGrid = ({ run, onCountChange }) => {
         }
     };
 
-    if (!runId || run.isRunning) return null;
-    if (run.counts.exceptions === 0) return null;
+    if (runs.length === 0 || anyRunning) return null;
 
-    // Only the types this run actually has, in the fixed filter order.
-    const byType = run.byType || {};
+    const openExceptions = runs.reduce((sum, r) => sum + (r.counts.exceptions || 0), 0);
+    if (openExceptions === 0) return null;
+
+    // Only the types these runs actually have, in the fixed filter order.
+    const byType = {};
+    for (const r of runs) {
+        for (const [type, count] of Object.entries(r.byType || {})) {
+            byType[type] = (byType[type] || 0) + count;
+        }
+    }
     const typesPresent = api.EXCEPTION_TYPES.filter((t) => byType[t] > 0);
 
     return (
@@ -120,7 +132,7 @@ const ExceptionGrid = ({ run, onCountChange }) => {
                     <div className="cm-card-head-title">
                         <h3>Exception details</h3>
                         <StatusBadge tone={STATUS.WARN}>
-                            {run.counts.exceptions.toLocaleString()} open
+                            {openExceptions.toLocaleString()} open
                         </StatusBadge>
                     </div>
                     <p className="cm-exc-sub">
@@ -148,7 +160,7 @@ const ExceptionGrid = ({ run, onCountChange }) => {
                         onClick={() => setTypeFilter("")}
                     >
                         All
-                        <span className="cm-exc-chip-count">{run.counts.exceptions.toLocaleString()}</span>
+                        <span className="cm-exc-chip-count">{openExceptions.toLocaleString()}</span>
                     </button>
                     {typesPresent.map((t) => (
                         <button

@@ -112,17 +112,17 @@ router.get("/latest-run/:date", getLatestRun);
 // POST /api/custody-match/run — GATE 1
 router.post("/run", startRun);
 
-// GET /api/custody-match/run/:runId/exceptions?page=&size=10&exceptionType=&scheme=&status=&q=&from=&to=
-router.get("/run/:runId/exceptions", getExceptions);
+// GET /api/custody-match/runs/exceptions?runIds=CM-1,CM-2&size=10&exceptionType=&scheme=&status=&q=&from=&to=
+router.get("/runs/exceptions", getExceptions);
 
-// GET /api/custody-match/run/:runId/exceptions/export
-router.get("/run/:runId/exceptions/export", exportExceptions);
+// GET /api/custody-match/runs/exceptions/export?runIds=CM-1,CM-2
+router.get("/runs/exceptions/export", exportExceptions);
 
 // POST /api/custody-match/run/:runId/retry — system failures only
 router.post("/run/:runId/retry", retryRun);
 
-// POST /api/custody-match/run/:runId/proceed — GATE 2
-router.post("/run/:runId/proceed", proceedToImport);
+// POST /api/custody-match/runs/proceed — GATE 2, body { runIds: [...] }
+router.post("/runs/proceed", proceedToImport);
 
 // GET /api/custody-match/run/:runId — poll target
 router.get("/run/:runId", getRunStatus);

@@ -162,7 +162,14 @@ const runSelect = (cols, where, order = "", limit = ZCQL_PAGE, offset = 0) =>
     order ? ` ORDER BY ${order}` : ""
   } LIMIT ${int(limit, ZCQL_PAGE)} OFFSET ${int(offset, 0)}`;
 
-const fetchRunsWhere = async (zcql, where, order = "ROWID DESC", limit = ZCQL_PAGE) => {
+/*
+ * Newest run first. Catalyst ROWIDs do not grow with time — a run created at
+ * 12:23 can hold a smaller ROWID than one created at 12:00 — so "newest" is
+ * decided by creation time. ROWID only breaks an exact tie.
+ */
+const NEWEST_FIRST = "CREATEDTIME DESC, ROWID DESC";
+
+const fetchRunsWhere = async (zcql, where, order = NEWEST_FIRST, limit = ZCQL_PAGE) => {
   const groupA = unwrap(
     await zcql.executeZCQLQuery(runSelect(RUN_COLS_A, where, order, limit, 0)),
     TABLE.RUN,
@@ -189,7 +196,7 @@ const fetchRunsWhere = async (zcql, where, order = "ROWID DESC", limit = ZCQL_PA
 
 /** @returns {Promise<object|null>} */
 export const getRun = async (catalystApp, runId) => {
-  const rows = await fetchRunsWhere(catalystApp.zcql(), `runId = '${esc(runId)}'`, "ROWID DESC", 1);
+  const rows = await fetchRunsWhere(catalystApp.zcql(), `runId = '${esc(runId)}'`, NEWEST_FIRST, 1);
   return rows[0] || null;
 };
 
@@ -206,14 +213,14 @@ export const getLatestRunForDate = async (catalystApp, businessDate, uploadDate 
   const rows = await fetchRunsWhere(
     catalystApp.zcql(),
     runsWhere(businessDate, uploadDate),
-    "ROWID DESC",
+    NEWEST_FIRST,
     1,
   );
   return rows[0] || null;
 };
 
 export const listRunsForDate = async (catalystApp, businessDate, limit = 20, uploadDate = null) =>
-  fetchRunsWhere(catalystApp.zcql(), runsWhere(businessDate, uploadDate), "ROWID DESC", limit);
+  fetchRunsWhere(catalystApp.zcql(), runsWhere(businessDate, uploadDate), NEWEST_FIRST, limit);
 
 /**
  * Finished runs that found differences, newest first — the report history.
@@ -237,7 +244,7 @@ export const listRunsWithExceptions = async (catalystApp, limit = 20) =>
     catalystApp.zcql(),
     `exceptionCount > 0 AND (status = '${esc(RUN_STATUS.COMPLETED_WITH_EXCEPTIONS)}' ` +
       `OR status = '${esc(RUN_STATUS.SUPERSEDED)}')`,
-    "ROWID DESC",
+    NEWEST_FIRST,
     limit,
   );
 

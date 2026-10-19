@@ -309,6 +309,26 @@ async function retriggerMaster(scheduling, params) {
 }
 
 /**
+ * End this import's holdings row in Jobs. AppSail sets it RUNNING when it queues
+ * this job, and a new transaction commit waits while it stays RUNNING: a second
+ * import loaded now would be read as "new" here too and counted twice. The name
+ * must match holdingsJobRowName in appsail-nodejs TempTransactionUpload.js.
+ *
+ * Only called when no more work can happen for this import. A crash that
+ * Catalyst will retry leaves the row RUNNING on purpose.
+ */
+async function endHoldingsJobRow(catalystApp, importStartedAtMs, status) {
+  const jobName = `HOLD_${importStartedAtMs}`;
+  try {
+    await catalystApp
+      .zcql()
+      .executeZCQLQuery(`UPDATE Jobs SET status = '${status}' WHERE jobName = '${jobName}'`);
+  } catch (err) {
+    console.warn(`CalculateHoldingMaster: could not set ${jobName} to ${status}:`, err.message);
+  }
+}
+
+/**
  * @param {import('./types/job').JobRequest} jobRequest
  * @param {import('./types/job').Context} context
  */
@@ -477,6 +497,9 @@ module.exports = async (jobRequest, context) => {
       console.error(
         `CalculateHoldingMaster: ${uniqueFailed.length} chunk(s) failed: ${uniqueFailed.join(", ")}`,
       );
+      // Every chunk has finished, so nothing is still writing holdings. A retry
+      // of this master only re-reads the same saved state.
+      await endHoldingsJobRow(catalystApp, importStartedAtMs, "FAILED");
       context.closeWithFailure();
       return;
     }
@@ -485,6 +508,7 @@ module.exports = async (jobRequest, context) => {
       `CalculateHoldingMaster: all ${state.totalChunks} chunk(s) dispatched and completed in ` +
         `${Date.now() - startedAt}ms (${state.totalPairs} pair(s))`,
     );
+    await endHoldingsJobRow(catalystApp, importStartedAtMs, "COMPLETED");
     context.closeWithSuccess();
   } catch (error) {
     console.error(

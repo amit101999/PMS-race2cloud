@@ -208,7 +208,9 @@ Every day the operator loads the trades, checks them against the custodian, and 
    - S6: final status and counts.
 4. **Exceptions.** Quantity mismatch, Missing in custody, Missing in FA, Date mismatch, Buy/sell mismatch, Unmapped code. A date or buy/sell mismatch is reported when exactly one unmatched trade on each side agrees on client, ISIN and quantity.
 5. **Commit (Gate 2).** Allowed once the run has finished. Open exceptions do not block it, but the operator gets a strong warning. **Each trade date can be committed only once**, whichever upload date it came from. That stops the same trades being booked twice. Equity and Mutual Funds files of the day are combined into one import file.
-6. **Import.** The file is saved to `client-transaction-files/transactions/`, loaded into `Transaction` by a bulk write, and then three jobs are queued 10 seconds apart (see the job table below).
+   - **Several dates.** When the operator ticks several dates for matching, the screen shows every date's result, one Exception details list and one Export for all of them. **Commit Transaction Files** commits every shown date that is not committed yet, together, as **one** import file. Every date is checked first; if one fails a check, nothing is committed and the message names the date.
+   - **One import at a time.** The import is refused while an earlier import's load, holdings update or cash update is still running. Those jobs treat every trade loaded since their own import started as new, so an overlapping import would be counted twice in holdings or lose cash entries. A job still marked running 3 hours after its import started is taken as dead: the import goes ahead with a warning to check it.
+6. **Import.** The file is saved to `client-transaction-files/transactions/`, loaded into `Transaction` by a bulk write, and then three jobs are queued 10 seconds apart (see the job table below). Before the holdings and cash jobs are queued, `Jobs` rows `HOLD_<import start ms>` and `CASH_<import start ms>` are set to `RUNNING`; `CalculateHoldingMaster` and `Cal_CB_Append_TxnUpload` set them to `COMPLETED` at their real end (holdings also `FAILED` when chunks failed). A crash Catalyst will retry leaves the row `RUNNING`. If the bulk write is still going after 45 minutes, its `TxnCsv_*` row becomes `TIMED_OUT` (not `FAILED`) and is polled every 5 minutes for up to 3 hours; a late finish, by poll or callback, still queues the holdings and cash jobs, and a new import is refused while the row is `TIMED_OUT`. After 3 hours it is left `TIMED_OUT` and the runs stay locked.
 
 #### Run statuses
 
@@ -222,7 +224,7 @@ Every day the operator loads the trades, checks them against the custodian, and 
 | `Custody_Match_Run` | One row per match attempt | Stage, progress, status, counts; "imported" marker after commit | By the nightly cleanup |
 | `Custody_Match_Exception` | One row per difference | Rewritten if the run is retried | By the nightly cleanup |
 | `Transaction` | Every trade row of the committed file | Security code and name (by `EnrichTransactionSecurity`) | – |
-| `Jobs` / `Notifications` | Import and match task rows | Status | – |
+| `Jobs` / `Notifications` | Import and match task rows; `HOLD_<ms>` and `CASH_<ms>` rows per import | Status | – |
 
 | Stratus | What happens |
 | --- | --- |
@@ -313,7 +315,7 @@ Every day the operator loads the trades, checks them against the custodian, and 
 | Table | Added | Changed | Deleted |
 | --- | --- | --- | --- |
 | `Cash_Balance_Per_Transaction` | One line per cash movement | Later balances when a dividend is inserted earlier in time | Only by the full rebuild job `Cal_CB_Per_TNX` (manual) |
-| `Cash_Ledger` | Older daily ledger, written by `CashCalculation` (manual, pool `Finance`) | Same | – |
+| `Cash_Ledger` | Older daily ledger, written by `CashCalculation` (manual, pool `Finance`): each run deletes an account's rows and rebuilds one closing balance per day from all its trades (settlement date, or trade date when there is none) | Same | Same |
 
 **Watch out.**
 

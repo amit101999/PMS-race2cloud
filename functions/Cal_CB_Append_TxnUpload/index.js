@@ -392,6 +392,25 @@ async function retriggerSelf(catalystApp, importStartedAtMs, lastAccount) {
   });
 }
 
+/**
+ * Mark this import's cash row in Jobs COMPLETED. AppSail sets it RUNNING when it
+ * queues this job, and a new transaction commit waits while it stays RUNNING: a
+ * second import loaded now would be read as "new" here too, and the clean-up
+ * delete above would remove its rows. The name must match cashJobRowName in
+ * appsail-nodejs TempTransactionUpload.js.
+ *
+ * Only the final successful run calls this. A failed run is retried by Catalyst
+ * and redoes the work, so the row stays RUNNING until then.
+ */
+async function completeCashJobRow(zcql, importStartedAtMs) {
+  const jobName = `CASH_${importStartedAtMs}`;
+  try {
+    await zcql.executeZCQLQuery(`UPDATE Jobs SET status = 'COMPLETED' WHERE jobName = '${jobName}'`);
+  } catch (err) {
+    console.warn(`Cal_CB_Append_TxnUpload: could not set ${jobName} to COMPLETED:`, err.message);
+  }
+}
+
 module.exports = async (jobRequest, context) => {
   const catalystApp = catalyst.initialize(context);
   const zcql = catalystApp.zcql();
@@ -492,6 +511,7 @@ module.exports = async (jobRequest, context) => {
       context.closeWithFailure();
       return;
     }
+    await completeCashJobRow(zcql, importStartedAtMs);
     context.closeWithSuccess();
   } catch (error) {
     console.error("Cal_CB_Append_TxnUpload failed:", error);

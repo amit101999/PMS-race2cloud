@@ -142,21 +142,21 @@ export const getReports = (limit = 10) => request(`/reports?limit=${limit}`);
 export const getLatestRun = (date, uploadDate) =>
   request(`/latest-run/${date}?uploadDate=${encodeURIComponent(uploadDate || "")}`);
 
-export const getExceptions = (runId, params = {}) => {
-  const qs = new URLSearchParams();
+/* The exception, export and commit calls cover every date on screen: one run per date. */
+export const getExceptions = (runIds, params = {}) => {
+  const qs = new URLSearchParams({ runIds: runIds.join(",") });
   for (const [k, v] of Object.entries(params)) {
     if (v !== undefined && v !== null && v !== "") qs.set(k, v);
   }
-  const q = qs.toString();
-  return request(`/run/${runId}/exceptions${q ? `?${q}` : ""}`);
+  return request(`/runs/exceptions?${qs.toString()}`);
 };
 
-export const exportExceptions = (runId) =>
-  request(`/run/${runId}/exceptions/export`);
+export const exportExceptions = (runIds) =>
+  request(`/runs/exceptions/export?${new URLSearchParams({ runIds: runIds.join(",") })}`);
 
 export const retryRun = (runId) => json(`/run/${runId}/retry`, "POST");
 
-export const proceedToImport = (runId) => json(`/run/${runId}/proceed`, "POST");
+export const proceedToImport = (runIds) => json("/runs/proceed", "POST", { runIds });
 
 /* ---------------------------------------------------------------- field mapping */
 
