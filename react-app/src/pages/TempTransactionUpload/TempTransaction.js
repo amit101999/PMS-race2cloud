@@ -47,25 +47,25 @@ const WORKFLOW_STEPS = [
  * gates already enforced server-side (Gate 1: both files staged; Gate 2:
  * match run reached a terminal state) rather than inventing new rules.
  */
-function deriveStage({ faReady, custodyReady, run }) {
+function deriveStage({ faReady, custodyReady, runs }) {
     if (!faReady || !custodyReady) return 0;
-    if (!run) return 1;
-    if (run.isRunning) return 2;
-    if (run.status === "FAILED") return 2;
-    if (run.status === "COMPLETED_WITH_EXCEPTIONS") return 3;
+    if (runs.length === 0) return 1;
+    // Several dates can be on screen; the stepper follows the one furthest behind.
+    if (runs.some((r) => r.isRunning || r.status === "FAILED")) return 2;
+    if (runs.some((r) => r.status === "COMPLETED_WITH_EXCEPTIONS")) return 3;
     return 4; // COMPLETED_CLEAN, or a terminal state already handed to the importer
 }
 
 /**
  * Transaction Upload — now framed as one reconciliation workflow rather than
  * a stack of independent admin cards. The status bar and stepper below are
- * read-only reflections of state the child panels already own (`day`, `run`);
+ * read-only reflections of state the child panels already own (`day`, `runs`);
  * nothing here duplicates a fetch or invents a count.
  *
  * The direct "pick a file and import" control that used to live here is gone on
  * purpose: nothing reaches production until custody matching comes back clean,
  * and a button that skips the match would make the whole gate advisory. The
- * import now runs server-side behind Gate 2 (POST /run/:runId/proceed), which is
+ * import now runs server-side behind Gate 2 (POST /runs/proceed), which is
  * what makes the block real rather than a `disabled` attribute in the DOM.
  *
  * Recent Uploads below is unchanged.
@@ -76,7 +76,8 @@ const TempTransaction = () => {
        Match button both stay disabled until it is picked. A match never changes
        it. Each upload card has its own date (the day its file is for). */
     const [uploadDate, setUploadDate] = useState("");
-    const [run, setRun] = useState(null);
+    /* One match run per date on screen, oldest first. */
+    const [runs, setRuns] = useState([]);
     const [day, setDay] = useState(null);
     /* The custodian history list an upload hands back, so the new file shows at once. */
     const [custodyHistory, setCustodyHistory] = useState(null);
@@ -130,12 +131,13 @@ const TempTransaction = () => {
 
     // A completed run adds a row to the history below, so refresh when one
     // reaches a terminal state rather than making the user reload the page.
-    const runId = run?.runId;
-    const runIsRunning = run?.isRunning;
+    // Changes whenever a run on screen starts or finishes.
+    const runsKey = runs.map((r) => `${r.runId}:${r.status}`).join(",");
+    const anyRunning = runs.some((r) => r.isRunning);
 
     useEffect(() => {
-        if (runId && !runIsRunning) refreshHistory();
-    }, [runId, runIsRunning, refreshHistory]);
+        if (runsKey && !anyRunning) refreshHistory();
+    }, [runsKey, anyRunning, refreshHistory]);
 
     const handleHistoryDownload = useCallback(async (item) => {
         if (!item?.key) return;
@@ -165,7 +167,7 @@ const TempTransaction = () => {
     /* Where the workflow stepper points — derived from real state only. */
     const faReady = (day?.fa?.raw || []).length > 0;
     const custodyReady = (day?.custody?.files || []).length > 0;
-    const currentStage = deriveStage({ faReady, custodyReady, run });
+    const currentStage = deriveStage({ faReady, custodyReady, runs });
 
     return (
         <MainLayout title="Transaction Upload">
@@ -184,21 +186,27 @@ const TempTransaction = () => {
                         value={uploadDate}
                         max={todayIso()}
                         onChange={(e) => setUploadDate(e.target.value)}
-                        disabled={run?.isRunning}
+                        disabled={anyRunning}
                     />
                 </label>
                 </div>
 
                 <CustodyMatchPanel
                     uploadDate={uploadDate}
-                    onRunChange={setRun}
+                    onRunChange={setRuns}
                     onDayChange={setDay}
                     onCustodyUploaded={setCustodyHistory}
                 />
 
-                <ExceptionGrid run={run} />
+                <ExceptionGrid runs={runs} />
 
-                <GateTwo run={run} onImported={refreshHistory} />
+                {/* Keyed by the runs shown, so a commit's result never carries
+                    over to a different set of dates. */}
+                <GateTwo
+                    key={runs.map((r) => r.runId).join(",")}
+                    runs={runs}
+                    onImported={refreshHistory}
+                />
 
                 <div className="txo-section-head txo-section-head--tight">
                     <h2>History</h2>
@@ -269,7 +277,7 @@ const TempTransaction = () => {
 
                 {/* Keyed off the run so a match that has just finished with
                     differences shows up without a reload. */}
-                <DifferenceReports refreshToken={run?.runId ? `${run.runId}:${run.status}` : ""} />
+                <DifferenceReports refreshToken={runsKey} />
             </div>
         </MainLayout>
     );

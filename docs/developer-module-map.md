@@ -194,6 +194,7 @@ Upload → Validate → Match → Review Exceptions → Commit. Business guide 3
   - A change to how `Transaction` rows are written affects holdings, cash, Analytics and Reports.
   - The three FA `filler` columns are the optional Sub Folio, Transaction Fee and Transaction Fee Service Tax fields. The import writes them to `SUB_FOLIO`, `TOTAL_TRXNFEE` and `TOTAL_TRXNFEE_STAX`, and always calculates `NETRATE` / `Net_Amount` itself (`TempTransactionUpload.js`). `MKTRATE` (Market Rate) is saved to `MKTRATE`; only SETDATEFLAG is dropped. `SUB_FOLIO` must exist in every environment, or the commit fails.
   - Equity vs Mutual Funds transaction file is decided by `detectFaFileType` in `parseFA.js` (a TDS or Stamp Duty amount on any row means Mutual Funds). It runs in the field-map preview when the file is picked and again in `uploadFaFile`.
+  - Commit sends every shown run (`POST /runs/proceed`) and they are imported as one file. `uploadTempTransaction` refuses while a `Jobs` row `TxnCsv_*`, `HOLD_*` or `CASH_*` is `RUNNING` (younger than 3 hours): the holdings and cash jobs read every trade loaded since their import started, so imports must not overlap. The `HOLD_<ms>` / `CASH_<ms>` names are built in `TempTransactionUpload.js` and again in `functions/CalculateHoldingMaster` and `functions/Cal_CB_Append_TxnUpload`; change all three together.
 
 ### 4.5 Transaction Deletion
 Find committed trades by commit date, delete the wrong ones, and see what was deleted on each day. Business guide 3.5.
@@ -241,9 +242,9 @@ Client cash passbook. Business guide 3.7.
   - `Cal_CB_Append_TxnUpload`: adds passbook lines after a commit.
   - `Cal_CB_Per_TNX`: full rebuild from `Transaction` plus RECEIVED `Dividend_Record` rows (from 2020 onwards, no end date), leaving out dividends earned only through a deleted buy (`Transaction_Deletion_Log`). Run manually, and per client by Transaction Deletion.
   - `ExportCashBalSingleClient` (pool `Export`).
-  - `CashCalculation` (pool `Finance`) fills `Cash_Ledger`.
+  - `CashCalculation` (pool `Finance`) fills `Cash_Ledger`: it rebuilds each account from all its trades on every run (no "ROWID greater than last done" increment, because ROWIDs are not in time order).
   - `UpdateDividendData` (Dividend module) adds dividend credits.
-- **Tables:** reads `Cash_Balance_Per_Transaction`. The functions above write it, and `CashCalculation` writes `Cash_Ledger`.
+- **Tables:** reads `Cash_Balance_Per_Transaction`. The functions above write it, and `CashCalculation` writes `Cash_Ledger`. `Cal_CB_Append_TxnUpload` also marks its import's `CASH_<ms>` row in `Jobs` completed.
 - **Before you change:**
   - `Cal_CB_Append_TxnUpload` and `Cal_CB_Per_TNX` are twins and must follow the same money-in/money-out rules.
   - Dividend credits land in the same table. `Cal_CB_Per_TNX` deletes them with everything else and re-adds them from `Dividend_Record`, so a change to how `UpdateDividendData` writes a credit must be mirrored in `fetchReceivedDividendEvents`.

@@ -7,7 +7,7 @@
  * whole feature would be decoration.
  *
  *   Gate 1  POST /run      — every custody scheme complete AND a transaction file staged
- *   Gate 2  POST /run/:id/proceed — status COMPLETED_CLEAN AND exceptionCount === 0
+ *   Gate 2  POST /runs/proceed — every run finished, not superseded, not yet imported
  */
 
 import { FA_FILE_TYPE, FILE_SIDE, RUN_STATUS } from "../../util/custodyMatch/constants.js";
@@ -393,37 +393,102 @@ export const getLatestRun = async (req, res) => {
   }
 };
 
+/*
+ * The screen shows every date the operator ticked, one run per date, so the
+ * exception, export and commit endpoints take a list of runs. A month of dates
+ * is the most a single tick can cover.
+ */
+const MAX_RUNS_PER_REQUEST = 31;
+const RUN_ID_PATTERN = /^CM-\d+$/;
+
 /**
- * GET /api/custody-match/run/:runId/exceptions
- * query: page, size (default 10), exceptionType, scheme, status, q, from, to
+ * Read `runIds` (a comma-separated query value or a body array) and load each run,
+ * oldest file date first. Answers the request itself and returns null when the
+ * list is unusable.
+ */
+const loadRequestedRuns = async (req, res) => {
+  const raw = req.body?.runIds ?? req.query.runIds ?? "";
+  const list = Array.isArray(raw) ? raw : String(raw).split(",");
+  const runIds = [...new Set(list.map((id) => String(id).trim()).filter(Boolean))];
+
+  if (runIds.length === 0 || runIds.length > MAX_RUNS_PER_REQUEST) {
+    fail(res, 400, {
+      code: "BAD_RUN_IDS",
+      message: `Send between 1 and ${MAX_RUNS_PER_REQUEST} run ids.`,
+    });
+    return null;
+  }
+  const badId = runIds.find((id) => !RUN_ID_PATTERN.test(id));
+  if (badId) {
+    fail(res, 400, { code: "BAD_RUN_IDS", message: `"${badId}" is not a matching run id.` });
+    return null;
+  }
+
+  const runs = [];
+  for (const runId of runIds) {
+    const run = await getRun(req.catalystApp, runId);
+    if (!run) {
+      fail(res, 404, { code: "RUN_NOT_FOUND", message: `No such matching run: ${runId}.` });
+      return null;
+    }
+    runs.push(run);
+  }
+  return runs.sort((a, b) => String(a.businessDate).localeCompare(String(b.businessDate)));
+};
+
+/** "2026-09-07" for one date, "2026-09-07_to_2026-09-09" for several. */
+const dateSpanLabel = (runs) => {
+  const first = runs[0].businessDate;
+  const last = runs[runs.length - 1].businessDate;
+  return first === last ? first : `${first}_to_${last}`;
+};
+
+/**
+ * GET /api/custody-match/runs/exceptions?runIds=CM-1,CM-2
+ * query: size (default 10), exceptionType, scheme, status, q, from, to
+ *
+ * The first `size` differences across the runs, oldest date first, and the total.
+ * The screen shows only this preview; the full list is the export.
  */
 export const getExceptions = async (req, res) => {
   try {
     const catalystApp = req.catalystApp;
     if (!catalystApp) return noApp(res);
 
-    const runId = String(req.params.runId || "").trim();
-    const run = await getRun(catalystApp, runId);
-    if (!run) {
-      return fail(res, 404, { code: "RUN_NOT_FOUND", message: "No such matching run." });
-    }
+    const runs = await loadRequestedRuns(req, res);
+    if (!runs) return undefined;
 
-    const page = await pageExceptions(catalystApp, runId, {
-      page: req.query.page,
-      size: req.query.size,
+    const filters = {
       exceptionType: req.query.exceptionType,
       scheme: req.query.scheme,
       status: req.query.status,
       q: req.query.q,
       from: req.query.from,
       to: req.query.to,
-    });
+    };
+
+    let rows = [];
+    let total = 0;
+    let size = 10;
+    for (const run of runs) {
+      const page = await pageExceptions(catalystApp, run.runId, {
+        page: 1,
+        size: req.query.size,
+        ...filters,
+      });
+      size = page.size;
+      total += page.total;
+      rows.push(...page.rows);
+    }
+    // Runs are in date order, so the first `size` rows are the earliest dates'.
+    rows = rows.slice(0, size);
 
     return res.status(200).json({
       success: true,
-      runId,
-      businessDate: run.businessDate,
-      ...page,
+      runIds: runs.map((r) => r.runId),
+      rows,
+      size,
+      total,
     });
   } catch (error) {
     console.error("[CustodyMatchRun] getExceptions:", error);
@@ -432,29 +497,28 @@ export const getExceptions = async (req, res) => {
 };
 
 /**
- * GET /api/custody-match/run/:runId/exceptions/export
+ * GET /api/custody-match/runs/exceptions/export?runIds=CM-1,CM-2
  *
- * Serves the difference file the run already wrote, rather than regenerating it:
+ * One run: the difference file it already wrote, rather than a regenerated one —
  * an export that rebuilds its own data can disagree with the grid beside it.
- * Falls back to building from the table only if the stored file is missing.
+ * Several runs, or a stored file that is missing: the rows from the exception
+ * table, oldest date first, for the screen to write as one CSV.
  */
 export const exportExceptions = async (req, res) => {
   try {
     const catalystApp = req.catalystApp;
     if (!catalystApp) return noApp(res);
 
-    const runId = String(req.params.runId || "").trim();
-    const run = await getRun(catalystApp, runId);
-    if (!run) {
-      return fail(res, 404, { code: "RUN_NOT_FOUND", message: "No such matching run." });
-    }
+    const runs = await loadRequestedRuns(req, res);
+    if (!runs) return undefined;
 
-    if (run.differenceKey) {
+    if (runs.length === 1 && runs[0].differenceKey) {
+      const run = runs[0];
       const url = await signedGetUrl(getBucket(catalystApp), run.differenceKey, 3600);
       if (url) {
         return res.status(200).json({
           success: true,
-          runId,
+          runIds: [run.runId],
           key: run.differenceKey,
           downloadUrl: url,
           expiresInSeconds: 3600,
@@ -463,10 +527,14 @@ export const exportExceptions = async (req, res) => {
       }
     }
 
-    const rows = await allExceptions(catalystApp, runId);
+    const rows = [];
+    for (const run of runs) {
+      rows.push(...(await allExceptions(catalystApp, run.runId)));
+    }
     return res.status(200).json({
       success: true,
-      runId,
+      runIds: runs.map((r) => r.runId),
+      fileName: `difference-${dateSpanLabel(runs)}.csv`,
       source: "rebuilt",
       rows,
       // Sent so the client writes the same columns the stored file would have.
@@ -535,105 +603,120 @@ export const retryRun = async (req, res) => {
 };
 
 /**
- * POST /api/custody-match/run/:runId/proceed
+ * Why a run cannot be committed, or null when it can. Every run of a commit is
+ * checked before anything is marked or loaded.
+ */
+const commitBlocker = async (catalystApp, run) => {
+  const date = run.businessDate;
+
+  // A run that has not finished has no answer yet, so there is nothing to
+  // import against and no count to record.
+  if (run.status === RUN_STATUS.QUEUED || run.status === RUN_STATUS.RUNNING) {
+    return {
+      code: "RUN_NOT_FINISHED",
+      status: run.status,
+      message: `${date}: the match is still ${run.status.toLowerCase()}. Wait for it to finish before committing.`,
+    };
+  }
+
+  /*
+   * A superseded run was answered against files that have since changed — the
+   * transaction file may have been replaced outright. Importing it would put
+   * in a file this run never checked, so it has to be matched again first.
+   */
+  if (run.status === RUN_STATUS.SUPERSEDED) {
+    return {
+      code: "RUN_SUPERSEDED",
+      status: run.status,
+      message: `${date}: the files behind this match changed after it ran. Run the match again before committing.`,
+    };
+  }
+
+  if (String(run.stageDetail || "").startsWith(IMPORTED_MARKER)) {
+    return { code: "ALREADY_IMPORTED", message: `${date} has already been committed.` };
+  }
+
+  /*
+   * The import takes the WHOLE transaction file for the date, not just the
+   * dates this run compared. So the guard has to be per date: matching the
+   * 20th and the 21st in two passes gives two importable runs over one file,
+   * and importing both would put every row in twice.
+   */
+  const alreadyImported = await findImportedRunForDate(catalystApp, date, IMPORTED_MARKER);
+  if (alreadyImported) {
+    return {
+      code: "DATE_ALREADY_IMPORTED",
+      message: `The transaction file for ${date} was already committed by an earlier match. Committing again would duplicate every row.`,
+      importedByRunId: alreadyImported.runId,
+    };
+  }
+  return null;
+};
+
+/**
+ * POST /api/custody-match/runs/proceed
+ * body: { runIds: ["CM-…", …] }
  *
- * Gate 2 — the import.
+ * Gate 2 — the import. Every run sent is committed together, as ONE import: one
+ * file, one load, one holdings and one cash update. Separate imports would
+ * overlap, and the holdings and cash jobs read every trade loaded since their
+ * own import started, so overlapping imports count each other's trades.
  *
  * Exceptions do NOT block this. Matching reports what the two sides disagree
  * about; deciding whether that disagreement should stop the day is the
  * operator's call, so an unreconciled import is allowed and recorded rather
  * than refused.
  *
- * What still refuses: a run that is still working (its answer is not in yet),
- * and a run whose file has already been imported.
+ * What still refuses, for the whole commit: any run still working, superseded
+ * or already imported, and two runs for one date. The import itself also
+ * refuses while an earlier import's load, holdings or cash update is running.
  *
- * The staged file is read back from the bucket and handed to the EXISTING
+ * The staged files are read back from the bucket and handed to the EXISTING
  * uploadTempTransaction handler unchanged, via a synthetic request carrying the
- * only two things that handler reads (`catalystApp` and `files.file`).
+ * only things that handler reads (`catalystApp`, `files.file`, `body.custodyRunId`).
  */
 export const proceedToImport = async (req, res) => {
   try {
     const catalystApp = req.catalystApp;
     if (!catalystApp) return noApp(res);
 
-    const runId = String(req.params.runId || "").trim();
-    const run = await getRun(catalystApp, runId);
-    if (!run) {
-      return fail(res, 404, { code: "RUN_NOT_FOUND", message: "No such matching run." });
+    const runs = await loadRequestedRuns(req, res);
+    if (!runs) return undefined;
+
+    for (const run of runs) {
+      const blocker = await commitBlocker(catalystApp, run);
+      if (blocker) return fail(res, 409, { ...blocker, runId: run.runId });
     }
-
-    // A run that has not finished has no answer yet, so there is nothing to
-    // import against and no count to record.
-    if (run.status === RUN_STATUS.QUEUED || run.status === RUN_STATUS.RUNNING) {
-      return fail(res, 409, {
-        code: "RUN_NOT_FINISHED",
-        status: run.status,
-        message: `This run is still ${run.status.toLowerCase()}. Wait for the match to finish before importing.`,
-      });
-    }
-
-    /*
-     * A superseded run was answered against files that have since changed — the
-     * transaction file may have been replaced outright. Importing it would put
-     * in a file this run never checked, so it has to be matched again first.
-     */
-    if (run.status === RUN_STATUS.SUPERSEDED) {
-      return fail(res, 409, {
-        code: "RUN_SUPERSEDED",
-        status: run.status,
-        message:
-          "The files behind this match changed after it ran, so its result no longer describes what is stored. Run the match again before importing.",
-      });
-    }
-
-    const openExceptions = Number(run.exceptionCount) || 0;
-    const reconciled = isGateOpen(run);
-
-    // Soft guard against a double import. See the note below.
-    if (String(run.stageDetail || "").startsWith(IMPORTED_MARKER)) {
-      return fail(res, 409, {
-        code: "ALREADY_IMPORTED",
-        message: "This run has already been imported.",
-      });
+    for (let i = 1; i < runs.length; i++) {
+      if (runs[i].businessDate === runs[i - 1].businessDate) {
+        return fail(res, 409, {
+          code: "DUPLICATE_DATE",
+          message: `${runs[i].businessDate} was sent twice. Commit each date once.`,
+        });
+      }
     }
 
     /*
-     * The import takes the WHOLE transaction file for the date, not just the
-     * dates this run compared. So the guard has to be per date: matching the
-     * 20th and the 21st in two passes gives two importable runs over one file,
-     * and importing both would put every row in twice.
-     */
-    const alreadyImported = await findImportedRunForDate(
-      catalystApp,
-      run.businessDate,
-      IMPORTED_MARKER,
-    );
-    if (alreadyImported) {
-      return fail(res, 409, {
-        code: "DATE_ALREADY_IMPORTED",
-        message: `The transaction file for ${run.businessDate} was already imported by an earlier match. Importing again would duplicate every row.`,
-        importedByRunId: alreadyImported.runId,
-      });
-    }
-
-    /*
-     * The same files the match compared: the FA files for the run's file date
-     * under the run's upload date. The guard above keeps this to one import per
+     * The same files each match compared: the FA files for the run's file date
+     * under the run's upload date. The guards above keep this to one import per
      * file date, whichever upload date it comes from.
      */
-    const faFiles = (
-      await filesForDate(catalystApp, run.businessDate, run.uploadDate)
-    ).faFiles.map((f) => ({
-      key: f.fileKey,
-      fileType: f.fileType,
-      originalFileName: f.originalFileName,
-    }));
-    if (faFiles.length === 0) {
-      return fail(res, 409, {
-        code: "FA_FILE_MISSING",
-        message:
-          "The staged transaction file is no longer stored. Upload it again and re-run the match.",
-      });
+    const faFiles = [];
+    for (const run of runs) {
+      const files = (await filesForDate(catalystApp, run.businessDate, run.uploadDate)).faFiles;
+      if (files.length === 0) {
+        return fail(res, 409, {
+          code: "FA_FILE_MISSING",
+          message: `The transaction file for ${run.businessDate} is no longer stored. Upload it again and re-run the match.`,
+        });
+      }
+      for (const f of files) {
+        faFiles.push({
+          key: f.fileKey,
+          fileType: f.fileType,
+          originalFileName: f.originalFileName,
+        });
+      }
     }
 
     /*
@@ -681,11 +764,15 @@ export const proceedToImport = async (req, res) => {
     const importFileName =
       faFiles.length === 1 && faFiles[0].originalFileName
         ? faFiles[0].originalFileName
-        : `transactions-${run.businessDate}.csv`;
+        : `transactions-${dateSpanLabel(runs)}.csv`;
 
     // Put back exactly what was there if the import refuses the file, rather
     // than a hardcoded "no differences" that would be a lie on a run that had some.
-    const priorStageDetail = run.stageDetail || "";
+    const restoreMarks = async () => {
+      for (const run of runs) {
+        await setStageDetail(catalystApp, run.runId, run.stageDetail || "");
+      }
+    };
 
     /*
      * Marked BEFORE the import starts, so a second click while the first is
@@ -693,25 +780,28 @@ export const proceedToImport = async (req, res) => {
      * the day reconciled: an import made over open exceptions should be visible
      * afterwards, not indistinguishable from a clean one.
      */
-    await setStageDetail(
-      catalystApp,
-      runId,
-      reconciled
-        ? IMPORTED_MARKER
-        : `${IMPORTED_MARKER} with ${openExceptions} open exception(s)`,
-    );
+    for (const run of runs) {
+      const openExceptions = Number(run.exceptionCount) || 0;
+      await setStageDetail(
+        catalystApp,
+        run.runId,
+        isGateOpen(run)
+          ? IMPORTED_MARKER
+          : `${IMPORTED_MARKER} with ${openExceptions} open exception(s)`,
+      );
+    }
 
     const syntheticReq = {
       catalystApp,
-      // Lets a background import failure take the mark back off this run.
-      body: { custodyRunId: runId },
+      // Lets a background import failure take the mark back off every run.
+      body: { custodyRunId: runs.map((r) => r.runId).join(",") },
       query: {},
       headers: {},
       files: { file: { name: importFileName, data } },
     };
 
-    // Watch the status the import sets. If it rejects the file, the marker has
-    // to come back off — otherwise one failed import would lock this run out of
+    // Watch the status the import sets. If it rejects the file, the markers have
+    // to come back off — otherwise one failed import would lock these runs out of
     // ever being imported, with no way back except a fresh match.
     const setStatus = res.status.bind(res);
     let importStatus = 200;
@@ -722,14 +812,15 @@ export const proceedToImport = async (req, res) => {
 
     try {
       // uploadTempTransaction writes its own response, so the client sees the
-      // existing pipeline's reply verbatim.
+      // existing pipeline's reply verbatim. It also refuses (409) while an
+      // earlier import is still being processed.
       const result = await uploadTempTransaction(syntheticReq, res);
       if (importStatus >= 400) {
-        await setStageDetail(catalystApp, runId, priorStageDetail);
+        await restoreMarks();
       }
       return result;
     } catch (importErr) {
-      await setStageDetail(catalystApp, runId, priorStageDetail);
+      await restoreMarks();
       throw importErr;
     } finally {
       res.status = setStatus;

@@ -272,6 +272,12 @@
     min-width: 0;
 }
 
+/* Several dates can be shown at once; the date leads each run's row. */
+.cm-run-date {
+    font-size: 13px;
+    color: var(--txo-text);
+}
+
 /* The status badge renders nothing for some states; don't leave a gap for it. */
 .cm-run-summary .cm-run-status:empty {
     display: none;
@@ -979,6 +985,11 @@
     margin: 0;
     font-size: 13.5px;
     color: var(--txo-text-muted);
+}
+
+/* One line per date being committed. */
+.cm-commit-summary p {
+    margin: 0 0 2px;
 }
 
 /* ── choose which dates a run compares ────────────────────────────────── */

@@ -68,10 +68,23 @@ async function updateJobsStatus(zcql, jobName, status) {
   }
 }
 
-/** Bulk-write status poll: first check after upload response, then every 30s, max 45 min. */
+/**
+ * Bulk-write status poll: first check after upload response, then every 30s.
+ * A load still going after 45 min is marked TIMED_OUT — not FAILED, because it
+ * may still finish — and checked every 5 min until 3 h have passed.
+ */
 const POLL_INITIAL_DELAY_MS = 15_000;
 const POLL_INTERVAL_MS = 30_000;
 const POLL_MAX_WAIT_MS = 45 * 60 * 1000;
+const POLL_SLOW_INTERVAL_MS = 5 * 60 * 1000;
+const POLL_GIVE_UP_MS = 3 * 60 * 60 * 1000;
+
+/*
+ * The load row's status while nobody knows whether the bulk write will finish.
+ * Still counts as running for a new commit, and a late finish is still
+ * completed (holdings and cash queued) from it.
+ */
+const LOAD_TIMED_OUT = "TIMED_OUT";
 
 /** Pause between each downstream job submit to reduce Dev COMPONENT concurrency burst. */
 const JOB_DISPATCH_DELAY_MS = 10_000;
@@ -128,12 +141,91 @@ async function failTxnUploadPipeline(catalystApp, pipelineJobName, reason) {
  * still finish, and unlocking then could import the date twice.
  */
 async function releaseCustodyRun(catalystApp, custodyRunId) {
-  if (!custodyRunId) return;
-  try {
-    await releaseImportMarker(catalystApp, custodyRunId);
-  } catch (e) {
-    console.warn(`[TxnUploadPipeline] could not reopen run ${custodyRunId}:`, e.message);
+  // A commit of several dates carries every run id, joined with commas.
+  const runIds = String(custodyRunId || "")
+    .split(",")
+    .map((id) => id.trim())
+    .filter(Boolean);
+  for (const runId of runIds) {
+    try {
+      await releaseImportMarker(catalystApp, runId);
+    } catch (e) {
+      console.warn(`[TxnUploadPipeline] could not reopen run ${runId}:`, e.message);
+    }
   }
+}
+
+/*
+ * Jobs rows that say an import is still being processed. The holdings and cash
+ * jobs pick their "new" trades as everything loaded since their import started,
+ * so a second import loaded while they run gets counted by both. A commit waits
+ * until these rows leave RUNNING.
+ *
+ * The names end in the import's start time (epoch ms). The two functions build
+ * the same names from their importStartedAtMs param, so keep them in step with
+ * functions/CalculateHoldingMaster and functions/Cal_CB_Append_TxnUpload.
+ */
+const IMPORT_JOB_PREFIX = { LOAD: "TxnCsv_", HOLDINGS: "HOLD_", CASH: "CASH_" };
+const holdingsJobRowName = (importStartedAtMs) => `${IMPORT_JOB_PREFIX.HOLDINGS}${importStartedAtMs}`;
+const cashJobRowName = (importStartedAtMs) => `${IMPORT_JOB_PREFIX.CASH}${importStartedAtMs}`;
+
+/*
+ * A row still RUNNING (or a load still TIMED_OUT) this long after its import
+ * started is taken as dead: the job and all its retries died without recording
+ * an end, or the load poll gave up (POLL_GIVE_UP_MS, the same 3 h). The largest
+ * import the holdings job accepts finishes well inside it.
+ */
+const IMPORT_JOB_DEAD_AFTER_MS = 3 * 60 * 60 * 1000;
+/* Dead rows older than this are old history, not worth a warning. */
+const IMPORT_JOB_WARN_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+const timeOfDay = (ms) =>
+  new Date(ms).toLocaleTimeString("en-IN", {
+    timeZone: "Asia/Kolkata",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+
+const IMPORT_JOB_LABEL = {
+  [IMPORT_JOB_PREFIX.LOAD]: "loading of the trades",
+  [IMPORT_JOB_PREFIX.HOLDINGS]: "holdings update",
+  [IMPORT_JOB_PREFIX.CASH]: "cash passbook update",
+};
+
+/**
+ * Is an earlier import still being processed?
+ *
+ * Ages come from the start time in each row's name, read against this server's
+ * clock — the same clock that wrote it — so the database's timezone cannot skew them.
+ *
+ * @returns {Promise<{running: {jobName:string, what:string, startedAtMs:number}[],
+ *                    dead: {jobName:string, what:string, startedAtMs:number}[]}>}
+ */
+async function findImportsStillProcessing(catalystApp) {
+  const rows = await catalystApp.zcql().executeZCQLQuery(`
+    SELECT jobName FROM Jobs
+    WHERE (status = 'RUNNING' OR status = '${LOAD_TIMED_OUT}')
+      AND (jobName LIKE '${IMPORT_JOB_PREFIX.LOAD}*'
+        OR jobName LIKE '${IMPORT_JOB_PREFIX.HOLDINGS}*'
+        OR jobName LIKE '${IMPORT_JOB_PREFIX.CASH}*')
+    ORDER BY CREATEDTIME DESC
+    LIMIT 200
+  `);
+
+  const running = [];
+  const dead = [];
+  for (const row of rows || []) {
+    const jobName = String((row.Jobs || row).jobName || "");
+    const prefix = Object.values(IMPORT_JOB_PREFIX).find((p) => jobName.startsWith(p));
+    const startedAtMs = Number(jobName.slice(prefix ? prefix.length : 0));
+    if (!prefix || !Number.isFinite(startedAtMs) || startedAtMs <= 0) continue;
+
+    const age = Date.now() - startedAtMs;
+    const entry = { jobName, what: IMPORT_JOB_LABEL[prefix], startedAtMs };
+    if (age < IMPORT_JOB_DEAD_AFTER_MS) running.push(entry);
+    else if (age < IMPORT_JOB_WARN_WINDOW_MS) dead.push(entry);
+  }
+  return { running, dead };
 }
 
 /**
@@ -153,11 +245,23 @@ async function completeTxnUploadPipeline(catalystApp, meta, logPrefix = "[TxnUpl
   const zcql = catalystApp.zcql();
   const current = await getPipelineJobStatus(zcql, pipelineJobName);
 
-  if (current && current !== "RUNNING") {
+  // TIMED_OUT is a load that finished late: its trades are in, so holdings and
+  // cash must still be queued for them.
+  if (current && current !== "RUNNING" && current !== LOAD_TIMED_OUT) {
     console.log(
       `${logPrefix} skip — ${pipelineJobName} already ${current} (idempotent)`,
     );
     return;
+  }
+
+  // The holdings and cash rows go to RUNNING BEFORE the load row leaves it, so a
+  // commit never sees a moment where this import looks finished. The jobs
+  // themselves set COMPLETED at their real end.
+  const holdingsRow = holdingsJobRowName(importStartedAtMs);
+  const cashRow = cashJobRowName(importStartedAtMs);
+  if (hasPairs) {
+    await ensureJobsRow(zcql, holdingsRow, "RUNNING");
+    await ensureJobsRow(zcql, cashRow, "RUNNING");
   }
 
   if (pipelineJobName) {
@@ -218,6 +322,8 @@ async function completeTxnUploadPipeline(catalystApp, meta, logPrefix = "[TxnUpl
       `${logPrefix} Failed to queue CalculateHoldingMaster:`,
       err.message,
     );
+    // Nothing will run to end the row, so end it here.
+    await updateJobsStatus(zcql, holdingsRow, "FAILED");
   }
 
   console.log(
@@ -244,6 +350,8 @@ async function completeTxnUploadPipeline(catalystApp, meta, logPrefix = "[TxnUpl
       `${logPrefix} Failed to queue Cal_CB_Append_TxnUpload:`,
       err.message,
     );
+    // Nothing will run to end the row, so end it here.
+    await updateJobsStatus(zcql, cashRow, "FAILED");
   }
 }
 
@@ -258,7 +366,18 @@ async function pollBulkWriteAndComplete(catalystApp, bulkJobId, meta) {
   );
   await sleep(POLL_INITIAL_DELAY_MS);
 
-  while (Date.now() - start < POLL_MAX_WAIT_MS) {
+  let markedTimedOut = false;
+
+  while (Date.now() - start < POLL_GIVE_UP_MS) {
+    if (!markedTimedOut && Date.now() - start >= POLL_MAX_WAIT_MS) {
+      markedTimedOut = true;
+      // Only a load still RUNNING: the callback may already have finished it.
+      if ((await getPipelineJobStatus(catalystApp.zcql(), meta.pipelineJobName)) === "RUNNING") {
+        console.warn(`${logPrefix} still running after ${POLL_MAX_WAIT_MS}ms — marking ${LOAD_TIMED_OUT}`);
+        await updateJobsStatus(catalystApp.zcql(), meta.pipelineJobName, LOAD_TIMED_OUT);
+      }
+    }
+
     try {
       const res = await bulkWrite.getStatus(bulkJobId);
       const st = res?.status ?? res?.data?.status ?? "";
@@ -286,13 +405,15 @@ async function pollBulkWriteAndComplete(catalystApp, bulkJobId, meta) {
       console.error(`${logPrefix} getStatus error:`, err.message);
     }
 
-    await sleep(POLL_INTERVAL_MS);
+    await sleep(markedTimedOut ? POLL_SLOW_INTERVAL_MS : POLL_INTERVAL_MS);
   }
 
-  await failTxnUploadPipeline(
-    catalystApp,
-    meta.pipelineJobName,
-    `timed out after ${POLL_MAX_WAIT_MS}ms`,
+  // Still not finished after 3 h. Left TIMED_OUT rather than FAILED: the runs
+  // stay locked (unlocking could book the dates twice) and a late callback can
+  // still complete it. Someone has to check the Transaction table.
+  console.error(
+    `${logPrefix} [TxnUploadPipeline] no result after ${POLL_GIVE_UP_MS}ms; ` +
+      `${meta.pipelineJobName} left ${LOAD_TIMED_OUT}. Check the Transaction table for this import.`,
   );
 }
 
@@ -866,6 +987,26 @@ export const uploadTempTransaction = async (req, res) => {
       }
     }
 
+    /* ─── 1b2. ONE IMPORT AT A TIME ───────────────────────────────── */
+    // Checked here, not by the callers, so every route into the import obeys it.
+    const { running: busyImports, dead: deadImports } =
+      await findImportsStillProcessing(catalystApp);
+    if (busyImports.length > 0) {
+      const busy = busyImports[0];
+      return res.status(409).json({
+        success: false,
+        code: "IMPORT_STILL_PROCESSING",
+        message: `The ${busy.what} for the import started at ${timeOfDay(busy.startedAtMs)} is still running. Importing now could count trades twice in holdings or cash. Try again when it finishes.`,
+        running: busyImports.map((r) => r.jobName),
+      });
+    }
+    // Said with the reply, never a reason to refuse: the job is gone, so it
+    // cannot overlap this import.
+    const importWarning =
+      deadImports.length > 0
+        ? `The ${deadImports[0].what} for the import started at ${timeOfDay(deadImports[0].startedAtMs)} never finished. Ask the developer to check it and rebuild holdings / cash if needed.`
+        : "";
+
     /* ─── 1c. DISTINCT (BROKERACID, SYMBOLCODE) FOR SCOPED HOLDINGS JOB ─ */
     let scopePairsResult = { pairs: [], truncated: false };
     try {
@@ -1038,6 +1179,7 @@ export const uploadTempTransaction = async (req, res) => {
       table: TABLE_NAME,
       holdingsPairsCount: scopePairsResult.pairs.length,
       status: "PROCESSING",
+      ...(importWarning ? { warning: importWarning } : {}),
     });
   } catch (error) {
     console.error(
