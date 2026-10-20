@@ -18,6 +18,7 @@
  */
 
 import { EXCEPTION_STATUS, EXCEPTION_TYPE, RUN_STATUS, STAGE } from "./constants.js";
+import { parseFaRawKey } from "./storage.js";
 
 export const TABLE = {
   RUN: "Custody_Match_Run",
@@ -284,9 +285,63 @@ export const releaseImportMarker = async (catalystApp, runId) => {
   const run = await getRun(catalystApp, runId);
   if (!run || !String(run.stageDetail || "").startsWith(IMPORTED_MARKER)) return false;
   await updateRun(catalystApp, runId, {
-    stageDetail: "Import failed — check the Transaction table, then commit again",
+    stageDetail: `${IMPORT_FAILED_MARKER} — commit again; trades it saved are skipped`,
   });
   return true;
+};
+
+/*
+ * stageDetail prefixes of a run whose file was committed before but may be
+ * committed again: the import failed (some rows may still have been saved), or
+ * trades from the file were deleted in Transaction Deletion. Committing such a
+ * date again books only the trades not already in Transaction (proceedToImport).
+ */
+export const IMPORT_FAILED_MARKER = "Import failed";
+export const REOPENED_MARKER = "Re-opened";
+
+/** Does the run's transaction file hold trades dated `tradeDate`? */
+const fileCoversTradeDate = (run, tradeDate) => {
+  if (run.businessDate === tradeDate) return true;
+  const fa = parseFaRawKey(run.faRawKey);
+  return Boolean(fa?.coveredFrom && fa.coveredFrom <= tradeDate && tradeDate <= fa.coveredTo);
+};
+
+/**
+ * Trades were deleted in Transaction Deletion. Take the import mark off every
+ * committed run whose file holds trades of those dates, so the corrected trades
+ * can be committed again. Only the newest 300 committed runs are looked at: a
+ * deletion is a correction of recent work.
+ *
+ * @returns {Promise<string[]>} the file dates opened again, oldest first
+ */
+export const reopenRunsForDeletedTrades = async (catalystApp, tradeDates, deletedOn) => {
+  const dates = [...new Set(tradeDates.map((d) => String(d || "").slice(0, 10)).filter(Boolean))];
+  if (dates.length === 0) return [];
+
+  const committed = await fetchRunsWhere(
+    catalystApp.zcql(),
+    `stageDetail LIKE '${esc(IMPORTED_MARKER)}*'`,
+    NEWEST_FIRST,
+    ZCQL_PAGE,
+  );
+  const reopened = new Set();
+  for (const run of committed) {
+    if (!dates.some((d) => fileCoversTradeDate(run, d))) continue;
+    await updateRun(catalystApp, run.runId, {
+      stageDetail: `${REOPENED_MARKER} — trades of this file were deleted on ${deletedOn}; commit again to book the corrected trades`,
+    });
+    reopened.add(run.businessDate);
+  }
+  return [...reopened].sort();
+};
+
+/** Was this date's file committed before and opened again since? */
+export const wasCommittedBefore = async (catalystApp, businessDate) => {
+  const runs = await listRunsForDate(catalystApp, businessDate, ZCQL_PAGE);
+  return runs.some((r) => {
+    const detail = String(r.stageDetail || "");
+    return detail.startsWith(REOPENED_MARKER) || detail.startsWith(IMPORT_FAILED_MARKER);
+  });
 };
 
 /** `CM-<epochms>` — sorts chronologically and is unique enough for one screen. */

@@ -18,6 +18,9 @@
  *     once to rebuild the active buy queue in memory, then apply each new txn
  *     FIFO-style and INSERT one Holdings row per new txn. Prior Holdings rows
  *     are never touched. The Transaction table is not re-read here.
+ *   - A new txn dated before a row already saved for its pair (a late trade, or
+ *     dates committed out of order) → nothing is appended for that account; its
+ *     ISINs go to RebuildHoldingtable, which redoes them from all trades.
  *
  * Holdings columns written:
  *   WS_Account_code, TRANSACTION_DATE, SETTLEMENT_DATE, TYPE, ISIN,
@@ -266,6 +269,16 @@ function parseImportStartedAtMs(jobRequest) {
   }
 }
 
+/** This slave's first index in the pairs manifest; 0 in inline mode. */
+function parseChunkStart(jobRequest) {
+  try {
+    const p = jobRequest.getAllJobParams() || {};
+    return Math.max(0, Math.floor(Number(p.chunkStart ?? p.chunk_start) || 0));
+  } catch {
+    return 0;
+  }
+}
+
 function rowFromJobStatusRow(r) {
   if (!r) return null;
   return r.JobStatusPerAccount || r;
@@ -503,6 +516,109 @@ async function fetchAllHoldingsRowsForPair(zcql, accountCode, isin) {
     }
   }
   return rows;
+}
+
+/* ============================== LATE TRADES ============================== */
+
+/** ZCQL returns at most this many rows per query. */
+const ZCQL_ROW_CAP = 300;
+
+/**
+ * Holdings rows are read back in the order they were saved, each carrying the
+ * running HOLDING / WAP. A trade dated before rows already saved therefore
+ * cannot be added at the end: every later row's running figures would leave it
+ * out, and FIFO would use up the lots in the wrong order. Such an account is
+ * rebuilt from its trades instead (handOffAccountToRebuild).
+ *
+ * Same date rule as `holdingsEffectiveDate` in appsail-nodejs
+ * util/analytics/holdingsFromTable.js.
+ */
+const holdingsRowEffectiveDate = (r) => {
+  const type = String(r.TYPE || "").trim().toUpperCase();
+  const setD = String(r.SETTLEMENT_DATE || "").slice(0, 10);
+  const txD = String(r.TRANSACTION_DATE || "").slice(0, 10);
+  const caD = String(r.CA_DATE || "").slice(0, 10);
+  if ((type === "MERGER" || type === "DEMERGER") && caD) return caD;
+  return isOpiType(type) ? setD || txD : txD || setD;
+};
+
+/** The earliest date among new trades, or "" when none carries a date. */
+const earliestEffectiveDate = (txns) =>
+  txns
+    .map((t) => String(getEffectiveDate(t) || "").slice(0, 10))
+    .filter(Boolean)
+    .sort()[0] || "";
+
+/** Does the pair hold a row, saved before this import, dated after `date`? */
+async function hasHoldingsRowsDatedAfter(zcql, accountCode, isin, date, createdFloor) {
+  const d = esc(date);
+  const rows = await zcql.executeZCQLQuery(`
+    SELECT TYPE, TRANSACTION_DATE, SETTLEMENT_DATE, CA_DATE
+    FROM Holdings
+    WHERE WS_Account_code = '${esc(accountCode)}' AND ISIN = '${esc(isin)}'
+      AND CREATEDTIME < '${createdFloor}'
+      AND (TRANSACTION_DATE > '${d}' OR SETTLEMENT_DATE > '${d}' OR CA_DATE > '${d}')
+    LIMIT ${ZCQL_ROW_CAP}
+  `);
+  const list = (rows || []).map((r) => r.Holdings || r);
+  // A full page is taken as "yes" without checking further: a rebuild that was
+  // not needed still gives the right holdings.
+  if (list.length >= ZCQL_ROW_CAP) return true;
+  return list.some((r) => holdingsRowEffectiveDate(r) > date);
+}
+
+/**
+ * Jobs row for one account this chunk handed to RebuildHoldingtable. It starts
+ * with HOLD_<importStartedAtMs>, so a new transaction commit waits for it the
+ * same way it waits for the holdings row (findImportsStillProcessing in
+ * appsail-nodejs TempTransactionUpload.js). The chunk start keeps two chunks
+ * holding ISINs of the same account apart, and lets a retry of this chunk find
+ * its own row.
+ */
+const rebuildJobRowName = (importStartedAtMs, chunkStart, accountCode) =>
+  `HOLD_${importStartedAtMs}_R${chunkStart}_${accountCode}`;
+
+async function getJobsRowStatus(zcql, jobName) {
+  const rows = await zcql.executeZCQLQuery(
+    `SELECT status FROM Jobs WHERE jobName = '${esc(jobName)}' LIMIT 1`,
+  );
+  if (!rows || rows.length === 0) return "";
+  return String((rows[0].Jobs || rows[0]).status || "").trim().toUpperCase();
+}
+
+/** Same retries as the rebuilds Transaction Deletion queues. */
+const REBUILD_JOB_CONFIG = { number_of_retries: 5, retry_interval: 60 * 1000 };
+
+/**
+ * Queue the rebuild of these ISINs for one account: the same rebuild
+ * Transaction Deletion uses. It reads every trade of the account, this
+ * import's included, so nothing is appended for the account here. Corporate
+ * action records stay as saved (keepCaRecords). RebuildHoldingtable sets the
+ * row COMPLETED when it finishes.
+ */
+async function handOffAccountToRebuild(app, accountCode, isins, jobRowName) {
+  const zcql = app.zcql();
+  await ensureJobsRowRunning(zcql, jobRowName);
+  try {
+    await app.jobScheduling().JOB.submitJob({
+      job_name: `HRB${Date.now()}`.slice(0, 20),
+      jobpool_name: "CorporateActions",
+      target_name: "RebuildHoldingtable",
+      target_type: "Function",
+      job_config: REBUILD_JOB_CONFIG,
+      params: {
+        accountCodesJson: JSON.stringify([accountCode]),
+        isinsJson: JSON.stringify(isins),
+        source: "TxnUploadLateTrades",
+        keepCaRecords: "true",
+        importJobRowName: jobRowName,
+      },
+    });
+  } catch (err) {
+    // Nothing will end the row; FAILED also tells a retry of this chunk to submit again.
+    await finalizeJobsRow(zcql, jobRowName, "FAILED");
+    throw err;
+  }
 }
 
 /* ============================== QUEUE RECONSTRUCTION ============================== */
@@ -803,33 +919,13 @@ async function appendTxnsWithQueueReconstruct(
 }
 
 /**
- * Per-(account, ISIN) processing for TxnUpload mode.
- *   - Reads only new transactions since import.
+ * Per-(account, ISIN) processing for TxnUpload mode, given this import's new
+ * transactions for the pair (none of them dated before rows already saved).
  *   - Buys-only → cheap-append (read last Holdings row, append).
  *   - Any sell present → reconstruct buy queue from existing Holdings, then
  *     append one Holdings row per new txn.
- *   - No new txns → skip.
  */
-async function processPairTxnUpload(
-  zcql,
-  accountCode,
-  isin,
-  asOnDate,
-  importStartedAtMs,
-  counters,
-) {
-  const newTxns = await fetchNewTxnsForPair(
-    zcql,
-    accountCode,
-    isin,
-    importStartedAtMs,
-  );
-
-  if (newTxns.length === 0) {
-    console.log(`[${accountCode}/${isin}] no new txns since import — skip`);
-    return;
-  }
-
+async function processPairTxnUpload(zcql, accountCode, isin, newTxns, counters) {
   counters.pairs++;
 
   const hasSell = newTxns.some((t) => isSellType(t.Tran_Type));
@@ -899,16 +995,21 @@ async function processPairTxnUpload(
 /**
  * Dispatches per-pair processing for one account in TxnUpload mode only.
  *
+ * Decided for the whole account: if any new trade is dated before a row already
+ * saved for its pair, none is appended and the account's ISINs from this chunk
+ * go to RebuildHoldingtable instead. Deciding per account keeps a retry of this
+ * chunk simple: the account was either handed off (its Jobs row exists) or not.
+ *
  * Caller must guarantee: importStartedAtMs > 0 and scopedIsinsSet has entries.
- * Full rebuilds live in a separate dedicated job.
  */
 async function rebuildHoldingsForAccount(
+  app,
   zcql,
   accountCode,
-  asOnDate,
   counters,
   scopedIsinsSet,
   importStartedAtMs,
+  chunkStart,
 ) {
   const t0 = Date.now();
   const targetIsins = [...scopedIsinsSet]
@@ -920,20 +1021,53 @@ async function rebuildHoldingsForAccount(
       `importStartedAtMs=${importStartedAtMs} (start in ${Date.now() - t0}ms)`,
   );
 
+  // An earlier attempt of this chunk already handed the account off. Appending
+  // now would count its trades a second time on top of the rebuild.
+  const jobRowName = rebuildJobRowName(importStartedAtMs, chunkStart, accountCode);
+  const handOffStatus = await getJobsRowStatus(zcql, jobRowName);
+  if (handOffStatus && handOffStatus !== "FAILED") {
+    console.log(`[${accountCode}] already handed to RebuildHoldingtable (${jobRowName} ${handOffStatus}) — skip`);
+    return;
+  }
+
+  const createdFloor = createdTimeFloorFromMs(importStartedAtMs);
+  const newTxnsByIsin = new Map();
+  let hasLateTrade = false;
   for (const isin of targetIsins) {
-    if (MAX_PAIRS > 0 && counters.pairs >= MAX_PAIRS) {
+    if (MAX_PAIRS > 0 && counters.pairs + newTxnsByIsin.size >= MAX_PAIRS) {
       console.log(`MAX_PAIRS=${MAX_PAIRS} reached, stopping early`);
-      return;
+      break;
     }
+    const newTxns = await fetchNewTxnsForPair(zcql, accountCode, isin, importStartedAtMs);
+    if (newTxns.length === 0) {
+      console.log(`[${accountCode}/${isin}] no new txns since import — skip`);
+      continue;
+    }
+    newTxnsByIsin.set(isin, newTxns);
+    if (!hasLateTrade) {
+      const earliest = earliestEffectiveDate(newTxns);
+      hasLateTrade =
+        earliest !== "" &&
+        (await hasHoldingsRowsDatedAfter(zcql, accountCode, isin, earliest, createdFloor));
+    }
+  }
+
+  if (hasLateTrade) {
+    const isins = [...newTxnsByIsin.keys()];
+    console.log(
+      `[${accountCode}] a new trade is dated before saved Holdings rows — ` +
+        `rebuilding ${isins.length} ISIN(s) instead of appending (${jobRowName})`,
+    );
+    if (DRY_RUN) return;
+    await handOffAccountToRebuild(app, accountCode, isins, jobRowName);
+    counters.pairs += isins.length;
+    counters.handedOff++;
+    return;
+  }
+
+  for (const [isin, newTxns] of newTxnsByIsin) {
     try {
-      await processPairTxnUpload(
-        zcql,
-        accountCode,
-        isin,
-        asOnDate,
-        importStartedAtMs,
-        counters,
-      );
+      await processPairTxnUpload(zcql, accountCode, isin, newTxns, counters);
     } catch (err) {
       console.error(
         `[${accountCode}/${isin}] processPairTxnUpload failed:`,
@@ -960,7 +1094,9 @@ module.exports = async (jobRequest, context) => {
     const scopedPairs = await resolveScopedPairs(app, jobRequest);
     const fromTxnUpload = getJobSource(jobRequest) === HOLDINGS_UPLOAD_SOURCE;
     const importStartedAtMs = parseImportStartedAtMs(jobRequest);
-    const counters = { pairs: 0, rows: 0, errors: 0 };
+    const chunkStart = parseChunkStart(jobRequest);
+    // handedOff: accounts sent to RebuildHoldingtable because of a late trade.
+    const counters = { pairs: 0, rows: 0, errors: 0, handedOff: 0 };
 
     // Hard guard: this job is TxnUpload-only. Full rebuilds live in a separate job.
     if (!fromTxnUpload) {
@@ -1034,12 +1170,13 @@ module.exports = async (jobRequest, context) => {
       const errsBeforeAccount = counters.errors;
       try {
         await rebuildHoldingsForAccount(
+          app,
           zcql,
           accountCode,
-          AS_ON_DATE,
           counters,
           isinSet,
           importStartedAtMs,
+          chunkStart,
         );
         if (trackingOn) {
           if (counters.errors > errsBeforeAccount) {
@@ -1072,7 +1209,8 @@ module.exports = async (jobRequest, context) => {
 
     console.log(
       `CalculateHoldingWorkers TxnUpload done in ${Date.now() - startedAt}ms: ` +
-        `${counters.pairs} pair(s), ${counters.rows} row(s), ${counters.errors} error(s).`,
+        `${counters.pairs} pair(s), ${counters.rows} row(s), ${counters.errors} error(s), ` +
+        `${counters.handedOff} account(s) handed to RebuildHoldingtable.`,
     );
 
     if (trackingOn) {

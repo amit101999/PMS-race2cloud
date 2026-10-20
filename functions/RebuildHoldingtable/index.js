@@ -129,6 +129,24 @@ async function finalizeCaTrackIfNeeded(zcql, trackKey, subId, outcome) {
 }
 
 /**
+ * A transaction commit with a late trade hands the account here instead of
+ * adding the trade at the end (CalculateHoldingWorkers), and records a RUNNING
+ * `HOLD_<importStartedAtMs>_R…` row in `Jobs`. A new commit waits while that
+ * row is RUNNING, so it is set COMPLETED only once the rebuild has succeeded. A
+ * failed run is retried by Catalyst, so the row stays RUNNING until then.
+ */
+async function completeImportJobRow(zcql, jobRowName) {
+  if (!jobRowName) return;
+  try {
+    await zcql.executeZCQLQuery(
+      `UPDATE Jobs SET status = 'COMPLETED' WHERE jobName = '${esc(jobRowName)}'`,
+    );
+  } catch (e) {
+    console.warn(`[RebuildHoldingtable] could not set ${jobRowName} to COMPLETED:`, e.message);
+  }
+}
+
+/**
  * Catalyst job — rebuild `Holdings` from Transaction / Bonus / Split / Demerger / Merger.
  *
  * Params:
@@ -142,6 +160,8 @@ async function finalizeCaTrackIfNeeded(zcql, trackKey, subId, outcome) {
  * - parentStatusKey / subTaskKey: set only when dispatched by UpdateISINWorker;
  *   used to report this chunk's outcome back so the ISIN rename's status
  *   reflects the rebuild actually finishing (see finalizeSubtaskIfNeeded above).
+ * - importJobRowName: set only by CalculateHoldingWorkers when a transaction
+ *   commit brought a late trade (see completeImportJobRow below).
  *
  * @param {import("./types/job").JobRequest} jobRequest
  * @param {import("./types/job").Context} context
@@ -245,6 +265,7 @@ module.exports = async (jobRequest, context) => {
     }
 
     console.log("[RebuildHoldingtable] Success", counters);
+    await completeImportJobRow(zcql, String(params.importJobRowName || "").trim());
     await finalizeSubtaskIfNeeded(zcql, parentStatusKey, subTaskKey, "SUCCESS");
     await finalizeCaTrackIfNeeded(zcql, caTrackKey, caSubId, "SUCCESS");
     context.closeWithSuccess();

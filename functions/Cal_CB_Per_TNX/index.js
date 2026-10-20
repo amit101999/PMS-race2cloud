@@ -577,6 +577,25 @@ function resolveAccountList(jobRequest) {
   return { accounts: [], mode: "empty" };
 }
 
+/**
+ * A transaction commit with a late trade hands the account here instead of
+ * appending (Cal_CB_Append_TxnUpload), and records a RUNNING
+ * `CASH_<importStartedAtMs>_R_<account>` row in `Jobs`. A new commit waits
+ * while that row is RUNNING, so it is set COMPLETED only once the rebuild has
+ * succeeded. A failed run is retried by Catalyst, so the row stays RUNNING until then.
+ */
+async function completeImportJobRow(zcql, jobRequest) {
+  const jobRowName = String(getJobParams(jobRequest).importJobRowName || "").trim();
+  if (!jobRowName) return;
+  try {
+    await zcql.executeZCQLQuery(
+      `UPDATE Jobs SET status = 'COMPLETED' WHERE jobName = '${esc(jobRowName)}'`,
+    );
+  } catch (e) {
+    console.warn(`Cal_CB_Per_TNX: could not set ${jobRowName} to COMPLETED:`, e.message);
+  }
+}
+
 module.exports = async (jobRequest, context) => {
   const catalystApp = catalyst.initialize(context);
   const zcql = catalystApp.zcql();
@@ -625,6 +644,7 @@ module.exports = async (jobRequest, context) => {
       context.closeWithFailure();
       return;
     }
+    await completeImportJobRow(zcql, jobRequest);
     context.closeWithSuccess();
   } catch (error) {
     console.error("Cal_CB_Per_TNX failed:", error);

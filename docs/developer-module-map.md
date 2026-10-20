@@ -41,7 +41,7 @@ A change to one of these files affects every module listed against it. Pure disp
 | `util/analytics/dividendAccountRows.js` | Dividend, Custodian check | Dividend preview and dividend custodian check. |
 | `controller/custodyMatch/CustodyMatchFieldMap.js`, `util/custodyMatch/fieldMap.js` | Transaction Upload, Custodian Upload, Holding Comparison | The Field Mapping window on all three pages. Also update the copies (Section 2). |
 | `util/custodyMatch/normalize.js` | Transaction Upload, Custodian Upload | Date and value cleaning in trade files and custodian corporate action files. |
-| `util/custodyMatch/constants.js`, `util/custodyMatch/runStore.js` | Transaction Upload, Notifications | Matching runs and the notification bell. |
+| `util/custodyMatch/constants.js`, `util/custodyMatch/runStore.js` | Transaction Upload, Notifications, Transaction Deletion (`runStore.js`: `reopenRunsForDeletedTrades`) | Matching runs, the notification bell, and a delete re-opening committed dates. |
 | `util/holdingComparison/parse.js`, `storage.js`, `constants.js` | Holding Comparison, Custodian Upload, Transaction Upload (field mapping) | Holding statement upload, custodian file upload, field mapping preview. |
 | `util/holdingComparison/runStore.js` | Holding Comparison, Transaction Upload (field mapping), Notifications | Saving the custodian holding-statement mapping marks old comparison runs as out of date. Check the bell too. |
 | `util/caJobProgress.js` | Split, Bonus, Merger, Demerger, Notifications | Apply progress on all four corporate action pages and the bell. |
@@ -115,8 +115,8 @@ A table links modules even when they share no code file. If you change how a col
 | Table | Written by | Read by |
 |---|---|---|
 | `Transaction` | Transaction Upload commit (`TempTransactionUpload.js`), `EnrichTransactionSecurity` (fills security code and name), `UpdateSecurity_ClientMaster`, Update ISIN, Transaction Deletion (deletes rows) | Holdings functions, cash functions, Analytics, Reports, Dashboard, Transaction Deletion, Merger preview, custody matching |
-| `Holdings` | `CalculateHoldingWorkers` (after a commit), `RebuildHoldingtable` (after a corporate action or a transaction deletion), `HoldingUpdateManually`, `CalculateHoldingPerAccount`, `CalculateHoldingsPerAccount`, Update ISIN | Everything that uses `holdingsFromTable.js`, Demerger, `UpdateBonusTable`, `UpdateDividendData`, `ExportDividendAccounts`, `ExportAllCustomerHoldingData`, `FAHoldingsGenerator` |
-| `Cash_Balance_Per_Transaction` (passbook) | `Cal_CB_Append_TxnUpload`, `Cal_CB_Per_TNX` (manual, or after a transaction deletion), `UpdateDividendData` (dividend credit), Update ISIN | Cash Balance passbook, cash exports, Dividend (already-paid check) |
+| `Holdings` | `CalculateHoldingWorkers` (after a commit), `RebuildHoldingtable` (after a corporate action, a transaction deletion, or a commit with a late trade), `HoldingUpdateManually`, `CalculateHoldingPerAccount`, `CalculateHoldingsPerAccount`, Update ISIN | Everything that uses `holdingsFromTable.js`, Demerger, `UpdateBonusTable`, `UpdateDividendData`, `ExportDividendAccounts`, `ExportAllCustomerHoldingData`, `FAHoldingsGenerator` |
+| `Cash_Balance_Per_Transaction` (passbook) | `Cal_CB_Append_TxnUpload`, `Cal_CB_Per_TNX` (manual, after a transaction deletion, or for a commit with a late trade), `UpdateDividendData` (dividend credit), Update ISIN | Cash Balance passbook, cash exports, Dividend (already-paid check) |
 | `Cash_Ledger` | `CashCalculation` | Analytics cash summary (`CashController.js`). This is a different table from the passbook. |
 | `Security_List` | `UpdatesSecurity_ClientMasters` / `UpdateSecurity_ClientMaster` (new ISINs), `MegerFn`, `DemergerFn` (new company ISIN), Update ISIN | Security Master, every corporate action page, Analytics, Reports, `EnrichTransactionSecurity` |
 | `clientIds` (Client Master) | `UpdatesSecurity_ClientMasters` / `UpdateSecurity_ClientMaster` | Client Master, everything that uses `mapVirtualToActualCodes.js`, custody matching, `ExportCorpActionReport`, `FAHoldingsGenerator`, `ExportAllCustomerHoldingData` |
@@ -127,7 +127,7 @@ A table links modules even when they share no code file. If you change how a col
 | `Merger`, `Merger_Record` | `MegerFn`, Update ISIN | Holdings functions (`Merger`), Merger preview, corporate action reports |
 | `Demerger`, `Demerger_Record` | `DemergerFn`, Update ISIN | Holdings functions (`Demerger_Record`), Merger preview, corporate action reports |
 | `CA_Custodian_Upload`, `CA_Ex_Entitlement`, `CA_Benefit_Collection` | Custodian Upload (`util/corporateAction/custodianTables.js`) | Split, Bonus, Dividend custodian checks |
-| `Custody_Match_Run`, `Custody_Match_Exception`, `Custody_Match_File` | Transaction Upload controllers, `CustodyMatchRunner`, `CustodyMatchCleanup` (nightly clean-up) | Transaction Upload, Notifications (`Custody_Match_Run`) |
+| `Custody_Match_Run`, `Custody_Match_Exception`, `Custody_Match_File` | Transaction Upload controllers, `CustodyMatchRunner`, `CustodyMatchCleanup` (nightly clean-up), Transaction Deletion (re-opens committed runs) | Transaction Upload, Notifications (`Custody_Match_Run`) |
 | `Holding_Comparison_Run` | Holding Comparison controllers, `FAHoldingsGenerator`, `HoldingComparisonRunner`, Transaction Upload field mapping (marks runs out of date when the holding-statement mapping is saved) | Holding Comparison, Notifications |
 | `Jobs`, `JobStatusPerAccount` | Almost every module that starts a background job | Apply-status and export-status endpoints, Notifications |
 | `Notifications` | `NotificationController.js`, `util/notifications.js` | Notification bell |
@@ -186,6 +186,7 @@ Upload → Validate → Match → Review Exceptions → Commit. Business guide 3
   - `CustodyMatchRunner` (job) runs the match.
   - `CustodyMatchCleanup` (cron) clears old working files and runs every night.
   - After a commit (pool `UpdateMasters`): `UpdatesSecurity_ClientMasters` → `EnrichTransactionSecurity`, `CalculateHoldingMaster` → `CalculateHoldingWorkers`, and `Cal_CB_Append_TxnUpload`.
+  - For a client with a late trade (dated before rows already saved): `CalculateHoldingWorkers` queues `RebuildHoldingtable` (pool `CorporateActions`) and `Cal_CB_Append_TxnUpload` queues `Cal_CB_Per_TNX` (pool `UpdateMasters`), instead of appending.
 - **Tables:** writes `Transaction`, `Custody_Match_Run`, `Custody_Match_Exception`, `Custody_Match_File`, `Jobs`, `JobStatusPerAccount` and `Notifications`. Reads `clientIds`. Saving the custodian holding-statement mapping updates `Holding_Comparison_Run`.
 - **Before you change:**
   - `util/custodyMatch/*` is copied into `CustodyMatchRunner` and `CustodyMatchCleanup`, so copy your change across.
@@ -194,7 +195,8 @@ Upload → Validate → Match → Review Exceptions → Commit. Business guide 3
   - A change to how `Transaction` rows are written affects holdings, cash, Analytics and Reports.
   - The three FA `filler` columns are the optional Sub Folio, Transaction Fee and Transaction Fee Service Tax fields. The import writes them to `SUB_FOLIO`, `TOTAL_TRXNFEE` and `TOTAL_TRXNFEE_STAX`, and always calculates `NETRATE` / `Net_Amount` itself (`TempTransactionUpload.js`). `MKTRATE` (Market Rate) is saved to `MKTRATE`; only SETDATEFLAG is dropped. `SUB_FOLIO` must exist in every environment, or the commit fails.
   - Equity vs Mutual Funds transaction file is decided by `detectFaFileType` in `parseFA.js` (a TDS or Stamp Duty amount on any row means Mutual Funds). It runs in the field-map preview when the file is picked and again in `uploadFaFile`.
-  - Commit sends every shown run (`POST /runs/proceed`) and they are imported as one file. `uploadTempTransaction` refuses while a `Jobs` row `TxnCsv_*`, `HOLD_*` or `CASH_*` is `RUNNING` (younger than 3 hours): the holdings and cash jobs read every trade loaded since their import started, so imports must not overlap. The `HOLD_<ms>` / `CASH_<ms>` names are built in `TempTransactionUpload.js` and again in `functions/CalculateHoldingMaster` and `functions/Cal_CB_Append_TxnUpload`; change all three together.
+  - Commit sends every shown run (`POST /runs/proceed`) and they are imported as one file. `uploadTempTransaction` refuses while a `Jobs` row `TxnCsv_*`, `HOLD_*` or `CASH_*` is `RUNNING` (younger than 3 hours): the holdings and cash jobs read every trade loaded since their import started, so imports must not overlap. The `HOLD_<ms>` / `CASH_<ms>` names are built in `TempTransactionUpload.js` and again in `functions/CalculateHoldingMaster` and `functions/Cal_CB_Append_TxnUpload`; change all three together. A late-trade rebuild adds its own row, `HOLD_<ms>_R<chunk start>_<account>` (`CalculateHoldingWorkers`) or `CASH_<ms>_R_<account>` (`Cal_CB_Append_TxnUpload`), set `COMPLETED` by `RebuildHoldingtable` / `Cal_CB_Per_TNX` through their `importJobRowName` param; the guard reads the digits after the prefix, so keep the start time right after it.
+  - A date committed before and opened again (stage detail `Import failed …` or `Re-opened …`, see `runStore.js`) can be committed again; `proceedToImport` then leaves out the file's rows still in `Transaction` (`dropTradesStillBooked`, key built from `faRowStoredValues` in `parseFA.js`). The key must follow how the import stores a row (`normalizeCsvForBulkUpload` in `TempTransactionUpload.js`).
 
 ### 4.5 Transaction Deletion
 Find committed trades by commit date, delete the wrong ones, and see what was deleted on each day. Business guide 3.5.
@@ -204,7 +206,8 @@ Find committed trades by commit date, delete the wrong ones, and see what was de
 - **Own files:** the screen files above.
 - **Shared files:** `controller/TransactionController.js` and `router/TransactionRouter.js` also serve the Analytics drill-down. The controller imports `util/analytics/holdingsFromTable.js` for the drill-down only.
 - **Background functions:** after a delete, for each affected client: `RebuildHoldingtable` (pool `CorporateActions`, limited to the ISINs that lost trades, with `keepCaRecords: "true"`) and `Cal_CB_Per_TNX` (pool `UpdateMasters`, whole passbook).
-- **Tables:** deletes from `Transaction`. Writes `Transaction_Deletion_Log` (a copy of every deleted row; the history reads it by its `CREATEDTIME`). The rebuild jobs rewrite `Holdings` and `Cash_Balance_Per_Transaction`.
+- **Shared files (added):** `util/custodyMatch/runStore.js` (`reopenRunsForDeletedTrades`): a delete re-opens the committed Transaction Upload runs whose file holds a deleted trade's date, so the corrected file can be committed again.
+- **Tables:** deletes from `Transaction`. Writes `Transaction_Deletion_Log` (a copy of every deleted row; the history reads it by its `CREATEDTIME`) and the stage detail of re-opened `Custody_Match_Run` rows. The rebuild jobs rewrite `Holdings` and `Cash_Balance_Per_Transaction`.
 - **Before you change:**
   - Corporate action tables (`Bonus`, `Split`, `Split_Account`, `Merger`, `Demerger_Record`, `Dividend_Record`) are deliberately not changed by a delete. `keepCaRecords` stops `RebuildHoldingtable` from rewriting `Split_Account`; the rebuild replays the rest as saved.
   - Dividend cash is the one exception: `Cal_CB_Per_TNX` reads `Transaction_Deletion_Log` and leaves out a dividend credit when a deleted buy of that ISIN is dated on or before the record date and no remaining buy is (`dropDividendsEarnedByDeletedBuys`). This applies to every later full rebuild too.
@@ -220,7 +223,7 @@ Works out holdings from trades and corporate actions using FIFO. Business guide 
 - **Shared files:** `util/analytics/holdingsFromTable.js` is the read side. See Section 1.
 - **Background functions:**
   - `CalculateHoldingMaster` → `CalculateHoldingWorkers`: adds new trades after a commit.
-  - `RebuildHoldingtable`: full rebuild after Split, Bonus, Merger and Demerger, and an ISIN-limited rebuild per client after a transaction deletion. The `keepCaRecords` param (sent only by Transaction Deletion) skips the `Split_Account` writer.
+  - `RebuildHoldingtable`: full rebuild after Split, Bonus, Merger and Demerger, and an ISIN-limited rebuild per client after a transaction deletion or for a commit with a late trade. The `keepCaRecords` param (sent by Transaction Deletion and by `CalculateHoldingWorkers` for a late trade) skips the `Split_Account` writer. `importJobRowName` (late trade only) is set `COMPLETED` in `Jobs` when it succeeds.
   - `HoldingUpdateManually`: manual full rebuild through `/api/holding-update`.
   - `CalculateHoldingPerAccount` (event) and `CalculateHoldingsPerAccount` (job): other entry points to the same FIFO engine.
 - **Tables:** reads `Transaction`, `Bonus`, `Split`, `Merger` and `Demerger_Record`. Writes `Holdings`, `Split_Account`, `Jobs` and `JobStatusPerAccount`.
@@ -240,7 +243,7 @@ Client cash passbook. Business guide 3.7.
 - **Shared files:** `exportCashBalance.js` (Reports), `util/allAccountCodes.js`, `util/stratusSignedUrl.js`, `hooks/GetAllCodes.js`
 - **Background functions:**
   - `Cal_CB_Append_TxnUpload`: adds passbook lines after a commit.
-  - `Cal_CB_Per_TNX`: full rebuild from `Transaction` plus RECEIVED `Dividend_Record` rows (from 2020 onwards, no end date), leaving out dividends earned only through a deleted buy (`Transaction_Deletion_Log`). Run manually, and per client by Transaction Deletion.
+  - `Cal_CB_Per_TNX`: full rebuild from `Transaction` plus RECEIVED `Dividend_Record` rows (from 2020 onwards, no end date), leaving out dividends earned only through a deleted buy (`Transaction_Deletion_Log`). Run manually, per client by Transaction Deletion, and per client by `Cal_CB_Append_TxnUpload` for a late trade (`importJobRowName` is set `COMPLETED` in `Jobs` when it succeeds).
   - `ExportCashBalSingleClient` (pool `Export`).
   - `CashCalculation` (pool `Finance`) fills `Cash_Ledger`: it rebuilds each account from all its trades on every run (no "ROWID greater than last done" increment, because ROWIDs are not in time order).
   - `UpdateDividendData` (Dividend module) adds dividend credits.

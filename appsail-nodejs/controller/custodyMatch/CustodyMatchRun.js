@@ -20,7 +20,11 @@ import {
   signedGetUrl,
 } from "../../util/custodyMatch/storage.js";
 import { PROFILE_TYPE } from "../../util/custodyMatch/fieldMap.js";
-import { faRowsToConsolidatedCsv, parseFaFile } from "../../util/custodyMatch/parseFA.js";
+import {
+  faRowStoredValues,
+  faRowsToConsolidatedCsv,
+  parseFaFile,
+} from "../../util/custodyMatch/parseFA.js";
 import {
   IMPORTED_MARKER,
   allExceptions,
@@ -37,6 +41,7 @@ import {
   findImportedRunForDate,
   listFiles,
   listRunsForDate,
+  wasCommittedBefore,
 } from "../../util/custodyMatch/runStore.js";
 import {
   DIFFERENCE_CSV_COLUMNS,
@@ -653,6 +658,91 @@ const commitBlocker = async (catalystApp, run) => {
   return null;
 };
 
+/** One trade as Transaction stores it. Case, spaces and number format do not count. */
+const bookedTradeKey = ({ account, isin, tranType, tranDate, setDate, quantity, rate }) => {
+  const text = (v) => String(v ?? "").trim().toUpperCase();
+  const num = (v) => {
+    const n = Number(String(v ?? "").trim());
+    return Number.isFinite(n) ? String(Math.round(n * 1e6) / 1e6) : text(v);
+  };
+  return [
+    text(account),
+    text(isin),
+    text(tranType),
+    text(tranDate).slice(0, 10),
+    text(setDate).slice(0, 10),
+    num(quantity),
+    num(rate),
+  ].join("|");
+};
+
+/** How many times each trade dated on one of `tradeDates` is in Transaction. */
+const countBookedTrades = async (zcql, tradeDates) => {
+  const PAGE = 300;
+  const counts = new Map();
+  for (const date of tradeDates) {
+    // Paged by ROWID: ZCQL's OFFSET would repeat a row per page.
+    let lastRowId = "0";
+    for (;;) {
+      const result = await zcql.executeZCQLQuery(
+        "SELECT ROWID, WS_Account_code, ISIN, Tran_Type, TRANDATE, SETDATE, QTY, RATE FROM Transaction " +
+          `WHERE TRANDATE = '${date}' AND ROWID > ${lastRowId} ORDER BY ROWID ASC LIMIT ${PAGE}`,
+      );
+      const batch = (result || []).map((r) => r.Transaction || r);
+      for (const t of batch) {
+        const key = bookedTradeKey({
+          account: t.WS_Account_code,
+          isin: t.ISIN,
+          tranType: t.Tran_Type,
+          tranDate: t.TRANDATE,
+          setDate: t.SETDATE,
+          quantity: t.QTY,
+          rate: t.RATE,
+        });
+        counts.set(key, (counts.get(key) || 0) + 1);
+      }
+      if (batch.length < PAGE) break;
+      lastRowId = String(batch[batch.length - 1].ROWID);
+    }
+  }
+  return counts;
+};
+
+/**
+ * Leave out the rows of a date committed before that are still in Transaction,
+ * so committing its full corrected file books only the corrected trades.
+ * Counted, not just matched: a file can hold two identical trades, and only as
+ * many copies are left out as are booked.
+ *
+ * Example: 200 trades were committed, 3 were wrong and deleted. The corrected
+ * file holds 200 trades; 197 are still booked, so 3 are committed.
+ */
+const dropTradesStillBooked = async (zcql, rows, recommitRows) => {
+  const keyOf = new Map();
+  const tradeDates = new Set();
+  for (const row of recommitRows) {
+    const values = faRowStoredValues(row);
+    keyOf.set(row, bookedTradeKey(values));
+    const date = String(values.tranDate || "").slice(0, 10);
+    if (DATE_PATTERN.test(date)) tradeDates.add(date);
+  }
+
+  const booked = await countBookedTrades(zcql, [...tradeDates]);
+  const kept = [];
+  let skipped = 0;
+  for (const row of rows) {
+    const key = keyOf.get(row);
+    const left = key ? booked.get(key) || 0 : 0;
+    if (left > 0) {
+      booked.set(key, left - 1);
+      skipped++;
+      continue;
+    }
+    kept.push(row);
+  }
+  return { kept, skipped };
+};
+
 /**
  * POST /api/custody-match/runs/proceed
  * body: { runIds: ["CM-…", …] }
@@ -670,6 +760,10 @@ const commitBlocker = async (catalystApp, run) => {
  * What still refuses, for the whole commit: any run still working, superseded
  * or already imported, and two runs for one date. The import itself also
  * refuses while an earlier import's load, holdings or cash update is running.
+ *
+ * A date committed before and opened again (its import failed, or some of its
+ * trades were deleted) can be committed again; the trades of its file that are
+ * still in Transaction are left out (dropTradesStillBooked).
  *
  * The staged files are read back from the bucket and handed to the EXISTING
  * uploadTempTransaction handler unchanged, via a synthetic request carrying the
@@ -710,11 +804,15 @@ export const proceedToImport = async (req, res) => {
           message: `The transaction file for ${run.businessDate} is no longer stored. Upload it again and re-run the match.`,
         });
       }
+      // Committed before and opened again (failed import, or trades deleted):
+      // its trades still in Transaction are left out below.
+      const recommit = await wasCommittedBefore(catalystApp, run.businessDate);
       for (const f of files) {
         faFiles.push({
           key: f.fileKey,
           fileType: f.fileType,
           originalFileName: f.originalFileName,
+          recommit,
         });
       }
     }
@@ -740,7 +838,8 @@ export const proceedToImport = async (req, res) => {
     const profileTypeOf = (f) =>
       f.fileType === FA_FILE_TYPE.MUTUAL_FUND ? PROFILE_TYPE.FA_MUTUAL_FUND : PROFILE_TYPE.FA;
 
-    const merged = [];
+    let merged = [];
+    const recommitRows = new Set();
     for (const f of faFiles) {
       const type = profileTypeOf(f);
       const relaid = await parseFaFile(await getBuffer(bucket, f.key), {
@@ -756,7 +855,24 @@ export const proceedToImport = async (req, res) => {
         });
       }
       merged.push(...relaid.rows);
+      if (f.recommit) relaid.rows.forEach((row) => recommitRows.add(row));
     }
+
+    let skippedAlreadyBooked = 0;
+    if (recommitRows.size > 0) {
+      const { kept, skipped } = await dropTradesStillBooked(catalystApp.zcql(), merged, recommitRows);
+      merged = kept;
+      skippedAlreadyBooked = skipped;
+      if (merged.length === 0) {
+        return fail(res, 409, {
+          code: "NOTHING_NEW_TO_COMMIT",
+          message:
+            "Every trade in this file is already in the books from the earlier commit, so there is nothing new to commit.",
+          skippedAlreadyBooked,
+        });
+      }
+    }
+
     // TDS and Stamp Duty come only from the mutual fund file; without it the
     // import file stays the plain 26-column template.
     const withDeductions = faFiles.some((f) => f.fileType === FA_FILE_TYPE.MUTUAL_FUND);
@@ -809,6 +925,20 @@ export const proceedToImport = async (req, res) => {
       importStatus = code;
       return setStatus(code);
     };
+    // Adds the skipped count to the import's own success reply.
+    const sendJson = res.json.bind(res);
+    if (skippedAlreadyBooked > 0) {
+      res.json = (body) =>
+        sendJson(
+          importStatus < 400
+            ? {
+                ...body,
+                skippedAlreadyBooked,
+                skippedNote: `${skippedAlreadyBooked.toLocaleString("en-IN")} trade(s) already in the books from the earlier commit were skipped; ${merged.length.toLocaleString("en-IN")} committed.`,
+              }
+            : body,
+        );
+    }
 
     try {
       // uploadTempTransaction writes its own response, so the client sees the
@@ -824,6 +954,7 @@ export const proceedToImport = async (req, res) => {
       throw importErr;
     } finally {
       res.status = setStatus;
+      res.json = sendJson;
     }
   } catch (error) {
     console.error("[CustodyMatchRun] proceedToImport:", error);
