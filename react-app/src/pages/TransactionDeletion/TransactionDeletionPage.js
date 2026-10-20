@@ -11,7 +11,7 @@ import "../TempTransactionUpload/custody/CustodyMatch.css";
 import "../../styles/ops-pages.css";
 import "./TransactionDeletionPage.css";
 
-const PAGE_SIZE = 50;
+const PAGE_SIZE = 10;
 
 const EMPTY_FILTERS = {
   isin: "",
