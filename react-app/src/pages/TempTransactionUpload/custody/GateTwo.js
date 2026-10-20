@@ -153,6 +153,8 @@ const GateTwo = ({ runs, onImported }) => {
                                 downstream jobs are queued when it finishes.
                             </p>
                         ) : null}
+                        {/* A date committed before: only its trades not yet in the books went in. */}
+                        {result.skippedNote ? <p className="cm-verdict-sub">{result.skippedNote}</p> : null}
                         {result.warning ? <p className="cm-verdict-sub">{result.warning}</p> : null}
                     </div>
                 ) : null}

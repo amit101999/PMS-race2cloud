@@ -4,6 +4,7 @@ import {
   isHoldingsBuyType,
   isHoldingsSellType,
 } from "../util/analytics/holdingsFromTable.js";
+import { reopenRunsForDeletedTrades } from "../util/custodyMatch/runStore.js";
 
 export const getStockTransactionHistory = async (req, res) => {
   try {
@@ -527,6 +528,30 @@ async function queueRebuilds(app, deletedRows) {
 }
 
 /**
+ * A committed date stays locked on Transaction Upload so its file cannot be
+ * booked twice. Once some of its trades are deleted, the corrected trades must
+ * be committable again, so the dates of the deleted trades are opened again;
+ * committing one then skips the trades still booked. A failure here does not
+ * undo the delete: the dates simply stay locked.
+ *
+ * @returns {Promise<string[]>} the file dates opened again
+ */
+async function reopenCommittedDates(app, deleted) {
+  if (deleted.length === 0) return [];
+  try {
+    const today = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" });
+    return await reopenRunsForDeletedTrades(
+      app,
+      deleted.map((r) => r.TRANDATE),
+      today,
+    );
+  } catch (err) {
+    console.error("[deleteTransactions] could not re-open the committed dates:", err.message);
+    return [];
+  }
+}
+
+/**
  * POST /api/transaction/delete
  * Body: { rowIds: [...] } for rows marked one by one, or
  *       { all: true, date, isin, securityCode, clientCode, tranDate, setDate }
@@ -580,6 +605,7 @@ export const deleteTransactions = async (req, res) => {
 
     const { deleted, error } = await deleteRowsWithLog(app, rows);
     const { clientCount, failedAccounts } = await queueRebuilds(app, deleted);
+    const reopenedDates = await reopenCommittedDates(app, deleted);
 
     if (error) {
       console.error("[deleteTransactions] stopped part-way:", error);
@@ -590,6 +616,7 @@ export const deleteTransactions = async (req, res) => {
         deletedCount: deleted.length,
         clientCount,
         failedAccounts,
+        reopenedDates,
       });
     }
 
@@ -597,6 +624,7 @@ export const deleteTransactions = async (req, res) => {
       deletedCount: deleted.length,
       clientCount,
       failedAccounts,
+      reopenedDates,
     });
   } catch (err) {
     console.error("[deleteTransactions]", err);

@@ -161,9 +161,12 @@ async function releaseCustodyRun(catalystApp, custodyRunId) {
  * so a second import loaded while they run gets counted by both. A commit waits
  * until these rows leave RUNNING.
  *
- * The names end in the import's start time (epoch ms). The two functions build
- * the same names from their importStartedAtMs param, so keep them in step with
- * functions/CalculateHoldingMaster and functions/Cal_CB_Append_TxnUpload.
+ * The names carry the import's start time (epoch ms) after the prefix. The two
+ * functions build the same names from their importStartedAtMs param, so keep
+ * them in step with functions/CalculateHoldingMaster and
+ * functions/Cal_CB_Append_TxnUpload. A client rebuilt because of a late trade
+ * gets its own row, HOLD_<ms>_R… (CalculateHoldingWorkers) or CASH_<ms>_R_…
+ * (Cal_CB_Append_TxnUpload), and a commit waits for those too.
  */
 const IMPORT_JOB_PREFIX = { LOAD: "TxnCsv_", HOLDINGS: "HOLD_", CASH: "CASH_" };
 const holdingsJobRowName = (importStartedAtMs) => `${IMPORT_JOB_PREFIX.HOLDINGS}${importStartedAtMs}`;
@@ -217,7 +220,8 @@ async function findImportsStillProcessing(catalystApp) {
   for (const row of rows || []) {
     const jobName = String((row.Jobs || row).jobName || "");
     const prefix = Object.values(IMPORT_JOB_PREFIX).find((p) => jobName.startsWith(p));
-    const startedAtMs = Number(jobName.slice(prefix ? prefix.length : 0));
+    // Digits only: a rebuild handed off for a late trade adds "_R…" after them.
+    const startedAtMs = Number(jobName.slice(prefix ? prefix.length : 0).match(/^\d+/)?.[0]);
     if (!prefix || !Number.isFinite(startedAtMs) || startedAtMs <= 0) continue;
 
     const age = Date.now() - startedAtMs;

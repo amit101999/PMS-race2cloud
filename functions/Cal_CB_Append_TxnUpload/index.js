@@ -9,6 +9,9 @@
  *   appending it deletes any cash rows this import already wrote for the account
  *   (idempotent — safe to re-run after a mid-account crash).
  * - Continues Cash_Balance / Sequence from the last passbook row per account.
+ *   When a new cash event is dated before lines already in the passbook (a late
+ *   trade, or dates committed out of order), the account is handed to
+ *   Cal_CB_Per_TNX for a full rebuild instead.
  * - Self-re-triggers with lastAccount=<cursor> when near the function time limit,
  *   resuming exactly where it stopped.
  * - Queued from TempTransactionUpload with source=TxnUpload, importStartedAtMs, lastAccount="".
@@ -342,8 +345,109 @@ async function deleteThisImportCashRowsForAccount(zcql, accountCode, createdFloo
   }
 }
 
-async function incrementalAppendForAccount(zcql, accountCode, importStartedAtMs) {
+/* ============================== LATE TRADES ============================== */
+
+/**
+ * The passbook is a running balance in Sequence order. A cash event dated
+ * before lines already there cannot be added at the end: every balance after
+ * its date would leave it out. Such an account is rebuilt from scratch by
+ * Cal_CB_Per_TNX instead (handOffAccountToFullRebuild).
+ *
+ * Jobs row for that rebuild. It starts with CASH_<importStartedAtMs>, so a new
+ * transaction commit waits for it the same way it waits for this job's own row
+ * (findImportsStillProcessing in appsail-nodejs TempTransactionUpload.js).
+ */
+const fullRebuildJobRowName = (importStartedAtMs, accountCode) =>
+  `CASH_${importStartedAtMs}_R_${accountCode}`;
+
+async function getJobsRowStatus(zcql, jobName) {
+  const rows = await zcql.executeZCQLQuery(
+    `SELECT status FROM Jobs WHERE jobName = '${esc(jobName)}' LIMIT 1`,
+  );
+  if (!rows || rows.length === 0) return "";
+  return String((rows[0].Jobs || rows[0]).status || "").trim().toUpperCase();
+}
+
+/** ZCQL returns at most this many rows per query. */
+const ZCQL_ROW_CAP = 300;
+
+/**
+ * Does the passbook hold a line dated after `date`? The line's date follows the
+ * same rule as the events (mapInflow / mapOutflow): money in by settlement date,
+ * everything else by trade date. Dividend lines carry the record date in both.
+ */
+async function hasPassbookLinesDatedAfter(zcql, accountCode, date) {
+  const d = esc(date);
+  const rows = await zcql.executeZCQLQuery(`
+    SELECT Transaction_Type, Transaction_Date, Settlement_Date
+    FROM Cash_Balance_Per_Transaction
+    WHERE Account_Code = '${esc(accountCode)}'
+      AND (Transaction_Date > '${d}' OR Settlement_Date > '${d}')
+    LIMIT ${ZCQL_ROW_CAP}
+  `);
+  const lines = (rows || []).map((r) => r.Cash_Balance_Per_Transaction || r);
+  // A full page is taken as "yes" without checking further: a rebuild that was
+  // not needed still gives the right passbook.
+  if (lines.length >= ZCQL_ROW_CAP) return true;
+  return lines.some((l) => {
+    const tx = String(l.Transaction_Date || "").slice(0, 10);
+    const set = String(l.Settlement_Date || "").slice(0, 10);
+    const lineDate = CASH_ADD.includes(l.Transaction_Type) ? set || tx : tx || set;
+    return lineDate > date;
+  });
+}
+
+/**
+ * Queue the full passbook rebuild for one account: the same rebuild Transaction
+ * Deletion uses. It reads every trade, this import's included, plus the
+ * received dividends, so nothing is appended for the account here.
+ * Cal_CB_Per_TNX sets the row COMPLETED when it finishes.
+ */
+async function handOffAccountToFullRebuild(catalystApp, zcql, accountCode, jobRowName) {
+  try {
+    await zcql.executeZCQLQuery(
+      `INSERT INTO Jobs (jobName, status) VALUES ('${esc(jobRowName)}', 'RUNNING')`,
+    );
+  } catch {
+    // Left FAILED by an earlier attempt whose submit failed.
+    await zcql.executeZCQLQuery(
+      `UPDATE Jobs SET status = 'RUNNING' WHERE jobName = '${esc(jobRowName)}'`,
+    );
+  }
+  try {
+    await catalystApp.jobScheduling().JOB.submitJob({
+      job_name: `CRB${Date.now()}`.slice(0, 20),
+      jobpool_name: "UpdateMasters",
+      target_name: "Cal_CB_Per_TNX",
+      target_type: "Function",
+      job_config: { number_of_retries: 5, retry_interval: 60 * 1000 },
+      params: {
+        accountCodesJson: JSON.stringify([accountCode]),
+        source: "TxnUploadLateTrades",
+        importJobRowName: jobRowName,
+      },
+    });
+  } catch (err) {
+    // Nothing will end the row; FAILED also tells a retry of this job to submit again.
+    await zcql
+      .executeZCQLQuery(`UPDATE Jobs SET status = 'FAILED' WHERE jobName = '${esc(jobRowName)}'`)
+      .catch((e) => console.warn(`could not set ${jobRowName} to FAILED:`, e.message));
+    throw err;
+  }
+}
+
+async function incrementalAppendForAccount(catalystApp, zcql, accountCode, importStartedAtMs) {
   const createdFloor = createdTimeFloorFromMs(importStartedAtMs);
+
+  // Handed to the full rebuild by an earlier attempt of this job. Its rows were
+  // all written after this import started, so the clean-up delete below would
+  // wipe the rebuilt passbook.
+  const rebuildRow = fullRebuildJobRowName(importStartedAtMs, accountCode);
+  const rebuildStatus = await getJobsRowStatus(zcql, rebuildRow);
+  if (rebuildStatus && rebuildStatus !== "FAILED") {
+    console.log(`[${accountCode}] already handed to Cal_CB_Per_TNX (${rebuildRow} ${rebuildStatus}) — skip`);
+    return { inserted: 0, finalBalance: null, skipped: true, handedOff: true };
+  }
 
   // Idempotency: clear anything this import already wrote for the account (in
   // case a previous run crashed mid-account) before re-appending.
@@ -365,6 +469,20 @@ async function incrementalAppendForAccount(zcql, accountCode, importStartedAtMs)
   }
 
   sortCashEvents(newEvents);
+
+  const earliest =
+    newEvents
+      .map((e) => String(e.impactDate || "").slice(0, 10))
+      .filter(Boolean)
+      .sort()[0] || "";
+  if (earliest && (await hasPassbookLinesDatedAfter(zcql, accountCode, earliest))) {
+    console.log(
+      `[${accountCode}] a new cash event (${earliest}) is dated before passbook lines — ` +
+        `full rebuild instead of append (${rebuildRow})`,
+    );
+    await handOffAccountToFullRebuild(catalystApp, zcql, accountCode, rebuildRow);
+    return { inserted: 0, finalBalance: null, skipped: false, handedOff: true };
+  }
 
   let state = await getPassbookTail(zcql, accountCode);
   if (!state) {
@@ -460,6 +578,7 @@ module.exports = async (jobRequest, context) => {
 
         try {
           const result = await incrementalAppendForAccount(
+            catalystApp,
             zcql,
             accountCode,
             importStartedAtMs,
@@ -467,11 +586,15 @@ module.exports = async (jobRequest, context) => {
           counters.rows += result.inserted;
           if (result.skipped) counters.skipped++;
 
-          console.log(
-            `Account ${accountCode} done: ${result.inserted} row(s) appended` +
-              `${result.skipped ? " (no new cash transactions for this import)" : ""}, ` +
-              `final balance=${result.finalBalance}`,
-          );
+          if (result.handedOff) {
+            console.log(`Account ${accountCode} done: passbook handed to the full rebuild`);
+          } else {
+            console.log(
+              `Account ${accountCode} done: ${result.inserted} row(s) appended` +
+                `${result.skipped ? " (no new cash transactions for this import)" : ""}, ` +
+                `final balance=${result.finalBalance}`,
+            );
+          }
         } catch (err) {
           counters.errors++;
           console.error(`[${accountCode}] cash passbook append failed:`, err.message);

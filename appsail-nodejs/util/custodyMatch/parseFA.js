@@ -581,38 +581,11 @@ const csvField = (v) => {
  *        is part of it; the file the matcher re-reads stays at 26 columns.
  */
 export const faRowsToConsolidatedCsv = (rows, { withDeductions = false } = {}) => {
-  const accountCol = COL.accountCode;
   const headers = withDeductions ? [...FA_HEADERS, ...FA_DEDUCTION_HEADERS] : FA_HEADERS;
   const lines = [headers.map(csvField).join(",")];
 
   for (const row of rows) {
-    /*
-     * Two paths, and the choice is made per row so a mixed set cannot go wrong.
-     *
-     * Template layout -> copy the original cells and swap ONE column, so every
-     *                    value the parser never looked at still reaches the
-     *                    import exactly as the user exported it.
-     * Remapped layout -> the original cells are in the USER's order, which the
-     *                    import cannot read. Rebuild the 26 template columns
-     *                    from the mapped values instead. Columns the profile
-     *                    does not map come out blank, exactly as an empty cell
-     *                    in the template does today.
-     */
-    let cells;
-    if (row.usedTemplateLayout === false) {
-      cells = new Array(FA_HEADERS.length).fill("");
-      for (const [field, slot] of Object.entries(FA_TEMPLATE_SLOT)) {
-        const value = row.mapped ? row.mapped[field] : undefined;
-        if (value !== undefined && value !== null) cells[slot] = value;
-      }
-    } else {
-      cells = row.cells ? [...row.cells] : new Array(FA_HEADERS.length).fill("");
-      // A short row must still emit 26 columns or the import rejects the file.
-      while (cells.length < FA_HEADERS.length) cells.push("");
-      cells.length = FA_HEADERS.length;
-    }
-
-    cells[accountCol] = row.actualCode || row.accountCode || "";
+    const cells = faRowTemplateCells(row);
     if (withDeductions) {
       // Regular-file rows have no such columns and go in blank.
       cells.push(row.mapped?.tds ?? "", row.mapped?.stampDuty ?? "");
@@ -621,4 +594,54 @@ export const faRowsToConsolidatedCsv = (rows, { withDeductions = false } = {}) =
   }
 
   return lines.join("\n");
+};
+
+/** One row as the 26 template cells the import is handed (see faRowsToConsolidatedCsv). */
+export const faRowTemplateCells = (row) => {
+  /*
+   * Two paths, and the choice is made per row so a mixed set cannot go wrong.
+   *
+   * Template layout -> copy the original cells and swap ONE column, so every
+   *                    value the parser never looked at still reaches the
+   *                    import exactly as the user exported it.
+   * Remapped layout -> the original cells are in the USER's order, which the
+   *                    import cannot read. Rebuild the 26 template columns
+   *                    from the mapped values instead. Columns the profile
+   *                    does not map come out blank, exactly as an empty cell
+   *                    in the template does today.
+   */
+  let cells;
+  if (row.usedTemplateLayout === false) {
+    cells = new Array(FA_HEADERS.length).fill("");
+    for (const [field, slot] of Object.entries(FA_TEMPLATE_SLOT)) {
+      const value = row.mapped ? row.mapped[field] : undefined;
+      if (value !== undefined && value !== null) cells[slot] = value;
+    }
+  } else {
+    cells = row.cells ? [...row.cells] : new Array(FA_HEADERS.length).fill("");
+    // A short row must still emit 26 columns or the import rejects the file.
+    while (cells.length < FA_HEADERS.length) cells.push("");
+    cells.length = FA_HEADERS.length;
+  }
+
+  cells[COL.accountCode] = row.actualCode || row.accountCode || "";
+  return cells;
+};
+
+/**
+ * The values the import stores for a row in Transaction (WS_Account_code, ISIN,
+ * Tran_Type, TRANDATE, SETDATE, QTY, RATE), taken from the cells it is handed.
+ * Lets a commit tell whether a trade is already booked.
+ */
+export const faRowStoredValues = (row) => {
+  const cells = faRowTemplateCells(row);
+  return {
+    account: cells[COL.accountCode],
+    isin: cells[COL.isin],
+    tranType: cells[COL.tranType],
+    tranDate: cells[COL.tranDate],
+    setDate: cells[COL.settlementDate],
+    quantity: cells[COL.quantity],
+    rate: cells[COL.rate],
+  };
 };

@@ -293,6 +293,13 @@ function TransactionDeletionPage() {
       });
       const json = await res.json();
       const failedAccounts = json.failedAccounts || [];
+      // Dates whose file can now be committed again on Transaction Upload.
+      const reopenedDates = json.reopenedDates || [];
+      const reopenedNote =
+        reopenedDates.length > 0
+          ? ` ${reopenedDates.join(", ")} can be committed again on Transaction Upload; ` +
+            "trades still in the books are skipped."
+          : "";
 
       if (!res.ok) {
         setDeleteMessage({ type: "bad", text: json.message || "Delete failed." });
@@ -302,7 +309,8 @@ function TransactionDeletionPage() {
           text:
             `Deleted ${formatCount(json.deletedCount)} rows, but the holdings and cash ` +
             `recalculation could not be started for: ${failedAccounts.join(", ")}. ` +
-            "Ask a developer to rebuild these clients.",
+            "Ask a developer to rebuild these clients." +
+            reopenedNote,
         });
       } else {
         setDeleteMessage({
@@ -310,7 +318,8 @@ function TransactionDeletionPage() {
           text:
             `Deleted ${formatCount(json.deletedCount)} rows for ${formatCount(json.clientCount)} ` +
             "clients. Their holdings and cash are being recalculated in the background; " +
-            "this usually takes a few minutes.",
+            "this usually takes a few minutes." +
+            reopenedNote,
         });
       }
 

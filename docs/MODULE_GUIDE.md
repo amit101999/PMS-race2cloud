@@ -210,7 +210,8 @@ Every day the operator loads the trades, checks them against the custodian, and 
 5. **Commit (Gate 2).** Allowed once the run has finished. Open exceptions do not block it, but the operator gets a strong warning. **Each trade date can be committed only once**, whichever upload date it came from. That stops the same trades being booked twice. Equity and Mutual Funds files of the day are combined into one import file.
    - **Several dates.** When the operator ticks several dates for matching, the screen shows every date's result, one Exception details list and one Export for all of them. **Commit Transaction Files** commits every shown date that is not committed yet, together, as **one** import file. Every date is checked first; if one fails a check, nothing is committed and the message names the date.
    - **One import at a time.** The import is refused while an earlier import's load, holdings update or cash update is still running. Those jobs treat every trade loaded since their own import started as new, so an overlapping import would be counted twice in holdings or lose cash entries. A job still marked running 3 hours after its import started is taken as dead: the import goes ahead with a warning to check it.
-6. **Import.** The file is saved to `client-transaction-files/transactions/`, loaded into `Transaction` by a bulk write, and then three jobs are queued 10 seconds apart (see the job table below). Before the holdings and cash jobs are queued, `Jobs` rows `HOLD_<import start ms>` and `CASH_<import start ms>` are set to `RUNNING`; `CalculateHoldingMaster` and `Cal_CB_Append_TxnUpload` set them to `COMPLETED` at their real end (holdings also `FAILED` when chunks failed). A crash Catalyst will retry leaves the row `RUNNING`. If the bulk write is still going after 45 minutes, its `TxnCsv_*` row becomes `TIMED_OUT` (not `FAILED`) and is polled every 5 minutes for up to 3 hours; a late finish, by poll or callback, still queues the holdings and cash jobs, and a new import is refused while the row is `TIMED_OUT`. After 3 hours it is left `TIMED_OUT` and the runs stay locked.
+   - **Committing a date again.** A date opens again when its bulk write fails (`releaseImportMarker`, stage detail `Import failed …`) or when Transaction Deletion deletes trades of its file (`reopenRunsForDeletedTrades`, stage detail `Re-opened …`; the newest 300 committed runs whose file date, or FA file date range, covers a deleted trade's `TRANDATE`). Committing such a date leaves out the rows of its file still in `Transaction`, counted per trade on account + ISIN + type + trade date + settlement date + quantity + rate (`dropTradesStillBooked` in `CustodyMatchRun.js`). The reply carries `skippedAlreadyBooked`; if nothing is left, the commit is refused with `NOTHING_NEW_TO_COMMIT`. Example: 200 trades committed, 3 deleted, the corrected 200-trade file books 3.
+6. **Import.** The file is saved to `client-transaction-files/transactions/`, loaded into `Transaction` by a bulk write, and then three jobs are queued 10 seconds apart (see the job table below). Before the holdings and cash jobs are queued, `Jobs` rows `HOLD_<import start ms>` and `CASH_<import start ms>` are set to `RUNNING`; `CalculateHoldingMaster` and `Cal_CB_Append_TxnUpload` set them to `COMPLETED` at their real end (holdings also `FAILED` when chunks failed). A crash Catalyst will retry leaves the row `RUNNING`. If the bulk write is still going after 45 minutes, its `TxnCsv_*` row becomes `TIMED_OUT` (not `FAILED`) and is polled every 5 minutes for up to 3 hours; a late finish, by poll or callback, still queues the holdings and cash jobs, and a new import is refused while the row is `TIMED_OUT`. After 3 hours it is left `TIMED_OUT` and the runs stay locked. A client rebuilt because of a late trade (see 4.5 and 4.6) gets its own row, `HOLD_<ms>_R<chunk start>_<account>` or `CASH_<ms>_R_<account>`, which `RebuildHoldingtable` / `Cal_CB_Per_TNX` set to `COMPLETED`; a new import waits for those too.
 
 #### Run statuses
 
@@ -240,7 +241,7 @@ Every day the operator loads the trades, checks them against the custodian, and 
 | `CalculateHoldingMaster` | `UpdateMasters` | Up to 10 `CalculateHoldingWorkers` at a time, about 200 client-share pairs each; baton-passes itself |
 | `Cal_CB_Append_TxnUpload` | `UpdateMasters` | Itself again (baton pass after about 13 minutes) |
 
-**What a commit changes elsewhere.** New clients and securities appear in the Masters. Holdings and the cash passbook of every client in the file update. Analytics and reports show the new position. If a committed trade is dated **before** a corporate action already applied on the same share, the commit does **not** apply that corporate action to it: it only adds rows on top and does not replay corporate actions. The operator re-opens the action on its page (Split, Bonus or Dividend). The late client shows with no status, and **Send as Receivable** then **Confirm & Apply** apply the action to that client only (see 4.9, "Late clients").
+**What a commit changes elsewhere.** New clients and securities appear in the Masters. Holdings and the cash passbook of every client in the file update. Analytics and reports show the new position. If a committed trade is dated **before** rows already saved for its client and share (a late trade, or dates committed out of order), that client's shares from the file are rebuilt instead of added on top (see 4.5), and the passbook is rebuilt (see 4.6). The rebuild replays corporate action records **as saved** (`keepCaRecords`), the same as after a deletion: a split's ratio applies to the new holding, but a bonus, merger or demerger quantity worked out on the old holding stays, and a client with no record does not get the action. The operator re-opens the action on its page (Split, Bonus or Dividend). The late client shows with no status, and **Send as Receivable** then **Confirm & Apply** apply the action to that client only (see 4.9, "Late clients").
 
 ---
  
@@ -267,8 +268,9 @@ Every day the operator loads the trades, checks them against the custodian, and 
 3. Each worker looks only at the trades of this import. If a pair has only new purchases, it carries on the quantity, cost and average cost from the pair's last `Holdings` row and adds one row per purchase.
 4. If a pair has a new sale, the worker first replays the pair's existing `Holdings` rows to find the open lots, then applies the new trades by FIFO and adds one row per trade.
 5. Earlier `Holdings` rows are never changed or deleted. Corporate actions are not replayed here.
+6. **Late trades.** Before adding anything for an account, the worker checks each pair: is a new trade dated before a `Holdings` row saved before this import (same date rule as the read side: OPI by settlement, merger/demerger by `CA_DATE`, the rest by trade date)? If any pair is, nothing is added for the account. Its ISINs from this chunk go to `RebuildHoldingtable` (`keepCaRecords: "true"`, `importJobRowName`), with a `RUNNING` row `HOLD_<ms>_R<chunk start>_<account>` in `Jobs`. A retry of the chunk skips an account whose row exists (unless `FAILED`), so its trades are never added on top of the rebuild. Example: holding 100; 9 Sept (buy 50) committed, then 7 Sept (buy 20). Added on top, the 7 Sept row would carry 170 and show as the holding on 8 Sept; rebuilt, 8 Sept shows 120 and today 170.
 
-*Rebuild, after a corporate action:*
+*Rebuild, after a corporate action, a transaction deletion or a late trade:*
 
 1. The corporate action sends `RebuildHoldingtable` (pool `CorporateActions`) the affected clients, in chunks, and the shares involved.
 2. The job reads every trade and corporate action of those clients and shares, and replays the whole history using FIFO.
@@ -283,7 +285,7 @@ Every day the operator loads the trades, checks them against the custodian, and 
 
 | Table | Added | Changed | Deleted |
 | --- | --- | --- | --- |
-| `Holdings` | New rows after commit; all rows of a client+share after a rebuild | Renamed by Update ISIN | Before every rebuild, for the client+shares in scope |
+| `Holdings` | New rows after commit; all rows of a client+share after a rebuild (corporate action, deletion, late trade) | Renamed by Update ISIN | Before every rebuild, for the client+shares in scope |
 | `Split_Account` | Re-written by a rebuild (old and new holding per split) | Keeps Receivable status and received date | Re-written by a rebuild |
 
 **Other holdings jobs** (manual or older paths, not part of the daily flow): `HoldingUpdateManually`, `CalculateHoldingPerAccount`, `CalculateHoldingsPerAccount`.
@@ -308,19 +310,20 @@ Every day the operator loads the trades, checks them against the custodian, and 
 1. After a trade commit, `Cal_CB_Append_TxnUpload` finds every client with trades from this import (the `Transaction` rows created after the import started), up to 300 clients at a time.
 2. For each client it first removes any passbook lines this import already wrote, so a re-run after a crash never counts a trade twice.
 3. It carries on from the client's last passbook line. Each new trade adds or takes money by the rules above, and its line gets the running balance and the next sequence number.
+   - **Late trades.** If the earliest new cash event is dated before a line already in the passbook (same date rule: money in by settlement date, the rest by trade date), nothing is added. The account goes to `Cal_CB_Per_TNX` for a full rebuild (`importJobRowName`), with a `RUNNING` row `CASH_<ms>_R_<account>` in `Jobs`. A re-run of this job skips an account whose row exists (unless `FAILED`) before its clean-up delete, which would otherwise wipe the rebuilt lines (they were all written after the import started). Example: balance Rs 1,00,000; 9 Sept (buy Rs 40,000) committed, then 7 Sept (sale Rs 10,000 paid 8 Sept). Rebuilt: 8 Sept Rs 1,10,000, after 9 Sept Rs 70,000.
 4. After about 13 minutes it saves the last client it finished and starts a fresh copy of itself, which carries on from the next client.
 5. A confirmed dividend adds its line through the Dividend apply job (see 4.12). The line's Price is the rate and its Quantity the holding, but its Amount is the **net** cash (gross − tax), so Price × Quantity differs from Amount when tax was deducted. The tax itself is kept on `Dividend_Record`, not on the passbook line.
-6. A full rebuild of the passbook is done only by `Cal_CB_Per_TNX`, run by hand.
+6. A full rebuild of the passbook is done by `Cal_CB_Per_TNX`: by hand, per client after Transaction Deletion, and per client for a late trade in a commit (step 3).
 
 | Table | Added | Changed | Deleted |
 | --- | --- | --- | --- |
-| `Cash_Balance_Per_Transaction` | One line per cash movement | Later balances when a dividend is inserted earlier in time | Only by the full rebuild job `Cal_CB_Per_TNX` (manual) |
+| `Cash_Balance_Per_Transaction` | One line per cash movement | Later balances when a dividend is inserted earlier in time | Only by the full rebuild job `Cal_CB_Per_TNX` (manual, Transaction Deletion, late trade) |
 | `Cash_Ledger` | Older daily ledger, written by `CashCalculation` (manual, pool `Finance`): each run deletes an account's rows and rebuilds one closing balance per day from all its trades (settlement date, or trade date when there is none) | Same | Same |
 
 **Watch out.**
 
 - `Cash_Ledger` and `Cash_Balance_Per_Transaction` are two separate cash systems and are not kept in step. The passbook (`Cash_Balance_Per_Transaction`) is the one used by the screens and uploads.
-- `Cal_CB_Per_TNX` deletes **every** passbook line of an account, dividend lines included, and rebuilds from `Transaction` only. Running it for an account that has received dividends removes that dividend cash. Do not run it for such accounts until it also replays `Dividend_Record`.
+- `Cal_CB_Per_TNX` deletes **every** passbook line of an account, dividend lines included, and rebuilds from `Transaction` plus the `RECEIVED` `Dividend_Record` rows (`fetchReceivedDividendEvents`). A change to how the Dividend apply job writes a credit must be mirrored there, or the rebuild loses that cash.
 
 ---
 
@@ -684,7 +687,8 @@ The bell shows the newest 5 tasks.
 | A demerger is applied | `Demerger`, `Demerger_Record`, `Security_List`, `Holdings` (rebuilt) | New ISIN appears; old ISIN's average cost falls |
 | An ISIN is renamed | 16 tables renamed | Every screen and report shows the new ISIN |
 | A Holding Comparison runs | `Holding_Comparison_Run`, Stratus reports | Holding Comparison page only |
-| A back-dated trade is committed before an applied corporate action | `Holdings` (added on top, no replay) | That client misses the action until the operator re-sends it on the Split / Bonus / Dividend page (late clients, see 4.9) |
+| A late trade is committed (dated before saved rows) | `Holdings` of that client's shares and `Cash_Balance_Per_Transaction` of the client (rebuilt, corporate action records replayed as saved) | Analytics, holdings and cash reports. A client without a record of an applied corporate action still misses it until the operator re-sends it on the Split / Bonus / Dividend page (late clients, see 4.9) |
+| Trades are deleted (Transaction Deletion) | `Transaction`, `Transaction_Deletion_Log`, `Holdings` and passbook of the clients (rebuilt), `Custody_Match_Run` stage detail (dates re-opened) | The dates can be committed again on Transaction Upload; trades still booked are skipped |
 
 ---
 
