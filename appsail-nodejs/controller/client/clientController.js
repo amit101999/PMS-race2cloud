@@ -1,10 +1,29 @@
 const esc = (s) => String(s ?? "").replace(/'/g, "''");
 const CLIENT_LIST_BATCH = 270;
 
+/*
+ * Only these clientIds columns leave the API. The table also holds PAN, Aadhaar,
+ * bank and nominee details, which the Client page must not receive at all.
+ */
+const CLIENT_COLUMNS = [
+  "ROWID",
+  "WS_Account_code",
+  "Actual_Code",
+  "Client_name",
+  "Status",
+  "Group_Name",
+  "Scheme_Code",
+  "Fund_Strategy_Code",
+  "Account_Type",
+  "Client_Status",
+  "DP_Client_Id",
+  "Inception_Date",
+].join(", ");
+
 /**
  * GET /api/client/list
- * Every client from the `clientIds` table (deduped by account code), all columns
- * returned as-is so the UI can render them dynamically. clientIds only.
+ * Every client from the `clientIds` table (deduped by account code), with the
+ * CLIENT_COLUMNS only.
  */
 export const getClientList = async (req, res) => {
   try {
@@ -15,7 +34,7 @@ export const getClientList = async (req, res) => {
 
     while (true) {
       const batch = await zcql.executeZCQLQuery(
-        `SELECT * FROM clientIds ORDER BY WS_Account_code ASC, ROWID ASC LIMIT ${CLIENT_LIST_BATCH} OFFSET ${offset}`,
+        `SELECT ${CLIENT_COLUMNS} FROM clientIds ORDER BY WS_Account_code ASC, ROWID ASC LIMIT ${CLIENT_LIST_BATCH} OFFSET ${offset}`,
       );
       if (!batch?.length) break;
 
@@ -42,9 +61,8 @@ export const getClientList = async (req, res) => {
 };
 
 /**
- * Client master details — reads everything stored for an account code from the
- * `clientIds` table only. No joins, no recompute; whatever columns the table
- * carries are returned as-is so the UI can render them dynamically.
+ * Client master details for one account code from the `clientIds` table, with
+ * the CLIENT_COLUMNS only.
  */
 export const getClientDetails = async (req, res) => {
   try {
@@ -56,7 +74,7 @@ export const getClientDetails = async (req, res) => {
     }
 
     const rows = await zcql.executeZCQLQuery(
-      `SELECT * FROM clientIds WHERE WS_Account_code = '${esc(accountCode)}'`,
+      `SELECT ${CLIENT_COLUMNS} FROM clientIds WHERE WS_Account_code = '${esc(accountCode)}'`,
     );
 
     const records = (rows || []).map((r) => r.clientIds || r);

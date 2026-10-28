@@ -19,6 +19,8 @@ import UpdateISINPage from "./pages/update-isin/UpdateISINPage";
 import CashBalancePage from "./pages/CashBalancePage/CashBalancePage";
 import ClientPage from "./pages/Master/ClientPage";
 import SecurityPage from "./pages/Master/SecurityPage";
+import TransactionTypePage from "./pages/Master/TransactionTypePage";
+import SchemePage from "./pages/Master/SchemePage";
 import TransactionDeletionPage from "./pages/TransactionDeletion/TransactionDeletionPage";
 
 function App() {
@@ -38,13 +40,15 @@ function App() {
           <Route path="/bhav-copy" element={<BhavCopyUploadPage />} />
           {/* <Route path="/transaction-upload" element={<TransactionUploadPage />} /> */}
           <Route path="/temp-transaction" element={<TempTransaction />} />
-          <Route path="/transaction-deletion" element={<TransactionDeletionPage />} />
+          {/* <Route path="/transaction-deletion" element={<TransactionDeletionPage />}> */}
           <Route path="/holding-comparison" element={<HoldingComparison />} />
           <Route path="/updateISIN" element={<UpdateISINPage />} />
           <Route path="/cash-balance" element={<CashBalancePage />} />
           <Route path="/reports" element={<ReportsPage />} />
           <Route path="/master-client" element={<ClientPage />} />
           <Route path="/master-security" element={<SecurityPage />} />
+          <Route path="/master-transaction-type" element={<TransactionTypePage />} />
+          <Route path="/master-scheme" element={<SchemePage />} />
         </Routes>
       </HashRouter>
     </JobNotificationProvider>

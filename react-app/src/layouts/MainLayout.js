@@ -62,6 +62,12 @@ function MainLayout({ title, rightContent, children }) {
     if (location.pathname === "/master-security") {
       return "master-security";
     }
+    if (location.pathname === "/master-transaction-type") {
+      return "master-transaction-type";
+    }
+    if (location.pathname === "/master-scheme") {
+      return "master-scheme";
+    }
 
     return "dashboard";
   };
@@ -91,6 +97,8 @@ function MainLayout({ title, rightContent, children }) {
       key: "master", label: "Master", children: [
         { key: "master-client", label: "Client" },
         { key: "master-security", label: "Security" },
+        { key: "master-transaction-type", label: "Transaction Type" },
+        { key: "master-scheme", label: "Scheme" },
       ]
     },
   ];
