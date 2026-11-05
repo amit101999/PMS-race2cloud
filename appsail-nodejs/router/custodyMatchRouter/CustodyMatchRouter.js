@@ -19,7 +19,7 @@ import {
   getLatestRun,
   getRunStatus,
   listReports,
-  proceedToImport,
+  // proceedToImport — old Commit, replaced by the Equity Pre-commit (see below).
   retryRun,
   startRun,
 } from "../../controller/custodyMatch/CustodyMatchRun.js";
@@ -30,6 +30,16 @@ import {
   previewHeaders,
   saveFieldMap,
 } from "../../controller/custodyMatch/CustodyMatchFieldMap.js";
+import {
+  getEquityDate,
+  listCommitHistory,
+  listConsolidatedFiles,
+  preCommitEquityDate,
+  retryEquityDate,
+  startEquityRun,
+  uploadEquityCustodyFile,
+  uploadEquityFaFile,
+} from "../../controller/custodyMatch/EquityReload.js";
 
 const router = express.Router();
 
@@ -121,8 +131,41 @@ router.get("/runs/exceptions/export", exportExceptions);
 // POST /api/custody-match/run/:runId/retry — system failures only
 router.post("/run/:runId/retry", retryRun);
 
-// POST /api/custody-match/runs/proceed — GATE 2, body { runIds: [...] }
-router.post("/runs/proceed", proceedToImport);
+/*
+ * Old Commit (GATE 2), commented out: it appended the file's trades to our books,
+ * so a re-uploaded date could be booked twice. The Equity tab's Pre-commit
+ * (/reload/:date/pre-commit) replaces it.
+ *
+ * // POST /api/custody-match/runs/proceed — GATE 2, body { runIds: [...] }
+ * router.post("/runs/proceed", proceedToImport);
+ */
+
+/* ── Equity tab: upload, match and Pre-commit a date (EquityReload.js) ─── */
+
+// POST /api/custody-match/reload/fa-file — check IDs, decide First/Add/Replace/Ask, badges
+router.post("/reload/fa-file", uploadEquityFaFile);
+
+// POST /api/custody-match/reload/custody-file — custodian file: First/Add/Skip/Ask by its lines, Replace on request
+router.post("/reload/custody-file", uploadEquityCustodyFile);
+
+// POST /api/custody-match/reload/run — build the date's final list, then match it
+router.post("/reload/run", startEquityRun);
+
+// GET /api/custody-match/reload/consolidated-files — the file each date's trades were last built from.
+// Registered before /reload/:date, which would otherwise take "consolidated-files" as a date.
+router.get("/reload/consolidated-files", listConsolidatedFiles);
+
+// GET /api/custody-match/reload/commit-history — every commit, newest first. Also before /reload/:date.
+router.get("/reload/commit-history", listCommitHistory);
+
+// GET /api/custody-match/reload/:date — pending files, match summary, Pre-commit progress
+router.get("/reload/:date", getEquityDate);
+
+// POST /api/custody-match/reload/:date/pre-commit — clean up the date (not on its first commit), insert, rebuild
+router.post("/reload/:date/pre-commit", preCommitEquityDate);
+
+// POST /api/custody-match/reload/:date/retry — continue a Pre-commit that stopped
+router.post("/reload/:date/retry", retryEquityDate);
 
 // GET /api/custody-match/run/:runId — poll target
 router.get("/run/:runId", getRunStatus);

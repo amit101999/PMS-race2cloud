@@ -304,6 +304,11 @@ const FA_FIELDS = [
   { field: "serviceTax", label: "Service Tax", kind: "number", required: true },
   { field: "stt", label: "STT", kind: "number", required: true },
   { field: "ref", label: "Transaction Ref", kind: "text", required: true },
+  // Each trade's own unique ID, a different column from Transaction Ref. The
+  // 26-column template has no such column, so it is optional here and the
+  // operator maps it on the Field Mapping screen. The Equity tab refuses a row
+  // without it (EquityReload.js); it is stored in Transaction.Transaction_ID.
+  { field: "transactionId", label: "Transaction ID", kind: "text", required: false },
   { field: "description", label: "Description", kind: "text", required: true },
 
   // Not used by matching, but carried through to the production import. A
@@ -1171,6 +1176,17 @@ export const FA_DEFAULT_COLUMNS = FA_HEADERS.map((name, index) => ({
 export const FA_TEMPLATE_SLOT = Object.fromEntries(
   Object.entries(DEFAULT_PROFILES[PROFILE_TYPE.FA]).map(([field, source]) => [field, source.index]),
 );
+
+/**
+ * The Equity tab's consolidated file: the 26 template columns, then the
+ * Transaction ID as column 27 (heading FA_TRANSACTION_ID_HEADER). Read with
+ * this profile, because the plain template has no Transaction ID column.
+ */
+export const FA_TRANSACTION_ID_HEADER = "Transaction ID";
+export const FA_CONSOLIDATED_PROFILE = {
+  ...DEFAULT_PROFILES[PROFILE_TYPE.FA],
+  transactionId: byIndex(FA_HEADERS.length),
+};
 
 /**
  * Is this profile the shipped default?

@@ -158,6 +158,49 @@ export const retryRun = (runId) => json(`/run/${runId}/retry`, "POST");
 
 export const proceedToImport = (runIds) => json("/runs/proceed", "POST", { runIds });
 
+/* ── Equity tab: upload, match and Pre-commit a date ─────────────────── */
+
+/* choice ("ADD" | "REPLACE") is sent only after the server answered mode "ASK". */
+export const uploadEquityFaFile = ({ file, businessDate, uploadDate, choice = "" }) =>
+  form("/reload/fa-file", { file, businessDate, uploadDate, choice });
+
+export const uploadEquityCustodyFile = ({ file, scheme, fileType, businessDate, uploadDate, replace = false }) =>
+  form("/reload/custody-file", {
+    file,
+    scheme,
+    fileType,
+    businessDate,
+    uploadDate,
+    replace: replace ? "true" : "",
+  });
+
+export const startEquityRun = (businessDate, uploadDate, startedBy) =>
+  json("/reload/run", "POST", { businessDate, uploadDate, startedBy });
+
+/** Pending files, the match summary and the Pre-commit progress of one date. */
+export const getEquityDate = (date) => request(`/reload/${date}`);
+
+export const preCommitEquityDate = (date, { runId, confirmBigRemoval = false }) =>
+  json(`/reload/${date}/pre-commit`, "POST", { runId, confirmBigRemoval: confirmBigRemoval ? "true" : "" });
+
+export const retryEquityDate = (date) => json(`/reload/${date}/retry`, "POST");
+
+export const getCommitHistory = () => request("/reload/commit-history");
+
+export const MODE_LABEL = {
+  FIRST: "First upload",
+  ADD: "Added as extra file",
+  REPLACE: "Replaces the date's trades",
+  ASK: "Your choice needed",
+};
+
+export const CUSTODY_MODE_LABEL = {
+  FIRST: "First custodian file",
+  ADD: "Added as extra file",
+  REPLACE: "Replaced the earlier file(s)",
+  SKIP: "Already uploaded",
+};
+
 /* ---------------------------------------------------------------- field mapping */
 
 /** All three profiles plus their field catalogs, in one call. */
@@ -320,6 +363,36 @@ export const todayIso = () => {
   const d = new Date();
   const p = (n) => String(n).padStart(2, "0");
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+};
+
+/*
+ * Equity tab: a trade date can be uploaded or committed until CHANGE_WINDOW_WORKING_DAYS
+ * working days after it (that day included; Saturday and Sunday skipped, no holidays).
+ * The server decides (lastChangeDate in util/custodyMatch/equityReload.js);
+ * this copy only warns before a file is picked. Keep the two in step.
+ */
+export const CHANGE_WINDOW_WORKING_DAYS = 150;
+
+export const lastChangeDate = (tradeDate) => {
+  const [y, m, d] = String(tradeDate).split("-").map(Number);
+  const day = new Date(Date.UTC(y, m - 1, d, 12));
+  let counted = 0;
+  while (counted < CHANGE_WINDOW_WORKING_DAYS) {
+    day.setUTCDate(day.getUTCDate() + 1);
+    const weekday = day.getUTCDay();
+    if (weekday !== 0 && weekday !== 6) counted++;
+  }
+  const p = (n) => String(n).padStart(2, "0");
+  return `${day.getUTCFullYear()}-${p(day.getUTCMonth() + 1)}-${p(day.getUTCDate())}`;
+};
+
+/** The locked-date message, or "" while the trade date is open. Same words as the server's. */
+export const closedDateMessage = (tradeDate) => {
+  if (!tradeDate) return "";
+  const last = lastChangeDate(tradeDate);
+  if (todayIso() <= last) return "";
+  const show = (iso) => iso.split("-").reverse().join("-");
+  return `${show(tradeDate)} is locked. The last day to upload or commit was ${show(last)}.`;
 };
 
 export function formatBytes(bytes) {

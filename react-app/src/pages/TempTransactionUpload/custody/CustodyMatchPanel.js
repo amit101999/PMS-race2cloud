@@ -3,6 +3,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import FieldMappingPanel from "./FieldMappingPanel";
 import UploadErrorDetails from "./UploadErrorDetails";
 import StatusBadge, { STATUS } from "./StatusBadge";
+import ReloadBadges from "./ReloadBadges";
 import * as api from "./api";
 import { useJobNotifications } from "../../../notifications/JobNotificationContext";
 import "./CustodyMatch.css";
@@ -161,21 +162,26 @@ const HeaderWarnings = ({ warnings }) => {
 
 /** Why a date cannot be ticked, or "" when both sides have a file. */
 const missingSideMessage = (d) => {
+    if (d.closed) return `Locked: the ${api.CHANGE_WINDOW_WORKING_DAYS} working days after the trade date have passed.`;
     if (d.faFiles.length === 0 && d.custodyFiles.length === 0) return "No files are present for this date.";
     if (d.custodyFiles.length === 0) return "Custodian file is not present for this date.";
-    if (d.faFiles.length === 0) return "FA file is not present for this date.";
+    if (d.faFiles.length === 0 && !d.faOptional) return "FA file is not present for this date.";
     return "";
 };
 
+/** A locked trade date: lock icon and one short line, styled as information. */
+const LockedNotice = ({ message }) => (
+    <div className="cm-reload-result cm-locked-note" role="status">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <rect x="5" y="10.5" width="14" height="10" rx="2" stroke="currentColor" strokeWidth="1.8" />
+            <path d="M8 10.5V7.5a4 4 0 0 1 8 0v3" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+        </svg>
+        <p>{message}</p>
+    </div>
+);
+
 /** "2026-09-25" -> "25-09-2026", the way dates are read on this screen. */
 const toDisplayDate = (iso) => (iso ? iso.split("-").reverse().join("-") : "");
-
-/** The "Last uploaded" line under an upload zone. */
-const LastUpload = ({ date }) => (
-    <p className="cm-muted cm-last-upload">
-        {date ? `Last uploaded: ${toDisplayDate(date)}` : "No files uploaded yet"}
-    </p>
-);
 
 /** "3 schemes" style summary of a date's custodian files. */
 const custodySummary = (files) => {
@@ -231,7 +237,13 @@ const MatchDialog = ({ dates, loading, error, selected, onToggle, onAll, onNone,
                                             />
                                             <span className="cm-date-label">{d.date}</span>
                                             <span className="cm-date-counts">
-                                                FA {d.faFiles.length > 0 ? `✓ (${d.faFiles.length} file(s))` : "✗"} ·
+                                                FA{" "}
+                                                {d.faFiles.length > 0
+                                                    ? `✓ (${d.faFiles.length} file(s))`
+                                                    : d.faOptional
+                                                      ? "our books"
+                                                      : "✗"}{" "}
+                                                ·
                                                 Custodian{" "}
                                                 {d.custodyFiles.length > 0 ? `✓ (${custodySummary(d.custodyFiles)})` : "✗"}
                                             </span>
@@ -270,6 +282,125 @@ const MatchDialog = ({ dates, loading, error, selected, onToggle, onAll, onNone,
     );
 };
 
+const ASK_REASON_TEXT = {
+    NO_IDS: "Some trades of this date were booked before transaction IDs existed, so they can only be matched by their details.",
+    NEW_IDS_LOOK_OLD: "None of this file's IDs are booked for the date, but most rows look like trades already booked. The file may have been exported again with new IDs.",
+    PARTIAL: "Only part of the date's IDs are in this file.",
+};
+
+/**
+ * Equity tab: the system could not tell whether the new file replaces the date's
+ * trades or adds to them, so the operator chooses. Each button says what it does.
+ */
+const AskModeDialog = ({ ask, busy, onChoose, onClose }) => {
+    const { res } = ask;
+    const option = (choice, title, comparison) => (
+        <div className="cm-ask-option">
+            <h4>{title}</h4>
+            <p className="cm-muted">
+                The date will have {comparison.totalAfter.toLocaleString()} trade(s) (now {comparison.totalBefore.toLocaleString()}).
+            </p>
+            <ReloadBadges counts={comparison.counts} samples={comparison.samples} duplicatesKey={comparison.duplicatesKey} />
+            <button type="button" className="cm-primary" disabled={busy} onClick={() => onChoose(choice)}>
+                {choice === "REPLACE" ? "Replace file" : "Add as extra file"}
+            </button>
+        </div>
+    );
+
+    return (
+        <>
+            <div className="cm-scrim" onClick={busy ? undefined : onClose} />
+            <div className="cm-dialog" role="dialog" aria-label="Replace or add">
+                <h3>Replace the date's trades, or add to them?</h3>
+                <p>
+                    <strong className="mono">{res.fileName}</strong> for {res.businessDate}.{" "}
+                    {ASK_REASON_TEXT[res.reason] || ""}
+                </p>
+                {option("REPLACE", "Replace file", res.options.replace)}
+                {option("ADD", "Add as extra file", res.options.add)}
+                <div className="cm-dialog-foot">
+                    <button type="button" className="cm-secondary" onClick={onClose} disabled={busy}>
+                        Cancel — do not upload
+                    </button>
+                </div>
+            </div>
+        </>
+    );
+};
+
+/**
+ * Equity tab: an uploaded FA file repeats trades already in our books (same
+ * Transaction ID, same values). Says how many, offers them as a download, and
+ * how many of the file's records go into the system. Wording only: Commit still
+ * cleans up the date and loads the whole file.
+ */
+const DuplicatesNotice = ({ comparison }) => {
+    const [busy, setBusy] = useState(false);
+    const [error, setError] = useState("");
+    const { same, changed, new: added, duplicate } = comparison.counts;
+    // The file's distinct records; a row repeated inside the file counts once.
+    const fileRecords = same + changed + added + duplicate;
+
+    const exportDuplicates = async () => {
+        setBusy(true);
+        setError("");
+        try {
+            const res = await api.getDownloadUrl(comparison.duplicatesKey);
+            window.open(res.downloadUrl, "_blank", "noopener,noreferrer");
+        } catch (err) {
+            setError(err.message);
+        } finally {
+            setBusy(false);
+        }
+    };
+
+    return (
+        <>
+            <p>
+                <strong>{duplicate.toLocaleString()} duplicate record(s)</strong> — already in our books with the same
+                Transaction ID.{" "}
+                {comparison.duplicatesKey ? (
+                    <button type="button" className="cm-linkbtn" onClick={exportDuplicates} disabled={busy}>
+                        {busy ? "Preparing…" : "Export duplicates"}
+                    </button>
+                ) : null}
+            </p>
+            <p>{(fileRecords - duplicate).toLocaleString()} record(s) will be updated in the system.</p>
+            {error ? <p className="cm-blockers">{error}</p> : null}
+        </>
+    );
+};
+
+/**
+ * Equity tab: a custodian file overlaps the lines stored for its date, scheme and
+ * type. Keeping both would count the repeated lines twice, so it replaces them or
+ * it is not uploaded.
+ */
+const ReplaceCustodyDialog = ({ ask, busy, onReplace, onClose }) => {
+    const { res } = ask;
+    return (
+        <>
+            <div className="cm-scrim" onClick={busy ? undefined : onClose} />
+            <div className="cm-dialog" role="dialog" aria-label="Replace custodian file">
+                <h3>Replace custodian file?</h3>
+                <p>
+                    A {res.scheme} custodian file is already uploaded for {toDisplayDate(res.businessDate)}. Do you want
+                    to replace it with <strong className="mono">{res.fileName}</strong>?
+                </p>
+                <p>Your existing transactions will not be affected.</p>
+                <div className="cm-dialog-foot">
+                    <button type="button" className="cm-secondary" onClick={onClose} disabled={busy}>
+                        Cancel
+                    </button>
+                    <button type="button" className="cm-primary" onClick={onReplace} disabled={busy}>
+                        {busy ? "Replacing…" : "Replace file"}
+                    </button>
+                </div>
+            </div>
+        </>
+    );
+};
+
 /**
  * Stage 1 + Stage 2 of the gated workflow, plus Gate 1 and the progress banner.
  *
@@ -281,6 +412,11 @@ const CustodyMatchPanel = ({
     onRunChange,
     onCustodyUploaded,
     onDayChange,
+    /* Equity tab: uploads go through /reload (Add / Replace by transaction ID,
+       badges), Match builds the date's final list, and only Equity files are taken. */
+    reloadMode = false,
+    /* Changes when a Pre-commit starts or finishes, so the FA file statuses are read again. */
+    preCommitTick = 0,
 }) => {
     /* Schemes already used, from the stored custodian keys. Each entry knows its
        own layout, so choosing a scheme fills the account type as well. */
@@ -293,6 +429,10 @@ const CustodyMatchPanel = ({
     const [addBusy, setAddBusy] = useState(false);
     const [addError, setAddError] = useState(null);
     const [addWarnings, setAddWarnings] = useState([]);
+    /* Equity tab: what the last custodian upload did, and the upload waiting on
+       the operator's Replace. */
+    const [custodyResult, setCustodyResult] = useState(null);
+    const [custodyAsk, setCustodyAsk] = useState(null);
     /*
      * Files removed during this visit. Stratus deletes the object at once but
      * its listing index lags by roughly twenty seconds, so every reload inside
@@ -315,6 +455,10 @@ const CustodyMatchPanel = ({
        a column we ignored, a field with nowhere to read from. The server has
        always sent these; the screen was dropping them. */
     const [faWarnings, setFaWarnings] = useState([]);
+    /* Equity tab: what the last FA upload did (mode and badges), and the
+       upload waiting on the operator's Replace / Add choice. */
+    const [faResult, setFaResult] = useState(null);
+    const [ask, setAsk] = useState(null);
 
     /* One run per date shown, oldest date first. */
     const [runs, setRuns] = useState([]);
@@ -555,31 +699,56 @@ const CustodyMatchPanel = ({
     );
 
     /*
+     * Equity tab: the FA files still waiting for a Pre-commit. The others are
+     * already in our books, so they are not "Ready", and removing one does not
+     * take its trades out. Null until read.
+     */
+    const [pendingFaKeys, setPendingFaKeys] = useState(null);
+    useEffect(() => {
+        if (!reloadMode) return undefined;
+        let stale = false;
+        const dates = [...new Set(faFiles.map((f) => f.businessDate))];
+        Promise.all(dates.map((d) => api.getEquityDate(d)))
+            .then((results) => {
+                if (stale) return;
+                setPendingFaKeys(new Set(results.flatMap((r) => r.pendingFiles.map((p) => p.key))));
+            })
+            .catch(() => {
+                // The list still shows; only the status is unknown until the next read.
+                if (!stale) setPendingFaKeys(null);
+            });
+        return () => {
+            stale = true;
+        };
+    }, [reloadMode, faFiles, preCommitTick]);
+
+    /*
      * The file dates with files saved under the upload date picked at the top.
      * Each upload date is its own set: a file date is ready only when BOTH an FA
      * and a custodian file were saved under this upload date.
      */
-    const uploadDayDates = uploadDate
-        ? matchDates.filter((d) => d.uploadDate === uploadDate)
-        : [];
+    /* Equity tab: a date is matched against every custodian file of that date,
+       whatever upload date it came under. */
+    const custodyFilesByDate = new Map();
+    for (const d of matchDates) {
+        custodyFilesByDate.set(d.date, [...(custodyFilesByDate.get(d.date) || []), ...d.custodyFiles]);
+    }
+    const uploadDayDates = (uploadDate ? matchDates.filter((d) => d.uploadDate === uploadDate) : []).map(
+        (d) => {
+            if (!reloadMode) return d;
+            const custodyFiles = custodyFilesByDate.get(d.date) || [];
+            // A date past its change window cannot be matched either.
+            const closed = api.closedDateMessage(d.date);
+            // No pending FA file is fine here: the match then checks our books.
+            // A date with neither is refused by the server, which can see the books.
+            return { ...d, custodyFiles, faOptional: true, closed, canMatch: custodyFiles.length > 0 && !closed };
+        },
+    );
     const readyDates = uploadDayDates.filter((d) => d.canMatch);
     const readyDateCount = readyDates.length;
-    const waitingDateCount = uploadDayDates.length - readyDateCount;
-
-    /*
-     * The most recent day a file on each side was uploaded, from the file table.
-     * Shown on each card whatever its date box says, so saved files are visible
-     * even before a date is picked.
-     */
-    const latestUploadedOn = (filesKey) => {
-        let latest = "";
-        for (const d of matchDates) {
-            if (d[filesKey].length > 0 && d.uploadDate > latest) latest = d.uploadDate;
-        }
-        return latest;
-    };
-    const custodyLastUpload = latestUploadedOn("custodyFiles");
-    const faLastUpload = latestUploadedOn("faFiles");
+    // A closed date is not waiting for anything; it is counted on its own.
+    const closedDates = uploadDayDates.filter((d) => d.closed);
+    const waitingDateCount = uploadDayDates.length - readyDateCount - closedDates.length;
 
     /**
      * Send a custodian file that the mapping panel has cleared.
@@ -594,8 +763,10 @@ const CustodyMatchPanel = ({
         setAddBusy(true);
         setAddError(null);
         setAddWarnings([]);
+        setCustodyResult(null);
         try {
-            const res = await api.uploadCustodyFile({
+            const upload = reloadMode ? api.uploadEquityCustodyFile : api.uploadCustodyFile;
+            const res = await upload({
                 file,
                 scheme,
                 fileType,
@@ -603,12 +774,19 @@ const CustodyMatchPanel = ({
                 uploadDate,
                 replace,
             });
+            // Nothing is stored: the operator answers first, or it is already uploaded.
+            if (res.stored === false) {
+                if (res.mode === "ASK") setCustodyAsk({ file, fileType, res });
+                else setCustodyResult(res);
+                return res;
+            }
+            setCustodyResult(reloadMode ? res : null);
             setAddWarnings(res.warnings || []);
             reportJob({
                 id: `txn-custody-upload-${Date.now()}`,
-                label: `Custodian file uploaded — ${file.name}`,
+                label: "Custodian file uploaded",
                 status: "completed",
-                message: `${scheme} · ${api.FILE_TYPE_LABEL[fileType] || fileType} is ready for matching.`,
+                message: `${file.name} (${scheme}) for ${toDisplayDate(custodyDate)}.`,
             });
             // The scheme and type stay selected: adding several days for one
             // scheme is the case this screen exists for, and clearing after
@@ -640,12 +818,13 @@ const CustodyMatchPanel = ({
      * Both sides remove a file the same way, so they share this. `onError` is
      * the only difference: the message belongs beside the file that failed.
      */
-    const removeFile = async (file, what, onError) => {
+    const removeFile = async (file, what, onError, note = "") => {
         if (
             !window.confirm(
                 `Remove ${what} from this run?
 
 ` +
+                    note +
                     "It may take 2–3 minutes to be deleted from storage. The notification bell " +
                     "says when it is gone.",
             )
@@ -694,11 +873,16 @@ const CustodyMatchPanel = ({
 
     /* The upload notes describe the last uploaded file, so they go once the
        user confirms removing a file or moves to another date / file type. */
-    const removeFaFile = (file) =>
-        removeFile(file, file.originalFileName, (error) => {
-            setFaWarnings([]);
-            setFaError(error);
-        });
+    const removeFaFile = (file, inBooks) =>
+        removeFile(
+            file,
+            file.originalFileName,
+            (error) => {
+                setFaWarnings([]);
+                setFaError(error);
+            },
+            inBooks ? "This file is already committed. Its trades stay in our books.\n\n" : "",
+        );
 
     const changeFaDate = (date) => {
         setFaWarnings([]);
@@ -706,11 +890,30 @@ const CustodyMatchPanel = ({
     };
 
     /** Same contract as uploadCustody: the mapping panel owns the errors. */
-    const uploadFa = async (file, { fileType, replace = false }) => {
+    const uploadFa = async (file, { fileType, replace = false, choice = "", businessDate = faDate }) => {
         setFaBusy(true);
         setFaError(null);
         setFaWarnings([]);
+        setFaResult(null);
         try {
+            if (reloadMode) {
+                const res = await api.uploadEquityFaFile({ file, businessDate, uploadDate, choice });
+                // Nothing is stored yet: the operator picks Replace or Add first.
+                if (res.mode === "ASK") {
+                    setAsk({ file, res });
+                    return res;
+                }
+                setFaResult(res);
+                setFaWarnings(res.warnings || []);
+                reportJob({
+                    id: `txn-fa-upload-${Date.now()}`,
+                    label: res.mode === "REPLACE" ? "Transaction file replaced" : "Transaction file uploaded",
+                    status: "completed",
+                    message: `${file.name} for ${toDisplayDate(res.businessDate)}.`,
+                });
+                await Promise.all([loadFaDay(), loadDay(), loadMatchDates().catch(() => {})]);
+                return res;
+            }
             const res = await api.uploadFaFile({
                 file,
                 businessDate: faDate,
@@ -721,9 +924,9 @@ const CustodyMatchPanel = ({
             setFaWarnings(res.warnings || []);
             reportJob({
                 id: `txn-fa-upload-${Date.now()}`,
-                label: `Transaction file uploaded — ${file.name}`,
+                label: "Transaction file uploaded",
                 status: "completed",
-                message: `${api.FA_FILE_TYPE_LABEL[fileType] || fileType} file is ready for matching.`,
+                message: `${file.name} for ${toDisplayDate(faDate)}.`,
             });
             await Promise.all([loadFaDay(), loadDay(), loadMatchDates().catch(() => {})]);
             return res;
@@ -753,6 +956,30 @@ const CustodyMatchPanel = ({
         });
     };
 
+    /* The operator chose Replace for a custodian file that overlaps the stored lines. */
+    const replaceCustodyFile = async () => {
+        const { file, fileType } = custodyAsk;
+        try {
+            await uploadCustody(file, { fileType, replace: true });
+        } catch (err) {
+            setAddError({ message: err.message, detail: err.detail });
+        } finally {
+            setCustodyAsk(null);
+        }
+    };
+
+    /* The operator answered the Replace / Add question; the file goes up now. */
+    const chooseAskOption = async (choice) => {
+        const { file, res } = ask;
+        try {
+            await uploadFa(file, { fileType: api.FA_FILE_TYPE.REGULAR, choice, businessDate: res.businessDate });
+        } catch (err) {
+            setFaError({ message: err.message, detail: err.detail });
+        } finally {
+            setAsk(null);
+        }
+    };
+
     /* ─── gate 1 ───────── */
 
     /* Enabled only when an upload date is picked and a file uploaded that day
@@ -765,8 +992,21 @@ const CustodyMatchPanel = ({
         blockerMessage = "Choose the upload date at the top to match the files uploaded that day.";
     } else if (uploadDayDates.length === 0) {
         blockerMessage = `No files were uploaded on ${toDisplayDate(uploadDate)}.`;
+    } else if (readyDateCount === 0 && closedDates.length === uploadDayDates.length) {
+        blockerMessage =
+            closedDates.length === 1
+                ? `${toDisplayDate(closedDates[0].date)} can no longer be matched or committed. The last day was ${toDisplayDate(
+                      api.lastChangeDate(closedDates[0].date),
+                  )}.`
+                : `These dates can no longer be matched or committed: ${closedDates
+                      .map((d) => toDisplayDate(d.date))
+                      .join(", ")}.`;
     } else if (readyDateCount === 0) {
-        blockerMessage = `No date uploaded on ${toDisplayDate(uploadDate)} has both an FA and a custodian file yet.`;
+        // On the Equity tab only the custodian side can be missing: without a new FA
+        // file the match checks our books.
+        blockerMessage = reloadMode
+            ? "To run the match, upload a custodian file for the same trade date as the FA file."
+            : "To run the match, upload an FA file and a custodian file for the same trade date.";
     }
 
     /**
@@ -787,23 +1027,23 @@ const CustodyMatchPanel = ({
 
         for (const date of dates) {
             try {
-                const res = await api.startRun(date, uploadDate);
+                const res = await (reloadMode ? api.startEquityRun : api.startRun)(date, uploadDate);
                 started.push({ date, runId: res.runId });
                 if (res.reused) {
                     /* Nothing was re-run: the same files can only say the same thing. */
                     reused.push(date);
                     reportJob({
                         id: `txn-match-reused-${date}-${Date.now()}`,
-                        label: `FA vs Custody matching — ${date}`,
+                        label: `Matching — ${toDisplayDate(date)}`,
                         status: "completed",
-                        message: res.message || "Already matched; showing that report.",
+                        message: "Already matched with these files. Showing that result.",
                     });
                 } else {
                     // The runId is the bell's key: the server settles it from the run's own status.
                     trackJob({
                         id: res.runId,
-                        label: `FA vs Custody matching — ${date}`,
-                        message: "Matching is running in the background.",
+                        label: `Matching — ${toDisplayDate(date)}`,
+                        message: "Matching FA and custodian files.",
                     });
                 }
             } catch (err) {
@@ -860,8 +1100,8 @@ const CustodyMatchPanel = ({
             await api.retryRun(run.runId);
             trackJob({
                 id: run.runId,
-                label: `FA vs Custody matching — ${run.businessDate}`,
-                message: "Retrying the match in the background.",
+                label: `Matching — ${toDisplayDate(run.businessDate)}`,
+                message: "Matching again.",
             });
             const status = await api.getRun(run.runId);
             setRuns((prev) => prev.map((r) => (r.runId === run.runId ? status.run : r)));
@@ -1002,18 +1242,26 @@ const CustodyMatchPanel = ({
     );
     /* A file needs both dates: the upload date at the top (recorded as when it
        was uploaded) and its card's date (the day its rows are for). */
-    const custodyDropDisabled = custodyZoneDisabled || !custodyDate || !uploadDate;
-    const faDropDisabled = faZoneDisabled || !faDate || !uploadDate;
+    /* Equity tab: a trade date past its working-day change window takes no files.
+       The server refuses them too; this only says so before a file is picked. */
+    const custodyClosed = reloadMode ? api.closedDateMessage(custodyDate) : "";
+    const faClosed = reloadMode ? api.closedDateMessage(faDate) : "";
+    const custodyDropDisabled = custodyZoneDisabled || !custodyDate || !uploadDate || Boolean(custodyClosed);
+    const faDropDisabled = faZoneDisabled || !faDate || !uploadDate || Boolean(faClosed);
 
-    const zoneTitle = (busy, cardDate, readyText) => {
+    const zoneTitle = (busy, cardDate, readyText, closed = "") => {
         if (busy) return "Validating…";
         if (!uploadDate) return "Choose the upload date at the top first";
         if (!cardDate) return "Choose a date first";
+        if (closed) return "This date is locked";
         return readyText;
     };
 
     /* "· uploaded 25-09-2026" on a file row, when the file table knows it. */
     const uploadedLabel = (f) => (f.uploadedOn ? ` · uploaded ${toDisplayDate(f.uploadedOn)}` : "");
+
+    /* Equity tab: a file of a trade date past its change window can no longer be removed. */
+    const closedFile = (f) => reloadMode && Boolean(api.closedDateMessage(f.businessDate));
 
     /* ── render ───────────────────────────────────────────────────────── */
 
@@ -1023,9 +1271,154 @@ const CustodyMatchPanel = ({
                 <h2>Files &amp; Validation</h2>
             </div>
 
-            {/* Custody on the left, the transaction file on the right: the two
+            {/* The transaction file on the left, custody on the right: the two
                 things Gate 1 needs, side by side rather than one below the other. */}
             <div className="cm-split">
+              <div className="cm-col">
+                <h3 className="cm-col-title">Fund Accounting</h3>
+
+                <div className="temp-transaction-card cm-filecard up-card">
+                    {/* Which transaction file this is. Mutual fund transactions
+                        arrive in their own fund-accounting file and are read
+                        through their own mapping. */}
+                    <div className="up-controls">
+                        <select
+                            className="up-select"
+                            value={faFileType}
+                            onChange={(e) => {
+                                setFaError(null);
+                                setFaWarnings([]);
+                                setFaFileType(e.target.value);
+                            }}
+                            disabled={faZoneDisabled}
+                        >
+                            <option value={api.FA_FILE_TYPE.REGULAR}>
+                                {api.FA_FILE_TYPE_LABEL.REGULAR}
+                            </option>
+                            {/* The Equity tab takes Equity files only. */}
+                            {reloadMode ? null : (
+                                <option value={api.FA_FILE_TYPE.MUTUAL_FUND}>
+                                    {api.FA_FILE_TYPE_LABEL.MUTUAL_FUND}
+                                </option>
+                            )}
+                        </select>
+
+                        {renderDateInput(
+                            "Date the transaction file is for",
+                            faDate,
+                            changeFaDate,
+                            faBusy || pending?.kind === "fa",
+                        )}
+                    </div>
+
+                    <div
+                        className={faDragActive ? "up-zone is-drag" : "up-zone"}
+                        onDragEnter={(e) => {
+                            e.preventDefault();
+                            if (!faDropDisabled) setFaDragActive(true);
+                        }}
+                        onDragOver={(e) => e.preventDefault()}
+                        onDragLeave={() => setFaDragActive(false)}
+                        onDrop={(e) => {
+                            e.preventDefault();
+                            setFaDragActive(false);
+                            if (faDropDisabled) return;
+                            const f = e.dataTransfer.files && e.dataTransfer.files[0];
+                            if (f) handleFaFilePicked(f);
+                        }}
+                    >
+                        <input
+                            ref={faInputRef}
+                            type="file"
+                            accept=".csv"
+                            className="up-zone-input"
+                            aria-label="Upload transaction file"
+                            disabled={faDropDisabled}
+                            onChange={(e) => {
+                                const f = e.target.files[0];
+                                e.target.value = "";
+                                handleFaFilePicked(f);
+                            }}
+                        />
+                        <div className="up-zone-visual">
+                            <UploadGlyph />
+                            <span className="up-zone-title">
+                                {zoneTitle(faBusy, faDate, "Upload transaction file", faClosed)}
+                            </span>
+                            <span className="up-zone-sub">
+                                Drag &amp; drop or <span className="up-zone-browse">Browse</span>
+                            </span>
+                        </div>
+                    </div>
+
+                    {faClosed ? <LockedNotice message={faClosed} /> : null}
+
+                    {faError ? <UploadErrorDetails message={faError.message} detail={faError.detail} /> : null}
+                    <HeaderWarnings warnings={faWarnings} />
+
+                    {/* Shown only when the file repeats trades already in our books, or
+                        removes many of them. The upload itself works the same either way. */}
+                    {faResult && (faResult.comparison.counts.duplicate > 0 || faResult.bigRemoval) ? (
+                        <div className="cm-reload-result" role="status">
+                            {faResult.comparison.counts.duplicate > 0 ? (
+                                <DuplicatesNotice comparison={faResult.comparison} />
+                            ) : null}
+                            {faResult.bigRemoval ? (
+                                <p className="cm-unreconciled">
+                                    <strong>Check this file.</strong> It removes{" "}
+                                    {faResult.comparison.counts.removed.toLocaleString()} of the date's{" "}
+                                    {faResult.comparison.totalBefore.toLocaleString()} trades. It may be a wrong or half file.
+                                </p>
+                            ) : null}
+                        </div>
+                    ) : null}
+
+                    {faFiles.length > 0 ? (
+                        <div className="up-filelist-wrap">
+                            <div className="up-filelist-head">Uploaded file</div>
+                            <div className="up-filelist">
+                                {faFiles.map((f) => {
+                                    const inBooks = pendingFaKeys !== null && !pendingFaKeys.has(f.key);
+                                    return (
+                                        <div className="up-file-row" key={f.key}>
+                                            <FileGlyph />
+                                            <div className="up-file-main">
+                                                <span className="up-file-name" title={f.originalFileName}>
+                                                    {f.originalFileName}
+                                                </span>
+                                                <span className="up-file-meta">
+                                                    {api.FA_FILE_TYPE_LABEL[f.fileType] || f.fileType} ·{" "}
+                                                    {faDateLabel(f)} · {api.formatBytes(f.sizeBytes)}
+                                                    {uploadedLabel(f)}
+                                                </span>
+                                            </div>
+                                            {removingKey === f.key ? (
+                                                <StatusBadge tone={STATUS.PROCESSING}>Removing…</StatusBadge>
+                                            ) : closedFile(f) ? (
+                                                <StatusBadge tone={STATUS.NEUTRAL}>Locked</StatusBadge>
+                                            ) : inBooks ? null : (
+                                                <StatusBadge tone={STATUS.OK}>Ready</StatusBadge>
+                                            )}
+                                            {closedFile(f) ? null : (
+                                                <button
+                                                    type="button"
+                                                    className="up-file-remove"
+                                                    onClick={() => removeFaFile(f, inBooks)}
+                                                    disabled={faBusy || anyRunning || Boolean(removingKey)}
+                                                    aria-label={`Remove ${f.originalFileName}`}
+                                                >
+                                                    &times;
+                                                </button>
+                                            )}
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        </div>
+                    ) : null}
+                </div>
+              </div>
+
               <div className="cm-col">
                 <h3 className="cm-col-title">Custodian Files</h3>
 
@@ -1131,7 +1524,7 @@ const CustodyMatchPanel = ({
                         <div className="up-zone-visual">
                             <UploadGlyph />
                             <span className="up-zone-title">
-                                {zoneTitle(addBusy, custodyDate, "Upload custodian file")}
+                                {zoneTitle(addBusy, custodyDate, "Upload custodian file", custodyClosed)}
                             </span>
                             <span className="up-zone-sub">
                                 Drag &amp; drop or <span className="up-zone-browse">Browse</span>
@@ -1139,12 +1532,29 @@ const CustodyMatchPanel = ({
                         </div>
                     </div>
 
-                    <LastUpload date={custodyLastUpload} />
+                    {custodyClosed ? <LockedNotice message={custodyClosed} /> : null}
 
                     {addError ? (
                         <UploadErrorDetails message={addError.message} detail={addError.detail} />
                     ) : null}
                     <HeaderWarnings warnings={addWarnings} />
+
+                    {/* A stored file shows in the list below, so it needs no message. Only a
+                        file that was not stored, or a Replace whose clean-up failed, says so. */}
+                    {custodyResult && (!custodyResult.stored || custodyResult.cleanupError) ? (
+                        <div className="cm-reload-result" role="status">
+                            {!custodyResult.stored ? (
+                                <p>
+                                    <strong>{api.CUSTODY_MODE_LABEL[custodyResult.mode] || custodyResult.mode}</strong> —{" "}
+                                    {custodyResult.fileName} for {custodyResult.scheme} on {custodyResult.businessDate}. Nothing
+                                    was stored. To drop some lines, remove the stored file and upload the right one.
+                                </p>
+                            ) : null}
+                            {custodyResult.cleanupError ? (
+                                <p className="cm-unreconciled">{custodyResult.cleanupError}</p>
+                            ) : null}
+                        </div>
+                    ) : null}
 
                     {/* One row per uploaded file. Two files of the same type for the
                         same scheme are a duplicate only when they cover the same
@@ -1168,136 +1578,22 @@ const CustodyMatchPanel = ({
                                         </div>
                                         {removingKey === f.key ? (
                                             <StatusBadge tone={STATUS.PROCESSING}>Removing…</StatusBadge>
+                                        ) : closedFile(f) ? (
+                                            <StatusBadge tone={STATUS.NEUTRAL}>Locked</StatusBadge>
                                         ) : (
                                             <StatusBadge tone={STATUS.OK}>Ready</StatusBadge>
                                         )}
-                                        <button
-                                            type="button"
-                                            className="up-file-remove"
-                                            onClick={() => removeCustodyFile(f)}
-                                            disabled={anyRunning || Boolean(removingKey)}
-                                            aria-label={`Remove ${f.originalFileName}`}
-                                        >
-                                            &times;
-                                        </button>
-                                    </div>
-                                ))}
-                            </div>
-                        </div>
-                    ) : null}
-                </div>
-              </div>
-
-              <div className="cm-col">
-                <h3 className="cm-col-title">Fund Accounting</h3>
-
-                <div className="temp-transaction-card cm-filecard up-card">
-                    {/* Which transaction file this is. Mutual fund transactions
-                        arrive in their own fund-accounting file and are read
-                        through their own mapping. */}
-                    <div className="up-controls">
-                        <select
-                            className="up-select"
-                            value={faFileType}
-                            onChange={(e) => {
-                                setFaError(null);
-                                setFaWarnings([]);
-                                setFaFileType(e.target.value);
-                            }}
-                            disabled={faZoneDisabled}
-                        >
-                            <option value={api.FA_FILE_TYPE.REGULAR}>
-                                {api.FA_FILE_TYPE_LABEL.REGULAR}
-                            </option>
-                            <option value={api.FA_FILE_TYPE.MUTUAL_FUND}>
-                                {api.FA_FILE_TYPE_LABEL.MUTUAL_FUND}
-                            </option>
-                        </select>
-
-                        {renderDateInput(
-                            "Date the transaction file is for",
-                            faDate,
-                            changeFaDate,
-                            faBusy || pending?.kind === "fa",
-                        )}
-                    </div>
-
-                    <div
-                        className={faDragActive ? "up-zone is-drag" : "up-zone"}
-                        onDragEnter={(e) => {
-                            e.preventDefault();
-                            if (!faDropDisabled) setFaDragActive(true);
-                        }}
-                        onDragOver={(e) => e.preventDefault()}
-                        onDragLeave={() => setFaDragActive(false)}
-                        onDrop={(e) => {
-                            e.preventDefault();
-                            setFaDragActive(false);
-                            if (faDropDisabled) return;
-                            const f = e.dataTransfer.files && e.dataTransfer.files[0];
-                            if (f) handleFaFilePicked(f);
-                        }}
-                    >
-                        <input
-                            ref={faInputRef}
-                            type="file"
-                            accept=".csv"
-                            className="up-zone-input"
-                            aria-label="Upload transaction file"
-                            disabled={faDropDisabled}
-                            onChange={(e) => {
-                                const f = e.target.files[0];
-                                e.target.value = "";
-                                handleFaFilePicked(f);
-                            }}
-                        />
-                        <div className="up-zone-visual">
-                            <UploadGlyph />
-                            <span className="up-zone-title">
-                                {zoneTitle(faBusy, faDate, "Upload transaction file")}
-                            </span>
-                            <span className="up-zone-sub">
-                                Drag &amp; drop or <span className="up-zone-browse">Browse</span>
-                            </span>
-                        </div>
-                    </div>
-
-                    <LastUpload date={faLastUpload} />
-
-                    {faError ? <UploadErrorDetails message={faError.message} detail={faError.detail} /> : null}
-                    <HeaderWarnings warnings={faWarnings} />
-
-                    {faFiles.length > 0 ? (
-                        <div className="up-filelist-wrap">
-                            <div className="up-filelist-head">Uploaded file</div>
-                            <div className="up-filelist">
-                                {faFiles.map((f) => (
-                                    <div className="up-file-row" key={f.key}>
-                                        <FileGlyph />
-                                        <div className="up-file-main">
-                                            <span className="up-file-name" title={f.originalFileName}>
-                                                {f.originalFileName}
-                                            </span>
-                                            <span className="up-file-meta">
-                                                {api.FA_FILE_TYPE_LABEL[f.fileType] || f.fileType} ·{" "}
-                                                {faDateLabel(f)} · {api.formatBytes(f.sizeBytes)}
-                                                {uploadedLabel(f)}
-                                            </span>
-                                        </div>
-                                        {removingKey === f.key ? (
-                                            <StatusBadge tone={STATUS.PROCESSING}>Removing…</StatusBadge>
-                                        ) : (
-                                            <StatusBadge tone={STATUS.OK}>Ready</StatusBadge>
+                                        {closedFile(f) ? null : (
+                                            <button
+                                                type="button"
+                                                className="up-file-remove"
+                                                onClick={() => removeCustodyFile(f)}
+                                                disabled={anyRunning || Boolean(removingKey)}
+                                                aria-label={`Remove ${f.originalFileName}`}
+                                            >
+                                                &times;
+                                            </button>
                                         )}
-                                        <button
-                                            type="button"
-                                            className="up-file-remove"
-                                            onClick={() => removeFaFile(f)}
-                                            disabled={faBusy || anyRunning || Boolean(removingKey)}
-                                            aria-label={`Remove ${f.originalFileName}`}
-                                        >
-                                            &times;
-                                        </button>
                                     </div>
                                 ))}
                             </div>
@@ -1325,6 +1621,14 @@ const CustodyMatchPanel = ({
                             {waitingDateCount} date{waitingDateCount === 1 ? "" : "s"}
                         </span>
                     </div>
+                    {closedDates.length > 0 ? (
+                        <div className="cm-gate-fact">
+                            <span className="cm-gate-fact-label">Locked</span>
+                            <span className="cm-gate-fact-value">
+                                {closedDates.length} date{closedDates.length === 1 ? "" : "s"}
+                            </span>
+                        </div>
+                    ) : null}
                 </div>
 
                 <div className="cm-gate-row">
@@ -1348,7 +1652,7 @@ const CustodyMatchPanel = ({
                 {/* One block per date shown, oldest first. */}
                 {runs.map((run) => (
                     <div key={run.runId} className={`cm-progress ${run.status.toLowerCase()}`}>
-                        {/* One row: date, status and counts on the left, the run ID badge on the right. */}
+                        {/* One row: date, status and counts. The run ID shows only under a failure's details. */}
                         <div className="cm-progress-head cm-run-head">
                             <div className="cm-run-summary">
                                 <strong className="cm-run-date mono">{run.businessDate}</strong>
@@ -1380,7 +1684,6 @@ const CustodyMatchPanel = ({
                                     ) : null}
                                 </div>
                             </div>
-                            <span className="cm-run-badge mono" title="Run ID">{run.runId}</span>
                         </div>
 
                         {run.isRunning ? (
@@ -1450,6 +1753,19 @@ const CustodyMatchPanel = ({
                     onNone={() => setSelectedDates(new Set())}
                     onRun={() => startMatch([...selectedDates].sort())}
                     onClose={() => setPickerOpen(false)}
+                />
+            ) : null}
+
+            {ask ? (
+                <AskModeDialog ask={ask} busy={faBusy} onChoose={chooseAskOption} onClose={() => setAsk(null)} />
+            ) : null}
+
+            {custodyAsk ? (
+                <ReplaceCustodyDialog
+                    ask={custodyAsk}
+                    busy={addBusy}
+                    onReplace={replaceCustodyFile}
+                    onClose={() => setCustodyAsk(null)}
                 />
             ) : null}
 

@@ -4,8 +4,8 @@ import { PassThrough, Readable } from "stream";
 import { stratusSignedUrlToString } from "../../util/stratusSignedUrl.js";
 import { releaseImportMarker } from "../../util/custodyMatch/runStore.js";
 
-const BUCKET_NAME = "client-transaction-files";
-const TABLE_NAME = "Transaction";
+export const BUCKET_NAME = "client-transaction-files";
+export const TABLE_NAME = "Transaction";
 
 /** AppSail public base URL — used as the bulk-write callback target. */
 const APPSAIL_BASE_URL =
@@ -36,7 +36,7 @@ function escSql(s) {
   return String(s ?? "").replace(/'/g, "''");
 }
 
-async function ensureJobsRow(zcql, jobName, status) {
+export async function ensureJobsRow(zcql, jobName, status) {
   try {
     await zcql.executeZCQLQuery(`
       INSERT INTO Jobs (jobName, status) VALUES ('${escSql(jobName)}', '${escSql(status)}')
@@ -55,7 +55,7 @@ async function ensureJobsRow(zcql, jobName, status) {
   }
 }
 
-async function updateJobsStatus(zcql, jobName, status) {
+export async function updateJobsStatus(zcql, jobName, status) {
   try {
     await zcql.executeZCQLQuery(`
       UPDATE Jobs SET status = '${escSql(status)}' WHERE jobName = '${escSql(jobName)}'
@@ -97,12 +97,12 @@ function normalizeBulkStatus(raw) {
     .replace(/-/g, "_");
 }
 
-function isBulkSuccessStatus(status) {
+export function isBulkSuccessStatus(status) {
   const s = normalizeBulkStatus(status);
   return s === "COMPLETED" || s === "SUCCESS" || s === "SUCCESSFUL";
 }
 
-function isBulkFailedStatus(status) {
+export function isBulkFailedStatus(status) {
   return normalizeBulkStatus(status) === "FAILED";
 }
 
@@ -182,7 +182,7 @@ const IMPORT_JOB_DEAD_AFTER_MS = 3 * 60 * 60 * 1000;
 /* Dead rows older than this are old history, not worth a warning. */
 const IMPORT_JOB_WARN_WINDOW_MS = 24 * 60 * 60 * 1000;
 
-const timeOfDay = (ms) =>
+export const timeOfDay = (ms) =>
   new Date(ms).toLocaleTimeString("en-IN", {
     timeZone: "Asia/Kolkata",
     hour: "2-digit",
@@ -204,7 +204,7 @@ const IMPORT_JOB_LABEL = {
  * @returns {Promise<{running: {jobName:string, what:string, startedAtMs:number}[],
  *                    dead: {jobName:string, what:string, startedAtMs:number}[]}>}
  */
-async function findImportsStillProcessing(catalystApp) {
+export async function findImportsStillProcessing(catalystApp) {
   const rows = await catalystApp.zcql().executeZCQLQuery(`
     SELECT jobName FROM Jobs
     WHERE (status = 'RUNNING' OR status = '${LOAD_TIMED_OUT}')
@@ -490,6 +490,8 @@ const HEADER_MAP = {
   CashSetdate: "PAYMENTDATE",
   TDS: "TDSAMOUNT",
   "Stamp Duty": "STAMPDUTY",
+  // Column 27 of the Equity tab's consolidated file (FA_TRANSACTION_ID_HEADER in fieldMap.js).
+  "Transaction ID": "Transaction_ID",
 };
 
 /**
@@ -721,7 +723,7 @@ function csvCell(value) {
  * NETRATE and Net_Amount are appended to every row, always derived from
  * RATE / BROKERAGEPERSHARE / QTY / TRANSTYPE (see deriveNetRateAndAmount).
  */
-function normalizeCsvForBulkUpload(fileBuffer) {
+export function normalizeCsvForBulkUpload(fileBuffer) {
   const text = stripBom(fileBuffer.toString("utf8"));
   const separator = detectSeparator(getFirstLineText(fileBuffer));
   const rows = parseCsvRows(text, separator).map((cells) =>

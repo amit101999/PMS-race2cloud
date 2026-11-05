@@ -149,10 +149,24 @@ module.exports = async (jobRequest, context) => {
         { code: "NO_UPLOAD_DATE" },
       );
     }
-    const activeFiles = await CM.listFiles(app, { forDate: businessDate, uploadedOn: uploadDate });
-    const faFiles = activeFiles
-      .filter((f) => f.side === CM.FILE_SIDE.FA)
-      .map((f) => ({ key: f.fileKey, fileType: f.fileType, originalFileName: f.originalFileName }));
+    /*
+     * Equity tab (EquityReload.js): the FA side is the date's final list, already
+     * built into one 26-column file (books + pending files, duplicates merged),
+     * and the custodian side is every custodian file of the date, whatever upload
+     * date it came under. The consolidated file is always the built-in template
+     * plus the Transaction ID column, so it is read with FA_CONSOLIDATED_PROFILE,
+     * not the saved mapping.
+     */
+    const consolidatedKey = String(params.consolidatedKey || "").trim();
+    const activeFiles = await CM.listFiles(
+      app,
+      consolidatedKey ? { forDate: businessDate } : { forDate: businessDate, uploadedOn: uploadDate },
+    );
+    const faFiles = consolidatedKey
+      ? [{ key: consolidatedKey, fileType: CM.FA_FILE_TYPE.REGULAR, originalFileName: "the date's final list", template: true }]
+      : activeFiles
+          .filter((f) => f.side === CM.FILE_SIDE.FA)
+          .map((f) => ({ key: f.fileKey, fileType: f.fileType, originalFileName: f.originalFileName }));
     const custodyFiles = activeFiles
       .filter((f) => f.side === CM.FILE_SIDE.CUSTODY)
       .map((f) => ({
@@ -211,7 +225,7 @@ module.exports = async (jobRequest, context) => {
 
         const one = await CM.parseFaFile(faBuffer, {
           businessDate,
-          profile: profiles[profileType],
+          profile: raw.template ? CM.FA_CONSOLIDATED_PROFILE : profiles[profileType],
           type: profileType,
         });
         if (one.fileError) {

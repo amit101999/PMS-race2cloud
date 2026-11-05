@@ -45,6 +45,8 @@ function mapRow(n) {
 
 export function JobNotificationProvider({ children }) {
   const [jobs, setJobs] = useState([]); // newest first, max 10
+  // False until the server's first list arrives; the empty list before it is not real.
+  const [loaded, setLoaded] = useState(false);
   const jobsRef = useRef([]);
   const timerRef = useRef(null);
   const mountedRef = useRef(true);
@@ -56,6 +58,7 @@ export function JobNotificationProvider({ children }) {
   const applyList = useCallback((list) => {
     if (!mountedRef.current) return;
     setJobs((Array.isArray(list) ? list : []).map(mapRow));
+    setLoaded(true);
   }, []);
 
   const refresh = useCallback(async () => {
@@ -147,7 +150,7 @@ export function JobNotificationProvider({ children }) {
       .then((data) => (data?.success ? applyList(data.notifications) : refresh()));
   }, [applyList, refresh]);
 
-  const value = { jobs, trackJob, reportJob, dismissJob, clearAll, refresh };
+  const value = { jobs, loaded, trackJob, reportJob, dismissJob, clearAll, refresh };
 
   return (
     <JobNotificationContext.Provider value={value}>{children}</JobNotificationContext.Provider>

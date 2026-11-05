@@ -813,6 +813,46 @@ export const deleteRunsBefore = async (
   return { runs: runs.length, exceptions, skipped: all.length - runs.length };
 };
 
+/**
+ * Every match result of one trade date, when a replaced custodian file makes them
+ * meaningless. Other dates are untouched. Exceptions first, run rows after, so a
+ * failure part way leaves nothing without its run.
+ */
+export const deleteExceptionsForDate = async (catalystApp, businessDate) => {
+  const zcql = catalystApp.zcql();
+  const table = catalystApp.datastore().table(TABLE.EXCEPTION);
+  let removed = 0;
+
+  for (;;) {
+    const rows = unwrap(
+      await zcql.executeZCQLQuery(
+        `SELECT ROWID FROM ${TABLE.EXCEPTION} WHERE businessDate = '${esc(businessDate)}' LIMIT ${ZCQL_PAGE}`,
+      ),
+      TABLE.EXCEPTION,
+    );
+    if (rows.length === 0) break;
+    await table.deleteRows(rows.map((r) => r.ROWID));
+    removed += rows.length;
+    if (rows.length < ZCQL_PAGE) break;
+  }
+
+  return { removed };
+};
+
+export const deleteRunsForDate = async (catalystApp, businessDate) => {
+  const runs = await selectAll(
+    catalystApp.zcql(),
+    TABLE.RUN,
+    (limit, offset) =>
+      `SELECT ROWID FROM ${TABLE.RUN} WHERE businessDate = '${esc(businessDate)}' LIMIT ${limit} OFFSET ${offset}`,
+  );
+  const table = catalystApp.datastore().table(TABLE.RUN);
+  for (let i = 0; i < runs.length; i += INSERT_CHUNK) {
+    await table.deleteRows(runs.slice(i, i + INSERT_CHUNK).map((r) => r.ROWID));
+  }
+  return { removed: runs.length };
+};
+
 // ========================================================= Custody_Match_File
 
 /*
