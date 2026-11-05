@@ -424,7 +424,7 @@
     margin-top: 0;
 }
 
-/* ── Master (Client, Security) ────────────────────────────────────────── */
+/* ── Master (Client, Security, Transaction Type, Scheme) ──────────────── */
 
 .ops-page.client-page {
     gap: 16px;
@@ -442,6 +442,119 @@
 
 .ops-page .isin-opt-code {
     color: var(--txo-text-muted);
+}
+
+/* Count pill and the Add button sit together on the right of the table header. */
+.ops-page .master-header-actions {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.ops-page .master-add-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 16px;
+    font-size: 13.5px;
+    box-shadow: 0 2px 6px rgba(139, 21, 56, 0.3);
+}
+
+.ops-page .master-add-icon {
+    font-size: 17px;
+    line-height: 1;
+}
+
+.ops-page .master-modal-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(15, 23, 42, 0.55);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+    padding: 16px;
+}
+
+.ops-page .master-modal {
+    background: var(--txo-surface);
+    border: 1px solid var(--txo-border);
+    border-radius: var(--txo-radius-md);
+    padding: 24px;
+    width: 100%;
+    max-width: 440px;
+    box-shadow: 0 20px 50px rgba(16, 24, 40, 0.25);
+}
+
+.ops-page .master-form-field {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-bottom: 14px;
+}
+
+.ops-page .master-form-field label {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--txo-text);
+}
+
+.ops-page .master-form-field input {
+    padding: 9px 12px;
+    border: 1px solid var(--txo-border-strong);
+    border-radius: var(--txo-radius-md);
+    font-size: 14px;
+    color: var(--txo-text);
+}
+
+.ops-page .master-form-field input:focus {
+    outline: none;
+    border-color: var(--txo-primary);
+    box-shadow: 0 0 0 3px var(--txo-primary-tint);
+}
+
+.ops-page .master-required,
+.ops-page .master-field-error {
+    color: var(--txo-error);
+}
+
+.ops-page .master-field-error {
+    margin: 0;
+    font-size: 12px;
+}
+
+/* Wider Add popup for masters with many fields (Scheme). */
+.ops-page .master-modal--wide {
+    max-width: 680px;
+    max-height: 90vh;
+    overflow-y: auto;
+}
+
+.ops-page .master-form-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    column-gap: 16px;
+}
+
+@media (max-width: 600px) {
+    .ops-page .master-form-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
+.ops-page .master-form-field select {
+    padding: 9px 12px;
+    border: 1px solid var(--txo-border-strong);
+    border-radius: var(--txo-radius-md);
+    font-size: 14px;
+    color: var(--txo-text);
+    background: var(--txo-surface);
+}
+
+.ops-page .master-form-field select:focus {
+    outline: none;
+    border-color: var(--txo-primary);
+    box-shadow: 0 0 0 3px var(--txo-primary-tint);
 }
 
 /* ── Cash Balance ─────────────────────────────────────────────────────── */

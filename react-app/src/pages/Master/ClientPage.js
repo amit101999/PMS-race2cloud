@@ -11,27 +11,23 @@ import "../../styles/ops-pages.css";
 
 const PAGE_SIZE = 10;
 
-/* Columns that the platform stores on every record — hidden from display. */
-const SYSTEM_FIELDS = ["ROWID", "CREATORID", "CREATEDTIME", "MODIFIEDTIME"];
-/* Business columns intentionally hidden from the table. */
-const HIDDEN_FIELDS = ["WS_client_id"];
-const ACCOUNT_FIELD = "WS_Account_code";
 const VIRTUAL_FIELD = "WS_Account_code";
 const ACTUAL_FIELD = "Actual_Code";
 
-/* Header overrides — data key stays the same, only the displayed label changes. */
-const COLUMN_LABELS = {
-  WS_Account_code: "Virtual Code",
-  Actual_Code: "Actual Code",
-};
-
-/* "WS_Account_code" -> "WS Account Code" */
-function prettyLabel(key) {
-  return String(key)
-    .split("_")
-    .map((part) => (part ? part.charAt(0).toUpperCase() + part.slice(1) : part))
-    .join(" ");
-}
+/* The only columns shown, in display order. The API sends the same set. */
+const COLUMNS = [
+  { key: "WS_Account_code", label: "Virtual Code" },
+  { key: "Actual_Code", label: "Actual Code" },
+  { key: "Client_name", label: "Client Name" },
+  { key: "Status", label: "Status" },
+  { key: "Group_Name", label: "Group Name" },
+  { key: "Scheme_Code", label: "Scheme Code" },
+  { key: "Fund_Strategy_Code", label: "Fund Strategy Code" },
+  { key: "Account_Type", label: "Account Type" },
+  { key: "Client_Status", label: "Client Status" },
+  { key: "DP_Client_Id", label: "DP Client ID" },
+  { key: "Inception_Date", label: "Inception Date" },
+];
 
 function displayValue(val) {
   if (val === null || val === undefined || val === "") return "–";
@@ -77,23 +73,6 @@ function ClientPage() {
       cancelled = true;
     };
   }, []);
-
-  /* Column set derived from the data (account code first, system cols hidden). */
-  const columns = useMemo(() => {
-    const keys = [];
-    const seen = new Set();
-    clients.forEach((row) =>
-      Object.keys(row).forEach((k) => {
-        if (!SYSTEM_FIELDS.includes(k) && !HIDDEN_FIELDS.includes(k) && !seen.has(k)) {
-          seen.add(k);
-          keys.push(k);
-        }
-      })
-    );
-    return keys.sort((a, b) =>
-      a === ACCOUNT_FIELD ? -1 : b === ACCOUNT_FIELD ? 1 : 0
-    );
-  }, [clients]);
 
   /* Single search: match virtual code OR actual code (actual → all related virtuals). */
   const filtered = useMemo(() => {
@@ -224,16 +203,16 @@ function ClientPage() {
                     <table className="data-table">
                       <thead>
                         <tr>
-                          {columns.map((c) => (
-                            <th key={c}>{COLUMN_LABELS[c] || prettyLabel(c)}</th>
+                          {COLUMNS.map((c) => (
+                            <th key={c.key}>{c.label}</th>
                           ))}
                         </tr>
                       </thead>
                       <tbody>
                         {pageRows.map((row, i) => (
                           <tr key={row.ROWID ?? i}>
-                            {columns.map((c) => (
-                              <td key={c}>{displayValue(row[c])}</td>
+                            {COLUMNS.map((c) => (
+                              <td key={c.key}>{displayValue(row[c.key])}</td>
                             ))}
                           </tr>
                         ))}
