@@ -1,0 +1,30 @@
+{
+  "defaults": {
+    "project": 1,
+    "env": 1
+  },
+  "actives": {
+    "project": 1,
+    "env": 1
+  },
+  "projects": [
+    {
+      "idx": 1,
+      "id": "30561000000020169",
+      "name": "Audit-Bridge",
+      "domain": {
+        "id": "50039746698",
+        "name": "audit-bridge-60066676245.development"
+      },
+      "timezone": "Asia/Kolkata",
+      "env": [
+        {
+          "idx": 1,
+          "id": "60066676245",
+          "name": "Development",
+          "type": 3
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,9 @@
+{
+  "functions": {
+    "targets": [
+      "NegativeHoldingsApi"
+    ],
+    "ignore": [],
+    "source": "functions"
+  }
+}

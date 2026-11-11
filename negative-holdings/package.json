@@ -1,0 +1,14 @@
+{
+  "name": "negative-holdings",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Separate read-only app that lists clients who sold more of a share than they held.",
+  "engines": {
+    "node": ">=16.17"
+  },
+  "scripts": {
+    "test": "node --test tests/negativeHoldings.test.js",
+    "install:function": "cd functions/NegativeHoldingsApi && npm install",
+    "build": "cd client && npm install && npm run build"
+  }
+}
