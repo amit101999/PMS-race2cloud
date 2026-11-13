@@ -5,5 +5,11 @@
     ],
     "ignore": [],
     "source": "functions"
-  }
+  },
+  "slate": [
+    {
+      "name": "negative-holdings",
+      "source": "C:/Users/91985/OneDrive/Desktop/PMS-race2cloud/negative-holdings/client/build"
+    }
+  ]
 }

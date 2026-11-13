@@ -147,7 +147,14 @@ function NegativeHoldingsPage() {
     setScannedAsOn(asOnDate);
     try {
       const { data } = await fetchJson(`${API_URL}/accounts`);
-      await scanAccounts(data, asOnDate);
+      // With text in the search box, only the accounts whose code contains it are checked.
+      const query = search.trim().toLowerCase();
+      const accountCodes = query ? data.filter((code) => code.toLowerCase().includes(query)) : data;
+      if (accountCodes.length === 0) {
+        setScanError(`No account matches "${search.trim()}".`);
+        return;
+      }
+      await scanAccounts(accountCodes, asOnDate);
     } catch (err) {
       setScanError(`Could not load the account list. ${err.message}.`);
     } finally {
@@ -226,6 +233,8 @@ function NegativeHoldingsPage() {
     ]);
   };
 
+  const scanLabel = search.trim() ? "Scan matching accounts" : "Scan all accounts";
+
   return (
     <>
       <header className="nh-header">
@@ -245,7 +254,7 @@ function NegativeHoldingsPage() {
             />
           </div>
           <button className="nh-primary" onClick={handleScan} disabled={scanning || !asOnDate}>
-            {scanning ? "Scanning..." : "Scan all accounts"}
+            {scanning ? "Scanning..." : scanLabel}
           </button>
           <div>
             <label htmlFor="search">Search account</label>
@@ -330,50 +339,6 @@ function NegativeHoldingsPage() {
         </div>
 
         <div className="nh-card">
-          <h3>What is checked</h3>
-          <div className="nh-how">
-            <p>
-              The main app stops a holding at zero: if a client holds 100 and sells 150, it shows 0, not −50. This
-              page compares each sell with the holding just before it and works out the exact value.
-            </p>
-            <ul>
-              <li>
-                <b>Negative holding</b> = holding in the main app − total short so far, on the as-on date. Only
-                shares below zero on that date are listed.
-              </li>
-              <li>
-                Not listed: shares that went below zero and were later bought back to zero or above; shares where a
-                split, merger or demerger came after the shortfall, because their holding can't be worked out
-                reliably; and shortfalls smaller than 0.001 units, which come from the database cutting values off
-                at 4 decimals, not from real trades.
-              </li>
-            </ul>
-            <p>
-              <b>Most rows are gaps in our records, not real oversells.</b> Common causes:
-            </p>
-            <ul>
-              <li>
-                <b>Missing split</b>: the client sold exactly 10 (or 5) times what was bought.
-              </li>
-              <li>
-                <b>Missing demerger or transfer-in</b>: the client sold a share that was never bought or received.
-              </li>
-              <li>
-                <b>Rounding</b>: less than 1 unit short on a fund with fractional units.
-              </li>
-              <li>
-                <b>Timing</b>: a sell booked before its buy, such as a late upload or an OPI that settles after the
-                sale.
-              </li>
-            </ul>
-            <p>
-              Record the missing split or demerger in the main app. The row disappears once holdings are rebuilt.
-              Anything else is a real exception to check against the custodian.
-            </p>
-          </div>
-        </div>
-
-        <div className="nh-card">
           <div className="data-table-wrap nh-table-scroll">
             <table className="data-table">
               <thead>
@@ -403,7 +368,7 @@ function NegativeHoldingsPage() {
                       {scanning
                         ? "Scanning..."
                         : !hasScanned
-                          ? 'Click "Scan all accounts" to start. This takes a few minutes.'
+                          ? `Click "${scanLabel}" to start.`
                           : flaggedAccounts.length === 0 && failedAccounts.length === 0
                             ? "No negative holdings found."
                             : "Nothing matches these filters."}
