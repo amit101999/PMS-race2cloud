@@ -88,7 +88,9 @@ function MainLayout({ title, rightContent, children }) {
     { key: "bhav-copy", label: "Bhav Copy" },
     // { key: "transaction-upload", label: "Transaction Upload" },
     { key: "temp-transaction", label: "Transaction Upload" },
-    { key: "transaction-deletion", label: "Transaction Deletion" },
+    // Hidden: deleting trades would change dates that are locked for good after the
+    // Equity change window. Corrections go through re-upload and re-commit instead.
+    // { key: "transaction-deletion", label: "Transaction Deletion" },
     { key: "holding-comparison", label: "Holding Comparison" },
     { key: "updateISIN", label: "Update ISIN" },
     { key: "cash-balance", label: "Cash Balance" },

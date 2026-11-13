@@ -36,43 +36,82 @@ export const ASK_REASON = {
 export const REPLACE_SHARE = 0.9;
 
 /*
- * A date's trades can be uploaded or committed until this many working days
- * after the trade date (T+N), that day included. Set to 150 for now; the planned
- * rule is 3 (T+3) once the holiday calendar is in. Saturday and Sunday are not
- * working days; holidays are not counted yet. The screen repeats this rule in
- * custody/api.js (lastChangeDate) to warn early; keep the two in step.
+ * The change window of a trade date: its trades can be re-uploaded and
+ * re-committed until N working days after the trade date (T+N), that day
+ * included. Each trade date has its own N, picked on the Fund Accounting card
+ * (default T+150, or any number from 1 to 150). N can be changed until the date's
+ * first commit, which fixes it. Saturday and Sunday are not working days;
+ * holidays are not counted yet.
+ *
+ * Only a committed date locks: a date never committed stays open, so a late file
+ * can still be booked. A date first committed after its window has passed is
+ * locked straight after that commit. Once locked, a date is booked for good.
+ * The record per date is kept by util/custodyMatch/changeWindow.js.
  */
-export const CHANGE_WINDOW_WORKING_DAYS = 150;
+export const WINDOW_PRESETS = [1, 2, 3, 150];
+export const DEFAULT_WINDOW_DAYS = 150;
+export const MAX_WINDOW_DAYS = 150;
 
-/** The last day a trade date can still be changed, as YYYY-MM-DD. */
-export const lastChangeDate = (tradeDate) => {
-  const [y, m, d] = String(tradeDate).split("-").map(Number);
-  // Noon UTC, so adding days never crosses into another date.
-  const day = new Date(Date.UTC(y, m - 1, d, 12));
-  let counted = 0;
-  while (counted < CHANGE_WINDOW_WORKING_DAYS) {
-    day.setUTCDate(day.getUTCDate() + 1);
-    const weekday = day.getUTCDay();
-    if (weekday !== 0 && weekday !== 6) counted++;
-  }
+/** N from a request or a stored record, or null when it is not a whole number from 1 to 150. */
+export const parseWindowDays = (value) => {
+  const days = Number(value);
+  return Number.isInteger(days) && days >= 1 && days <= MAX_WINDOW_DAYS ? days : null;
+};
+
+// Noon UTC, so adding days never crosses into another date.
+const dayOf = (iso) => {
+  const [y, m, d] = String(iso).split("-").map(Number);
+  return new Date(Date.UTC(y, m - 1, d, 12));
+};
+const isoOf = (day) => {
   const p = (n) => String(n).padStart(2, "0");
   return `${day.getUTCFullYear()}-${p(day.getUTCMonth() + 1)}-${p(day.getUTCDate())}`;
 };
 
-/** True once `today` (YYYY-MM-DD) is past the trade date's last change day. */
-export const isClosedForChanges = (tradeDate, today) => today > lastChangeDate(tradeDate);
+/** The last day a trade date can still be changed under a T+days window, as YYYY-MM-DD. */
+export const lastChangeDate = (tradeDate, days) => {
+  const day = dayOf(tradeDate);
+  let counted = 0;
+  while (counted < days) {
+    day.setUTCDate(day.getUTCDate() + 1);
+    const weekday = day.getUTCDay();
+    if (weekday !== 0 && weekday !== 6) counted++;
+  }
+  return isoOf(day);
+};
 
 /** Today in India, as YYYY-MM-DD; the server's own clock may be in another time zone. */
 export const todayInIndia = () => new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" });
 
+const show = (iso) => iso.split("-").reverse().join("-");
+
 /**
- * The refusal text for a trade date past its window, or "" while it is open.
+ * What the screen needs to know about one trade date's window.
+ *
+ * @param {string} tradeDate YYYY-MM-DD
+ * @param {{ days: number, fixed: boolean }|null} record null when nothing is chosen or committed yet
+ */
+export const dateWindowView = (tradeDate, record, today = todayInIndia()) => {
+  const days = parseWindowDays(record?.days) || DEFAULT_WINDOW_DAYS;
+  const fixed = Boolean(record?.fixed);
+  const lastDay = lastChangeDate(tradeDate, days);
+  const locked = fixed && today > lastDay;
+  let message = "";
+  if (locked) {
+    message = `${show(tradeDate)} is locked permanently. Its window (T+${days}) ended on ${show(lastDay)}.`;
+  } else if (fixed) {
+    message = `Re-upload of ${show(tradeDate)} is open till ${show(lastDay)} (T+${days}).`;
+  }
+  return { date: tradeDate, days, fixed, lastDay, locked, message };
+};
+
+/**
+ * The refusal text for a locked trade date, or "" while it is open.
  * Locked from upload to commit: uploads, file removal, matching and Commit.
  */
-export const closedDateMessage = (tradeDate, today = todayInIndia()) => {
-  if (!isClosedForChanges(tradeDate, today)) return "";
-  const show = (iso) => iso.split("-").reverse().join("-");
-  return `${show(tradeDate)} is locked. The last day to upload or commit was ${show(lastChangeDate(tradeDate))}.`;
+export const closedDateMessage = (tradeDate, record, today = todayInIndia()) => {
+  const view = dateWindowView(tradeDate, record, today);
+  return view.locked ? view.message : "";
 };
 
 /** Removing more than this share of the date's trades needs a second confirmation. */

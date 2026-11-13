@@ -24,6 +24,7 @@ import {
   RUN_STATUS,
 } from "../../util/custodyMatch/constants.js";
 import { CUSTODY_MODE, closedDateMessage, compareCustodyRows } from "../../util/custodyMatch/equityReload.js";
+import { readDateWindow } from "../../util/custodyMatch/changeWindow.js";
 import { PROFILE_TYPE } from "../../util/custodyMatch/fieldMap.js";
 import { detectFaFileType, parseFaFile, validateFaHeader } from "../../util/custodyMatch/parseFA.js";
 import { parseCustodyFile } from "../../util/custodyMatch/parseCustody.js";
@@ -924,7 +925,7 @@ export const deleteUploadedFile = async (req, res) => {
     }
 
     // A trade date past its change window is locked, removal included.
-    const closed = closedDateMessage(parsed.businessDate);
+    const closed = closedDateMessage(parsed.businessDate, await readDateWindow(catalystApp, parsed.businessDate));
     if (closed) return fail(res, 409, { code: "DATE_CLOSED", message: closed });
 
     const fileName = parsed.originalFileName || key.split("/").pop();

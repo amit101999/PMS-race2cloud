@@ -162,7 +162,7 @@ const HeaderWarnings = ({ warnings }) => {
 
 /** Why a date cannot be ticked, or "" when both sides have a file. */
 const missingSideMessage = (d) => {
-    if (d.closed) return `Locked: the ${api.CHANGE_WINDOW_WORKING_DAYS} working days after the trade date have passed.`;
+    if (d.closed) return d.closed;
     if (d.faFiles.length === 0 && d.custodyFiles.length === 0) return "No files are present for this date.";
     if (d.custodyFiles.length === 0) return "Custodian file is not present for this date.";
     if (d.faFiles.length === 0 && !d.faOptional) return "FA file is not present for this date.";
@@ -571,6 +571,20 @@ const CustodyMatchPanel = ({
     const [faDate, setFaDate] = useState("");
     const [faDay, setFaDay] = useState(null);
 
+    /* Equity tab: each trade date's change window from the server,
+       { [date]: { days, fixed, lastDay, locked, message } }. */
+    const [windows, setWindows] = useState({});
+    const [windowCustomOpen, setWindowCustomOpen] = useState(false);
+    const [windowCustomText, setWindowCustomText] = useState("");
+    const [windowSaving, setWindowSaving] = useState(false);
+
+    /* The locked text for a trade date, or "" while it is open (or not read yet). */
+    const lockedMessage = (date) => {
+        if (!reloadMode || !date) return "";
+        const w = windows[date];
+        return w && w.locked ? w.message : "";
+    };
+
     const loadCustodyDay = useCallback(async () => {
         if (!uploadDate) {
             setCustodyDay(null);
@@ -738,12 +752,63 @@ const CustodyMatchPanel = ({
             if (!reloadMode) return d;
             const custodyFiles = custodyFilesByDate.get(d.date) || [];
             // A date past its change window cannot be matched either.
-            const closed = api.closedDateMessage(d.date);
+            const closed = lockedMessage(d.date);
             // No pending FA file is fine here: the match then checks our books.
             // A date with neither is refused by the server, which can see the books.
             return { ...d, custodyFiles, faOptional: true, closed, canMatch: custodyFiles.length > 0 && !closed };
         },
     );
+    /* Every trade date on screen: both cards' dates, the listed files and the Match dates. */
+    const windowDatesKey = [
+        faDate,
+        custodyDate,
+        ...uploadDayDates.map((d) => d.date),
+        ...(faDay?.fa?.raw || []).map((f) => f.businessDate),
+        ...(custodyDay?.custody?.files || []).map((f) => f.businessDate),
+    ]
+        .filter(Boolean)
+        .sort()
+        .filter((d, i, all) => d !== all[i - 1])
+        .join(",");
+
+    /* Read again after a commit, which fixes a date's window. */
+    useEffect(() => {
+        if (!reloadMode || !windowDatesKey) return undefined;
+        let cancelled = false;
+        api.getDateWindows(windowDatesKey.split(","))
+            .then((found) => {
+                if (!cancelled) setWindows((prev) => ({ ...prev, ...found }));
+            })
+            .catch((err) => console.warn("Could not read the change windows:", err.message));
+        return () => {
+            cancelled = true;
+        };
+    }, [reloadMode, windowDatesKey, preCommitTick]);
+
+    useEffect(() => {
+        setWindowCustomOpen(false);
+    }, [faDate]);
+
+    const saveFaWindow = async (days) => {
+        if (!Number.isInteger(days) || days < 1 || days > api.MAX_WINDOW_DAYS) {
+            setFaError({ message: `The window must be a whole number of days from 1 to ${api.MAX_WINDOW_DAYS}.` });
+            return;
+        }
+        setWindowSaving(true);
+        setFaError(null);
+        try {
+            const res = await api.saveDateWindow(faDate, days);
+            setWindows((prev) => ({ ...prev, [faDate]: res.window }));
+            setWindowCustomOpen(false);
+        } catch (err) {
+            setFaError({ message: err.message, detail: err.detail });
+            // Fixed meanwhile by a commit: show the fixed window instead of the dropdown.
+            if (err.detail?.window) setWindows((prev) => ({ ...prev, [faDate]: err.detail.window }));
+        } finally {
+            setWindowSaving(false);
+        }
+    };
+
     const readyDates = uploadDayDates.filter((d) => d.canMatch);
     const readyDateCount = readyDates.length;
     // A closed date is not waiting for anything; it is counted on its own.
@@ -995,10 +1060,8 @@ const CustodyMatchPanel = ({
     } else if (readyDateCount === 0 && closedDates.length === uploadDayDates.length) {
         blockerMessage =
             closedDates.length === 1
-                ? `${toDisplayDate(closedDates[0].date)} can no longer be matched or committed. The last day was ${toDisplayDate(
-                      api.lastChangeDate(closedDates[0].date),
-                  )}.`
-                : `These dates can no longer be matched or committed: ${closedDates
+                ? `${closedDates[0].closed} It can no longer be matched or committed.`
+                :`These dates can no longer be matched or committed: ${closedDates
                       .map((d) => toDisplayDate(d.date))
                       .join(", ")}.`;
     } else if (readyDateCount === 0) {
@@ -1244,8 +1307,14 @@ const CustodyMatchPanel = ({
        was uploaded) and its card's date (the day its rows are for). */
     /* Equity tab: a trade date past its working-day change window takes no files.
        The server refuses them too; this only says so before a file is picked. */
-    const custodyClosed = reloadMode ? api.closedDateMessage(custodyDate) : "";
-    const faClosed = reloadMode ? api.closedDateMessage(faDate) : "";
+    const custodyClosed = lockedMessage(custodyDate);
+    const faClosed = lockedMessage(faDate);
+    /* The FA date's window, and what its dropdown shows: a preset, or Custom for any other number. */
+    const faWindow = faDate ? windows[faDate] : null;
+    // Before a date is picked (or while its window loads) the dropdown shows the default, disabled.
+    const faWindowDays = faWindow ? faWindow.days : api.DEFAULT_WINDOW_DAYS;
+    let faWindowChoice = "custom";
+    if (!windowCustomOpen && api.WINDOW_PRESETS.includes(faWindowDays)) faWindowChoice = String(faWindowDays);
     const custodyDropDisabled = custodyZoneDisabled || !custodyDate || !uploadDate || Boolean(custodyClosed);
     const faDropDisabled = faZoneDisabled || !faDate || !uploadDate || Boolean(faClosed);
 
@@ -1261,7 +1330,7 @@ const CustodyMatchPanel = ({
     const uploadedLabel = (f) => (f.uploadedOn ? ` · uploaded ${toDisplayDate(f.uploadedOn)}` : "");
 
     /* Equity tab: a file of a trade date past its change window can no longer be removed. */
-    const closedFile = (f) => reloadMode && Boolean(api.closedDateMessage(f.businessDate));
+    const closedFile = (f) => Boolean(lockedMessage(f.businessDate));
 
     /* ── render ───────────────────────────────────────────────────────── */
 
@@ -1309,7 +1378,66 @@ const CustodyMatchPanel = ({
                             changeFaDate,
                             faBusy || pending?.kind === "fa",
                         )}
+
+                        {/* The date's change window: chosen until its first commit fixes it. */}
+                        {reloadMode && !faWindow?.fixed ? (
+                            <>
+                                <select
+                                    className="up-select up-select--window"
+                                    aria-label="How many working days after the trade date it can be re-uploaded and re-committed"
+                                    title="How many working days after the trade date it can be re-uploaded and re-committed"
+                                    value={faWindowChoice}
+                                    disabled={!faWindow || faBusy || windowSaving}
+                                    onChange={(e) => {
+                                        if (e.target.value === "custom") {
+                                            setWindowCustomText(String(faWindowDays));
+                                            setWindowCustomOpen(true);
+                                        } else {
+                                            saveFaWindow(Number(e.target.value));
+                                        }
+                                    }}
+                                >
+                                    {api.WINDOW_PRESETS.map((n) => (
+                                        <option key={n} value={n}>
+                                            T+{n}
+                                        </option>
+                                    ))}
+                                    <option value="custom">Custom…</option>
+                                </select>
+                                {windowCustomOpen ? (
+                                    <span className="up-window-custom">
+                                        T+
+                                        <input
+                                            type="number"
+                                            className="up-select up-window-days"
+                                            aria-label="Custom number of working days"
+                                            min={1}
+                                            max={api.MAX_WINDOW_DAYS}
+                                            step={1}
+                                            value={windowCustomText}
+                                            disabled={windowSaving}
+                                            onChange={(e) => setWindowCustomText(e.target.value)}
+                                            onKeyDown={(e) => {
+                                                if (e.key === "Enter") saveFaWindow(Number(windowCustomText));
+                                            }}
+                                        />
+                                        <button
+                                            type="button"
+                                            className="cm-secondary"
+                                            disabled={windowSaving}
+                                            onClick={() => saveFaWindow(Number(windowCustomText))}
+                                        >
+                                            Save
+                                        </button>
+                                    </span>
+                                ) : null}
+                            </>
+                        ) : null}
                     </div>
+
+                    {reloadMode && faWindow && faWindow.fixed && !faWindow.locked ? (
+                        <p className="up-window-note">{faWindow.message}</p>
+                    ) : null}
 
                     <div
                         className={faDragActive ? "up-zone is-drag" : "up-zone"}

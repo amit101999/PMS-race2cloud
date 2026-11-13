@@ -1340,3 +1340,27 @@
     padding: 24px;
     color: var(--txo-text-muted);
 }
+
+/* Equity tab: a trade date's change window (T+N) on the Fund Accounting card. */
+.up-select.up-select--window {
+    min-width: 110px;
+}
+
+.up-window-custom {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 13.5px;
+    color: var(--txo-text);
+}
+
+.up-select.up-window-days {
+    min-width: 0;
+    width: 76px;
+}
+
+.up-window-note {
+    margin: 10px 0 0;
+    font-size: 12.5px;
+    color: var(--txo-text-muted);
+}

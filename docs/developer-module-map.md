@@ -39,7 +39,7 @@ A change to one of these files affects every module listed against it. Pure disp
 | `util/analytics/splitPreviewCalc.js` | Split, Custodian check | Split preview, split export, split custodian check. |
 | `util/analytics/bonusPreviewCalc.js`, `util/analytics/bonusAccountRows.js` | Bonus, Custodian check | Bonus preview, bonus export, bonus custodian check. |
 | `util/analytics/dividendAccountRows.js` | Dividend, Custodian check | Dividend preview and dividend custodian check. |
-| `controller/custodyMatch/CustodyMatchFieldMap.js`, `util/custodyMatch/fieldMap.js` | Transaction Upload, Custodian Upload, Holding Comparison | The Field Mapping window on all three pages. Also update the copies (Section 2). |
+| `controller/custodyMatch/CustodyMatchFieldMap.js`, `util/custodyMatch/fieldMap.js` | Transaction Upload, Mutual Funds Upload, Custodian Upload, Holding Comparison | The Field Mapping window on all three pages. Also update the copies (Section 2). |
 | `util/custodyMatch/normalize.js` | Transaction Upload, Custodian Upload | Date and value cleaning in trade files and custodian corporate action files. |
 | `util/custodyMatch/constants.js`, `util/custodyMatch/runStore.js` | Transaction Upload, Notifications, Transaction Deletion (`runStore.js`: `reopenRunsForDeletedTrades`) | Matching runs, the notification bell, and a delete re-opening committed dates. |
 | `util/holdingComparison/parse.js`, `storage.js`, `constants.js` | Holding Comparison, Custodian Upload, Transaction Upload (field mapping) | Holding statement upload, custodian file upload, field mapping preview. |
@@ -48,6 +48,8 @@ A change to one of these files affects every module listed against it. Pure disp
 | `util/notifications.js` | Notifications, Transaction Upload | The notification bell for every background job. |
 | `util/stratusSignedUrl.js` | Transaction Upload, Custodian Upload, Holding Comparison, Cash Balance, Reports | Every file download link. |
 | `controller/cashBalance/exportCashBalance.js` | Cash Balance, Reports (Cash tab) | Single-client cash export from both pages. |
+| `controller/uploader/TempTransactionUpload.js` (`uploadTempTransaction`) | Transaction Upload, Mutual Funds Upload | Equity commit and Mutual Funds commit (`kind = MUTUAL_FUND`). |
+| `util/custodyMatch/parseFA.js`, `storage.js` | Transaction Upload, Mutual Funds Upload | Reading the trade file and the staged files on both tabs. |
 
 ### 1.2 Frontend (`react-app/src`)
 
@@ -55,7 +57,7 @@ A change to one of these files affects every module listed against it. Pure disp
 |---|---|---|
 | `constant.js` (`BASE_URL`) | All modules | Every page that calls the API. |
 | `pages/TempTransactionUpload/custody/api.js` | Transaction Upload, Custodian Upload, Holding Comparison, Split, Bonus | It lives in the Transaction Upload folder but is shared: its error and date helpers are used by four other pages. |
-| `pages/TempTransactionUpload/custody/FieldMappingPanel.js` | Transaction Upload, Custodian Upload, Holding Comparison | The Field Mapping window on all three pages. |
+| `pages/TempTransactionUpload/custody/FieldMappingPanel.js` | Transaction Upload, Mutual Funds Upload, Custodian Upload, Holding Comparison | The Field Mapping window on all three pages. |
 | `pages/SplitPage/SplitReconcilePanel.js` | Split, Bonus, Dividend | The custodian check panel. It calls `/api/<split|bonus|dividend>/...` based on the page. |
 | `pages/HoldingComparison/holdingComparison/PreviousFiles.js`, `api.js` | Holding Comparison, Split, Bonus | The "previous files" lists on those pages. |
 | `hooks/GetAllCodes.js` | Analytics, Cash Balance, Reports | Account code drop-downs. |
@@ -105,6 +107,8 @@ There is no import link between these copies. If you fix one and not the others,
 - `EXPECTED_HEADERS_IN_ORDER` and `OPTIONAL_TRAILING_HEADERS` in `controller/uploader/TempTransactionUpload.js` must match `util/custodyMatch/constants.js`.
 - `BOOKED_COLUMNS` in `util/custodyMatch/equityReload.js` (Transaction column → template position) must be the reverse of `HEADER_MAP` in `controller/uploader/TempTransactionUpload.js`.
 - The mutual fund rule (ISIN `INF…` and exchange `DIR`) in `isMutualFundTrade` (`util/custodyMatch/equityReload.js`) must match the one in `util/custodyMatch/normalize.js`.
+- `MUTUAL_FUND_HEADERS` (`Column1`–`Column5`) in `TempTransactionUpload.js` must match `EXTRA_COLUMN_HEADERS` in `util/custodyMatch/parseFA.js` and `EXTRA_COLUMN_FIELDS` in `fieldMap.js`.
+- The mutual fund marker (`Security_Type = 'm'`) is written in `TempTransactionUpload.js` and read by the cash and holdings functions listed in 4.7.
 - The ISIN target count in `controller/isin/updateIsin.js` must match `ISIN_TARGETS.length` in `functions/UpdateISINWorker/index.js`.
 - `SUPPORTED_TYPES` in `controller/export/exportCorporateAction/exportCaImpactReport.js` must match the handlers in `functions/ExportCorpActionReport/handlers/`.
 
@@ -116,7 +120,7 @@ A table links modules even when they share no code file. If you change how a col
 
 | Table | Written by | Read by |
 |---|---|---|
-| `Transaction` | Transaction Upload commit (`TempTransactionUpload.js`, old screen), Equity Pre-commit (`EquityReload.js`: deletes the date's equity trades, then bulk-writes them again), `EnrichTransactionSecurity` (fills security code and name), `UpdateSecurity_ClientMaster`, Update ISIN, Transaction Deletion (deletes rows) | Holdings functions, cash functions, Analytics, Reports, Dashboard, Transaction Deletion, Merger preview, custody matching |
+| `Transaction` | Transaction Upload commit (`TempTransactionUpload.js`, old screen), Mutual Funds commit (`TempTransactionUpload.js`, 4.7), Equity Pre-commit (`EquityReload.js`: deletes the date's equity trades, then bulk-writes them again), `EnrichTransactionSecurity` (fills security code and name), `UpdateSecurity_ClientMaster`, Update ISIN, Transaction Deletion (deletes rows) | Holdings functions, cash functions, Analytics, Reports, Dashboard, Transaction Deletion, Merger preview, custody matching |
 | `Holdings` | `CalculateHoldingWorkers` (after a commit), `RebuildHoldingtable` (after a corporate action, a transaction deletion, a commit with a late trade, or an Equity Pre-commit), Equity Pre-commit (`EquityReload.js` deletes the affected pairs first), `HoldingUpdateManually`, `CalculateHoldingPerAccount`, `CalculateHoldingsPerAccount`, Update ISIN | Everything that uses `holdingsFromTable.js`, Demerger, `UpdateBonusTable`, `UpdateDividendData`, `ExportDividendAccounts`, `ExportAllCustomerHoldingData`, `FAHoldingsGenerator` |
 | `Cash_Balance_Per_Transaction` (passbook) | `Cal_CB_Append_TxnUpload`, `Cal_CB_Per_TNX` (manual, after a transaction deletion, for a commit with a late trade, or after an Equity Pre-commit), Equity Pre-commit (`EquityReload.js` deletes the affected passbooks first), `UpdateDividendData` (dividend credit), Update ISIN | Cash Balance passbook, cash exports, Dividend (already-paid check) |
 | `Cash_Ledger` | `CashCalculation` | Analytics cash summary (`CashController.js`). This is a different table from the passbook. |
@@ -206,9 +210,9 @@ Upload → Validate → Match → Review Exceptions → Commit. Business guide 3
 - **Screen:** `react-app/src/pages/TempTransactionUpload/TempTransaction.js` (tabs Equity / Mutual Funds / Cash Balance; the old single page is kept there, commented out), `WorkflowTracker.js`, and the `custody/` folder (`CustodyMatchPanel.js` with `reloadMode` on the Equity tab, `PreCommitPanel.js` (shown as **Commit**), `CommitHistory.js`, `ReloadBadges.js`, `ExceptionGrid.js`, `DifferenceReports.js`, `GateTwo.js` (old Commit, no longer used), `PreviousCustodianUploads.js` (no longer shown; the History section lists the Consolidated files instead), `FieldMappingPanel.js`, `api.js`)
 - **API:**
   - `/api/custody-match` → `router/custodyMatchRouter/CustodyMatchRouter.js` → `controller/custodyMatch/CustodyMatchFieldMap.js`, `CustodyMatchUpload.js`, `CustodyMatchRun.js`
-  - `/api/custody-match/reload/*` (Equity tab: `fa-file`, `custody-file`, `run`, `consolidated-files`, `commit-history`, `:date`, `:date/pre-commit`, `:date/retry`) → `controller/custodyMatch/EquityReload.js`, rules in `util/custodyMatch/equityReload.js`. The old `POST /runs/proceed` (Commit) route is commented out.
+  - `/api/custody-match/reload/*` (Equity tab: `fa-file`, `custody-file`, `run`, `consolidated-files`, `commit-history`, `windows`, `:date`, `:date/window` (PUT), `:date/pre-commit`, `:date/retry`) → `controller/custodyMatch/EquityReload.js`, rules in `util/custodyMatch/equityReload.js`. The old `POST /runs/proceed` (Commit) route is commented out.
   - `/api/transaction-uploader` → `router/uploaderRouter/TempTransactionUploaderRouter.js` → `controller/uploader/TempTransactionUpload.js` (upload history, and the commit that `CustodyMatchRun.js` calls)
-- **Own files:** `util/custodyMatch/equityReload.js` (not copied into any function), `controller/custodyMatch/EquityReload.js`, `util/custodyMatch/compare.js`, `parseCustody.js`, `parseFA.js`, `storage.js`, `resolveActual.js`, `lookupCodes.js`, `index.js`, and the screen files above apart from the shared ones.
+- **Own files:** `util/custodyMatch/equityReload.js` (not copied into any function), `util/custodyMatch/changeWindow.js` (reads and saves each trade date's change window; AppSail only, kept out of the copied `storage.js`), `controller/custodyMatch/EquityReload.js`, `util/custodyMatch/compare.js`, `parseCustody.js`, `parseFA.js`, `storage.js`, `resolveActual.js`, `lookupCodes.js`, `index.js`, and the screen files above apart from the shared ones.
 - **Shared files:** `util/custodyMatch/fieldMap.js` and `CustodyMatchFieldMap.js` (Custodian Upload, Holding Comparison), `util/custodyMatch/normalize.js` (Custodian Upload), `util/custodyMatch/constants.js` and `runStore.js` (Notifications), `util/holdingComparison/parse.js` and `runStore.js` (Holding Comparison), `util/notifications.js`, `util/stratusSignedUrl.js`, and the frontend `custody/api.js` and `FieldMappingPanel.js`.
 - **Background functions:**
   - `CustodyMatchRunner` (job) runs the match. With the `consolidatedKey` param (Equity tab) it reads that one file as the FA side and every custodian file of the date, whatever its upload date.
@@ -223,15 +227,35 @@ Upload → Validate → Match → Review Exceptions → Commit. Business guide 3
   - The field mapping code also serves Custodian Upload and Holding Comparison.
   - A change to how `Transaction` rows are written affects holdings, cash, Analytics and Reports.
   - The three FA `filler` columns are the optional Sub Folio, Transaction Fee and Transaction Fee Service Tax fields. The import writes them to `SUB_FOLIO`, `TOTAL_TRXNFEE` and `TOTAL_TRXNFEE_STAX`, and always calculates `NETRATE` / `Net_Amount` itself (`TempTransactionUpload.js`). `MKTRATE` (Market Rate) is saved to `MKTRATE`; only SETDATEFLAG is dropped. `SUB_FOLIO` must exist in every environment, or the commit fails.
-  - Equity vs Mutual Funds transaction file is decided by `detectFaFileType` in `parseFA.js` (a TDS or Stamp Duty amount on any row means Mutual Funds). It runs in the field-map preview when the file is picked and again in `uploadFaFile`.
+  - Equity vs Mutual Funds transaction file is decided by `detectFaFileType` in `parseFA.js` (a TDS or Stamp Duty amount on any row means Mutual Funds). It runs in the field-map preview when the file is picked and again in `uploadFaFile`, which refuses a Mutual Funds file and points to the Mutual Funds tab (4.7).
+  - Mutual funds are no longer matched. The Mutual Funds options in both file-type selects, the `CUSTODY_MUTUAL_FUND` mapping choice and the INF + DIR split in `compare.js` (`splitMutualFunds`) are commented out; both upload routes refuse `MUTUAL_FUND` with `USE_MUTUAL_FUNDS_TAB`.
   - Equity tab — Transaction ID: each trade's own ID is the FA field `transactionId` ("Transaction ID" on the Field Mapping screen, optional in `FA_FIELDS` in `fieldMap.js`, not in the 26-column template). It is **not** TRANSREF (`ref`, stored in `Txn_Ref_No`). The consolidated file adds it as column 27 (`FA_TRANSACTION_ID_HEADER`, read with `FA_CONSOLIDATED_PROFILE`), and the import stores it in `Transaction.Transaction_ID` (`HEADER_MAP` in `TempTransactionUpload.js`). The column exists in Development only (created 2026-10-30); create `Transaction_ID` (varchar 255, **unique**, not mandatory) in Production before deploying. Because it is unique, `uploadEquityFaFile` refuses a file whose ID is already booked on another date (the bulk write would drop that row silently). `fieldMap.js` and `index.js` are copied into `functions/CustodyMatchRunner/custodyMatch/`.
-  - Equity tab (`EquityReload.js`): a date's equity trades are `TRANDATE = <date>` minus mutual fund trades (ISIN `INF…` **and** exchange `DIR`; an `INF…` ETF on NSE is equity). Its state is in Stratus `temporary-files/reload/<date>/` (`state.json` pending FA files and their mode, `consolidated.csv`, `affected.json`, `summary.json`, `progress.json`) and its lock is the `Jobs` row `RELOAD_<date>`. Pre-commit runs in AppSail step by step (Transaction → Holdings → Cash → stub masters → insert + count check → rebuild jobs) and saves the step before each one, so **Try again** continues from it. Pre-commit refuses while an old import (`TxnCsv_`/`HOLD_`/`CASH_`) or another date's `RELOAD_<date>` is `RUNNING`. Booked trades are written back to the 26 columns through `BOOKED_COLUMNS` in `equityReload.js`, the reverse of `HEADER_MAP` in `TempTransactionUpload.js`; change both together. With no pending FA file the match checks the books against the custodian files, and Pre-commit is refused because nothing would be loaded. A pre-committed FA file keeps its `Custody_Match_File` row so the FA card still lists it (pending means listed in `state.json`, not having a row); an FA upload decided as Replace retires the date's older equity FA files straight away (`retireFaFiles`, copies in `reload/<date>/replaced/`), while their trades stay in the books until the Pre-commit. A trade date can be uploaded (FA and custodian) or committed only up to `CHANGE_WINDOW_WORKING_DAYS` working days after it (150 for now, planned 3 once holidays are added), that day included (Saturday and Sunday skipped, no holidays yet; `lastChangeDate` in `util/custodyMatch/equityReload.js`, a copy in the screen's `custody/api.js` for the early warning); after that the server answers 409 `DATE_CLOSED` to uploads, matching, file removal (`deleteUploadedFile`) and Commit, and the screen shows a closed note, disables the drop zones, hides the remove buttons and blocks the date in the Match dialog. Only Try again of a commit that started in time stays open. No table holds the lock: it is worked out from the trade date and today in India (`closedDateMessage`). The screen calls Pre-commit **Commit**; code names and the route keep the old word. A date's first commit (no equity trades of the date booked, whatever the history says) starts at the insert step and skips the clean-up steps; the rebuild jobs still run and clear what they rebuild. `Transaction_Commit_History` exists in Development only (created 2026-11-02); create it in Production before deploying, or every commit is refused: `businessDate` (date, mandatory), `commitType` and `status` (varchar 20, mandatory), `runId` (varchar 100), `tradesBefore`, `tradesAfter`, `clients` (int), `fileNames` (text), `fileKey` (varchar 255), `startedAtMs` (bigint, mandatory), `finishedAtMs` (bigint).
+  - Equity tab (`EquityReload.js`): a date's equity trades are `TRANDATE = <date>` minus mutual fund trades (ISIN `INF…` **and** exchange `DIR`; an `INF…` ETF on NSE is equity), and minus every row committed from the Mutual Funds tab (`Security_Type = 'm'`, any exchange; `isBookedMutualFund`). Its state is in Stratus `temporary-files/reload/<date>/` (`state.json` pending FA files and their mode, `consolidated.csv`, `affected.json`, `summary.json`, `progress.json`) and its lock is the `Jobs` row `RELOAD_<date>`. Pre-commit runs in AppSail step by step (Transaction → Holdings → Cash → stub masters → insert + count check → rebuild jobs) and saves the step before each one, so **Try again** continues from it. Pre-commit refuses while an old import (`TxnCsv_`/`HOLD_`/`CASH_`) or another date's `RELOAD_<date>` is `RUNNING`. Booked trades are written back to the 26 columns through `BOOKED_COLUMNS` in `equityReload.js`, the reverse of `HEADER_MAP` in `TempTransactionUpload.js`; change both together. With no pending FA file the match checks the books against the custodian files, and Pre-commit is refused because nothing would be loaded. A pre-committed FA file keeps its `Custody_Match_File` row so the FA card still lists it (pending means listed in `state.json`, not having a row); an FA upload decided as Replace retires the date's older equity FA files straight away (`retireFaFiles`, copies in `reload/<date>/replaced/`), while their trades stay in the books until the Pre-commit. Each trade date has its own change window (T+N): N working days after the trade date, that day included (Saturday and Sunday skipped, no holidays yet). The operator picks N on the Fund Accounting card next to the file date (`WINDOW_PRESETS` 1, 2, 3, 150, or Custom 1–150; default 150; `PUT /reload/:date/window`). It is kept in Stratus `temporary-files/reload/<date>/window.json` as `{ days, fixed }`; Pre-commit sets `fixed` at the date's first commit, and a fixed window refuses changes (409 `WINDOW_FIXED`). Only a committed date locks: a date is locked when its window is fixed and today (India) is past `lastChangeDate(date, days)`. A date never committed stays open, so a late file can still be booked; a date first committed after its window locks straight after that commit. A date with no `window.json` but trades in `Transaction` (booked before windows existed) counts as T+150, fixed. A failed read fails the request rather than guessing, which could open a locked date. The rules are `dateWindowView` / `closedDateMessage` in `util/custodyMatch/equityReload.js`; the screen holds no copy and asks `GET /reload/windows?dates=…` (and `GET /reload/:date` carries `window`); after that the server answers 409 `DATE_CLOSED` to uploads, matching, file removal (`deleteUploadedFile`) and Commit, and the screen shows a closed note, disables the drop zones, hides the remove buttons and blocks the date in the Match dialog. Only Try again of a commit that started in time stays open. No table holds the lock: it is worked out from the trade date, today in India and the date's window record (`closedDateMessage`). The Commit section shows **Locked** for a locked date instead of the Commit button. The screen calls Pre-commit **Commit**; code names and the route keep the old word. A date's first commit (no equity trades of the date booked, whatever the history says) starts at the insert step and skips the clean-up steps; the rebuild jobs still run and clear what they rebuild. `Transaction_Commit_History` exists in Development only (created 2026-11-02); create it in Production before deploying, or every commit is refused: `businessDate` (date, mandatory), `commitType` and `status` (varchar 20, mandatory), `runId` (varchar 100), `tradesBefore`, `tradesAfter`, `clients` (int), `fileNames` (text), `fileKey` (varchar 255), `startedAtMs` (bigint, mandatory), `finishedAtMs` (bigint).
   - Equity tab, custodian upload (`uploadEquityCustodyFile` → `uploadCustodyFile` with `req.equityReload`): a scheme and type can hold several files for one trade date, under any upload date. `compareCustodyRows` in `equityReload.js` compares the file's lines (trade number + client + ISIN + buy/sell) with the stored ones: all new is added, nothing new or changed is skipped, and anything else (including new numbers on rows that mostly look like stored ones) needs **Replace file**. Replace deletes that date's rows in `Custody_Match_Exception` and `Custody_Match_Run`, its `difference-*`, `final-*`, `fa-meta-*` and `run-*` files in Stratus and `reload/<date>/summary.json` (`clearMatchResults` in `EquityReload.js`), and is refused while a match of the date is running. Other dates and our books are not touched.
   - Old screen only: Commit sends every shown run (`POST /runs/proceed`) and they are imported as one file. `uploadTempTransaction` refuses while a `Jobs` row `TxnCsv_*`, `HOLD_*` or `CASH_*` is `RUNNING` (younger than 3 hours): the holdings and cash jobs read every trade loaded since their import started, so imports must not overlap. The `HOLD_<ms>` / `CASH_<ms>` names are built in `TempTransactionUpload.js` and again in `functions/CalculateHoldingMaster` and `functions/Cal_CB_Append_TxnUpload`; change all three together. A late-trade rebuild adds its own row, `HOLD_<ms>_R<chunk start>_<account>` (`CalculateHoldingWorkers`) or `CASH_<ms>_R_<account>` (`Cal_CB_Append_TxnUpload`), set `COMPLETED` by `RebuildHoldingtable` / `Cal_CB_Per_TNX` through their `importJobRowName` param; the guard reads the digits after the prefix, so keep the start time right after it.
   - A date committed before and opened again (stage detail `Import failed …` or `Re-opened …`, see `runStore.js`) can be committed again; `proceedToImport` then leaves out the file's rows still in `Transaction` (`dropTradesStillBooked`, key built from `faRowStoredValues` in `parseFA.js`). The key must follow how the import stores a row (`normalizeCsvForBulkUpload` in `TempTransactionUpload.js`).
 
-### 4.7 Transaction Deletion
-Find committed trades by commit date, delete the wrong ones, and see what was deleted on each day. Business guide 3.7.
+### 4.7 Mutual Funds Transaction Upload
+One mutual fund file per date: Upload → Field Mapping → Commit, with no custodian file and no matching. Business guide 3.7.
+
+- **Screen:** the **Mutual Funds** tab of `react-app/src/pages/TempTransactionUpload/TempTransaction.js`, which renders `mutualFund/MfUploadPanel.js`.
+- **API:** `/api/mf-upload` → `router/mutualFundRouter/MfUploadRouter.js` → `controller/mutualFund/MfTransactionUpload.js` (`POST /file`, `GET /files`, `DELETE /file`, `POST /commit`). The commit calls `uploadTempTransaction` in `controller/uploader/TempTransactionUpload.js` with `kind = MUTUAL_FUND`.
+- **Own files:** `MfUploadPanel.js`, `MfUploadRouter.js`, `MfTransactionUpload.js`, `util/mutualFund/mfStorage.js`.
+- **Shared files:** `util/custodyMatch/fieldMap.js` (the `FA_MUTUAL_FUND` mapping, with the extra fields `column1`–`column5` and their `labels`), `parseFA.js` (`parseFaFile`, `faRowsToConsolidatedCsv` with `withExtraColumns`), `storage.js` (bucket helpers), `CustodyMatchFieldMap.js`, `controller/uploader/TempTransactionUpload.js`, and the frontend `custody/api.js`, `FieldMappingPanel.js` (**Add column**), `UploadErrorDetails.js`, `StatusBadge.js`.
+- **Background functions:** the same as an Equity commit: `UpdatesSecurity_ClientMasters`, `CalculateHoldingMaster` → `CalculateHoldingWorkers`, `Cal_CB_Append_TxnUpload` (and their late-trade rebuilds).
+- **Tables:** writes `Transaction` (through the import), including `Column1`–`Column5`, `Security_Type = 'm'` and `Security_Type_Description = 'Mutual Funds'`. No table of its own: staged files are in the `temporary-files` bucket under `MF-Transaction/<uploadDate>/<fileDate>/`, and a committed date has a marker `MF-Committed/<fileDate>.json`.
+- **Before you change:**
+  - The import file for this tab has 34 columns: the 26 template columns, `TDS`, `Stamp Duty`, `Transaction ID`, `Column1`–`Column5` (`MUTUAL_FUND_HEADERS` in `TempTransactionUpload.js`). It is only accepted with `kind = MUTUAL_FUND`.
+  - The amount is calculated in `deriveMutualFundAmount` (`TempTransactionUpload.js`): buy = QTY × RATE + Stamp Duty, sell = QTY × RATE − STT (TRANEXPENSE); `NETRATE` = `Net_Amount` ÷ QTY. TDS does not change it.
+  - Rows with `Security_Type = 'm'` follow two rules elsewhere. The cash functions (`Cal_CB_Append_TxnUpload`, `Cal_CB_Per_TNX`, `CashCalculation`) use `Net_Amount` as it is, without ± STT. The holdings functions (`CalculateHoldingWorkers`, `RebuildHoldingtable`, `HoldingUpdateManually`, `CalculateHoldingPerAccount`, `CalculateHoldingsPerAccount`) give a buy (BY-, SQB) its SETDATE as TRANDATE when the row is read (`settleMutualFundBuy`), so the Holdings row is settlement-dated. Inception rows already marked `m` follow these rules too on a rebuild.
+  - Only BY-, SQB and SL+ are allowed (`MF_TYPES` in the controller); the cash and holdings jobs look these codes up exactly.
+  - Transaction ID is required on every mutual fund row (`transactionId`, required in `FA_MUTUAL_FUND_FIELDS`). A blank ID, the same ID twice in the file, or an ID already in `Transaction` refuses the file (`mutualFundRowErrors`, `idsAlreadyBooked`), because `Transaction_ID` is unique and the bulk write would drop the row silently. It goes in the import file after Stamp Duty (`withTransactionId` in `faRowsToConsolidatedCsv`, `MUTUAL_FUND_HEADERS`).
+  - A file without TDS and Stamp Duty columns is refused (`NOT_A_MUTUAL_FUND_FILE`), so an Equity file cannot be read with blank deductions.
+  - The commit marker is written before the import and removed if the import refuses the file or its bulk load fails (`releaseMfCommit`, called from `TempTransactionUpload.js` through the `mfCommitDate` callback param). Deleting committed trades by hand does not remove it.
+  - `Column1`–`Column5` must exist in `Transaction` in every environment, or the commit fails.
+
+### 4.8 Transaction Deletion
+Find committed trades by commit date, delete the wrong ones, and see what was deleted on each day. Business guide 3.8.
 
 - **Screen:** `react-app/src/pages/TransactionDeletion/TransactionDeletionPage.js`, `TransactionDeletionPage.css`
 - **API:** `/api/transaction` → `router/TransactionRouter.js` (`/commit-dates`, `/committed`, `POST /delete`, `/deletion-dates`, `/deleted`) → `controller/TransactionController.js`
@@ -246,8 +270,8 @@ Find committed trades by commit date, delete the wrong ones, and see what was de
   - `Cash_Ledger` (Analytics cash summary) is not rebuilt, the same as after an upload commit.
   - One delete is capped at 5,000 rows (`DELETE_MAX_ROWS`).
 
-### 4.8 Holdings calculation
-Works out holdings from trades and corporate actions using FIFO. Business guide 3.8. There is no screen of its own. Other modules read the result.
+### 4.9 Holdings calculation
+Works out holdings from trades and corporate actions using FIFO. Business guide 3.9. There is no screen of its own. Other modules read the result.
 
 - **Screen:** none (read through Analytics, Reports and the corporate action previews).
 - **API:** `/api/holding-update` in `appsail-nodejs/index.js` starts a manual rebuild.
@@ -261,13 +285,14 @@ Works out holdings from trades and corporate actions using FIFO. Business guide 
 - **Tables:** reads `Transaction`, `Bonus`, `Split`, `Merger` and `Demerger_Record`. Writes `Holdings`, `Split_Account`, `Jobs` and `JobStatusPerAccount`.
 - **Before you change:**
   - The FIFO engine exists in several functions (Section 2), so change every copy.
+  - Mutual fund buys (`Security_Type = 'm'`, BY- / SQB) are settlement-dated: each function that reads `Transaction` replaces TRANDATE with SETDATE as the row is read (`settleMutualFundBuy`). Keep it in every copy (4.7).
   - The same-day order (trades, split, bonus, demerger, merger) and the effective-date rule must stay the same in all of them and in `holdingsFromTable.js`.
   - Rounding rule: every quantity is rounded to 6 decimals and every amount (cost, WAP, P/L) to 4 decimals as it is calculated (`roundQty` / `roundAmt`). This stops binary leftovers such as 190.88 − 190 = 0.8799999999999955. The rule is in the FIFO engine and its copies, `FifoQty.js`, `CalculateHoldingWorkers` and `holdingsFromTable.js` and its ports. Keep it in any new copy. Screens round to 2 decimals and never cut digits off.
   - Holdings screens and exports (Analytics account and ISIN views, Export All, `FAHoldingsGenerator`) show the saved `HOLDING`, `WAP` and `HOLDING_VALUE` of the last saved row up to the as-on date. They do not re-derive them, because the `PRICE` column keeps only 4 decimals and a re-derived value can be a few paise off. Corporate action previews (Split, Bonus, Dividend) still use `recomputeHoldingsSnapshot` for the quantity. Old rows saved before the trade-date change need a holdings rebuild to be right.
   - The rule also covers the differential report FIFO (`functions/ExportDifferentialReport/fifo.js`), the unused `util/export/fifo.js`, and the consolidated totals that add a client's schemes together (`util/analytics/consolidatedHoldings.js`, `ExportAllCustomerHoldingData/index.js`, `FAHoldingsGenerator/index.js`). Not yet covered: the merger and demerger lot code.
 
-### 4.9 Cash Balance
-Client cash passbook. Business guide 3.9.
+### 4.10 Cash Balance
+Client cash passbook. Business guide 3.10.
 
 - **Screen:** `react-app/src/pages/CashBalancePage/CashBalancePage.js`
 - **API:** `/api/cash-balance` → `router/cashBalanceRouter/CashbalanceRouter.js` → `controller/cashBalance/cashPassbookController.js`, `exportCashBalance.js`, `calculateBalanceOnce.js`
@@ -282,11 +307,12 @@ Client cash passbook. Business guide 3.9.
 - **Tables:** reads `Cash_Balance_Per_Transaction`. The functions above write it, and `CashCalculation` writes `Cash_Ledger`. `Cal_CB_Append_TxnUpload` also marks its import's `CASH_<ms>` row in `Jobs` completed.
 - **Before you change:**
   - `Cal_CB_Append_TxnUpload` and `Cal_CB_Per_TNX` are twins and must follow the same money-in/money-out rules.
+  - Mutual fund rows (`Security_Type = 'm'`) move cash by `Net_Amount` exactly; STT is not added or taken off again (`isMutualFundRow`, also in `CashCalculation`). See 4.7.
   - Dividend credits land in the same table. `Cal_CB_Per_TNX` deletes them with everything else and re-adds them from `Dividend_Record`, so a change to how `UpdateDividendData` writes a credit must be mirrored in `fetchReceivedDividendEvents`.
   - The Analytics cash summary reads `Cash_Ledger`, not the passbook.
 
-### 4.10 Analytics
-Read-only view of one client or one share. Business guide 3.10.
+### 4.11 Analytics
+Read-only view of one client or one share. Business guide 3.11.
 
 - **Screen:** `react-app/src/pages/Analytics/AnalyticsPage.js`, `tabs/holding/HoldingTab.js`, `tabs/transaction/TransactionTab.js`, `tabs/allocations/AllocationTab.js` and `tabs/performance/PerformanceTab.js` (placeholders), `pages/Holding/HoldingCards.js`, `pages/TransactionPage/TransactionPage.js` (drill-down), `hooks/GetHolding.js`
 - **API:** `/api/analytics` → `router/AnalyticsRouter.js` → `controller/analytics/tabs/holding/AnalyticsControllers.js`, `CashController.js`, `controller/analytics/tabs/transaction/transaction.js`. The drill-down uses `/api/transaction/getStockTransactionHistory`.
@@ -296,8 +322,8 @@ Read-only view of one client or one share. Business guide 3.10.
 - **Tables:** reads `Holdings`, `Transaction`, `Bhav_Copy`, `Security_List`, `clientIds` and `Cash_Ledger`.
 - **Before you change:** the holdings and transaction controllers also produce the Reports exports, and `functions/ExportAllCustomerHoldingData/analyticsController.js` mirrors the holdings summary.
 
-### 4.11 Custodian Upload and the two-stage custodian check
-Ex-Entitlement and Benefit Collection files, and the Receivable → Received check. Business guide 3.11–3.13.
+### 4.12 Custodian Upload and the two-stage custodian check
+Ex-Entitlement and Benefit Collection files, and the Receivable → Received check. Business guide 3.12–3.14.
 
 - **Screen:** `react-app/src/pages/CustodianUploadPage/CustodianUploadPage.js`, plus `pages/SplitPage/SplitReconcilePanel.js` (the check panel on Split, Bonus and Dividend)
 - **API:** `/api/custodian-upload` → `router/CustodianUploadRouter.js` → `controller/corporateAction/CustodianUploadController.js`. The Split and Bonus routers also use this controller for `compare-custodian`, `compare-benefit` and `history`. The Dividend router uses its `compareDividendWithBenefit`.
@@ -307,8 +333,8 @@ Ex-Entitlement and Benefit Collection files, and the Receivable → Received che
 - **Tables:** writes `CA_Custodian_Upload`, `CA_Ex_Entitlement` and `CA_Benefit_Collection`. Reads `Holdings`, `Split_Account`, `Bonus_Record`, `Dividend`, `Dividend_Record`, `Security_List` and `clientIds`.
 - **Before you change:** any change to the comparison labels or columns shows up on three pages (Split, Bonus, Dividend) at once.
 
-### 4.12 Split
-Business guide 3.14.
+### 4.13 Split
+Business guide 3.15.
 
 - **Screen:** `react-app/src/pages/SplitPage/SplitPage.js` (+ `SplitReconcilePanel.js`)
 - **API:** `/api/split` → `router/SplitRouter.js` → `controller/uploader/SplitController.js`, `controller/export/exportSplit/exportSplitFile.js`, `CustodianUploadController.js`
@@ -318,8 +344,8 @@ Business guide 3.14.
 - **Tables:** writes `Split` and `Split_Account`. Reads `Holdings`, `Security_List` and `clientIds`.
 - **Before you change:** a split can trigger a bonus recalculation, so re-test Bonus too.
 
-### 4.13 Bonus
-Business guide 3.15.
+### 4.14 Bonus
+Business guide 3.16.
 
 - **Screen:** `react-app/src/pages/BonusPage/BonusPage.js` (+ `SplitReconcilePanel.js`)
 - **API:** `/api/bonus` → `router/BonusRouter.js` → `controller/BonusController.js`, `controller/export/exportBonus/exportBonusFile.js`, `CustodianUploadController.js`
@@ -329,8 +355,8 @@ Business guide 3.15.
 - **Tables:** writes `Bonus` and `Bonus_Record`. Reads `Holdings`, `Security_List` and `clientIds`.
 - **Before you change:** `functions/UpdateBonusTable/holdingsSnapshot.js` must give the same holding as `holdingsFromTable.js`. If they differ, the applied bonus will not match the approved preview.
 
-### 4.14 Dividend
-Business guide 3.16.
+### 4.15 Dividend
+Business guide 3.17.
 
 - **Screen:** `react-app/src/pages/Dividend/DividendPage.js` (+ `SplitReconcilePanel.js`)
 - **API:** `/api/dividend` → `router/uploaderRouter/DividendUploaderRouter.js` → `controller/uploader/DividendUploader.js`, `controller/export/exportDividend/exportDividendFile.js`, `CustodianUploadController.js`
@@ -340,8 +366,8 @@ Business guide 3.16.
 - **Tables:** writes `Dividend`, `Dividend_Record` and `Cash_Balance_Per_Transaction`. Reads `Holdings`.
 - **Before you change:** a dividend writes into the cash passbook, so re-test Cash Balance. The `holdingsSnapshot.js` ports must match `holdingsFromTable.js`.
 
-### 4.15 Merger
-Business guide 3.17.
+### 4.16 Merger
+Business guide 3.18.
 
 - **Screen:** `react-app/src/pages/MergerPage/MergerPage.js`
 - **API:** `/api/merger` → `router/MergerRouter.js` → `controller/MergerController.js`
@@ -351,8 +377,8 @@ Business guide 3.17.
 - **Tables:** writes `Merger`, `Merger_Record` and `Security_List` (new ISIN). Reads `Transaction`, `Bonus`, `Split` and `Demerger_Record`.
 - **Before you change:** the preview (`util/merger/*`) and the apply job (`functions/MegerFn/*`) are twins. Per-lot rounding must be the same in both, or the applied result will not match the preview.
 
-### 4.16 Demerger
-Business guide 3.18.
+### 4.17 Demerger
+Business guide 3.19.
 
 - **Screen:** `react-app/src/pages/DemergerPage/DemergerPage.js`
 - **API:** `/api/demerger` → `router/DemergerRouter.js` → `controller/uploader/DemergerController.js`. The ISIN list comes from `/api/split/getAllSecuritiesList`.
@@ -362,8 +388,8 @@ Business guide 3.18.
 - **Tables:** writes `Demerger`, `Demerger_Record` and `Security_List` (new ISIN). Reads `Holdings`.
 - **Before you change:** `DemergerController.js` (preview) and `functions/DemergerFn/demergerApplyCore.js` (apply) are twins.
 
-### 4.17 Holding Comparison
-Our holdings vs the custodian's holding statement. Business guide 3.19.
+### 4.18 Holding Comparison
+Our holdings vs the custodian's holding statement. Business guide 3.20.
 
 - **Screen:** `react-app/src/pages/HoldingComparison/HoldingComparison.js` and the `holdingComparison/` folder (`HoldingComparisonPanel.js`, `ExceptionGrid.js`, `PreviousFiles.js`, `api.js`)
 - **API:** `/api/holding-comparison` → `router/holdingComparisonRouter/HoldingComparisonRouter.js` → `controller/holdingComparison/HoldingComparisonUpload.js`, `HoldingComparisonFaHoldings.js`, `HoldingComparisonRun.js`
@@ -373,8 +399,8 @@ Our holdings vs the custodian's holding statement. Business guide 3.19.
 - **Tables:** writes `Holding_Comparison_Run` and `Jobs`. The functions read `Holdings`, `Bhav_Copy`, `Security_List` and `clientIds`.
 - **Before you change:** `util/holdingComparison/*` is copied into both functions. `FAHoldingsGenerator` also carries copies of `holdingsFromTable.js` and `allAccountCodes.js`.
 
-### 4.18 Update ISIN
-Rename an ISIN everywhere, or update security details. Business guide 3.20.
+### 4.19 Update ISIN
+Rename an ISIN everywhere, or update security details. Business guide 3.21.
 
 - **Screen:** `react-app/src/pages/update-isin/UpdateISINPage.js`
 - **API:** `/api/isin` → `router/IsinRouter.js` → `controller/isin/updateIsin.js`
@@ -386,8 +412,8 @@ Rename an ISIN everywhere, or update security details. Business guide 3.20.
   - A **new table with an ISIN column** must be added to `ISIN_TARGETS` in `functions/UpdateISINWorker/index.js`, or renamed ISINs will be left behind in it.
   - The target count in `updateIsin.js` must match `ISIN_TARGETS.length`.
 
-### 4.19 Reports
-CSV exports. Business guide 3.21.
+### 4.20 Reports
+CSV exports. Business guide 3.22.
 
 - **Screen:** `react-app/src/pages/Reports/ReportsPage.js` and `tabs/` (`Holdings.js`, `Transactionstab.js`, `CashTab.js`, `CorporateActionTab.js`, `TopClientsTab.js`), `notifications/reportJobStatus.js`
 - **API:** `/api/export` → `router/export/ExportRouter.js` → `controller/export/exportHolding/*`, `exportTransaction/exportSingleClient.js`, `exportCashBalance/exportAllClientsCash.js`, `exportCorporateAction/*`. The Cash tab also uses `/api/cash-balance/export*`.
@@ -399,8 +425,8 @@ CSV exports. Business guide 3.21.
   - Holdings and transaction reports reuse the Analytics controllers.
   - A new corporate action type needs a handler in `functions/ExportCorpActionReport/handlers/` and an entry in `SUPPORTED_TYPES`.
 
-### 4.20 Dashboard and Notifications
-Business guide 3.22.
+### 4.21 Dashboard and Notifications
+Business guide 3.23.
 
 - **Screen:** `react-app/src/pages/Dashboard/DashboardPage.js`, `components/dashboard/DashboardComponents.js`, `notifications/NotificationTray.js`, `notifications/JobNotificationContext.js`
 - **API:**

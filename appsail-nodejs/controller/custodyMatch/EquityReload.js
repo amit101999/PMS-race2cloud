@@ -88,11 +88,15 @@ import {
   fileProblems,
   isBigRemoval,
   closedDateMessage,
+  DEFAULT_WINDOW_DAYS,
+  dateWindowView,
+  parseWindowDays,
   isMutualFundTrade,
   tradeFromBookedRow,
   tradeFromCells,
   tradesToTemplateCsv,
 } from "../../util/custodyMatch/equityReload.js";
+import { readDateWindow, saveDateWindow } from "../../util/custodyMatch/changeWindow.js";
 import {
   allRowErrors,
   getUploadedFile,
@@ -526,8 +530,8 @@ const isLocked = (progress) => Boolean(progress) && progress.status !== STATUS.C
  * finished with Try again, which does not check this, so the books are never
  * left half done.
  */
-const closedDateResponse = (res, date) => {
-  const message = closedDateMessage(date);
+const closedDateResponse = async (res, catalystApp, date) => {
+  const message = closedDateMessage(date, await readDateWindow(catalystApp, date));
   return message ? fail(res, 409, { code: "DATE_CLOSED", message }) : null;
 };
 
@@ -591,7 +595,7 @@ export const uploadEquityFaFile = async (req, res) => {
     const forDate = readUploadDate(req.body?.businessDate);
     if (forDate.error) return fail(res, 400, { code: "BAD_DATE", message: forDate.error });
     const { businessDate } = forDate;
-    const closed = closedDateResponse(res, businessDate);
+    const closed = await closedDateResponse(res, catalystApp, businessDate);
     if (closed) return closed;
     const uploadDay = readUploadedOn(req.body?.uploadDate);
     if (uploadDay.error) return fail(res, 400, { code: "BAD_UPLOAD_DATE", message: uploadDay.error });
@@ -789,7 +793,7 @@ export const uploadEquityCustodyFile = async (req, res) => {
     const bucket = getBucket(catalystApp);
     const businessDate = String(req.body?.businessDate || "").trim();
     if (DATE_PATTERN.test(businessDate)) {
-      const closed = closedDateResponse(res, businessDate);
+      const closed = await closedDateResponse(res, catalystApp, businessDate);
       if (closed) return closed;
       const progress = await currentProgress(catalystApp, bucket, businessDate);
       if (isLocked(progress)) {
@@ -826,7 +830,7 @@ export const startEquityRun = async (req, res) => {
       return fail(res, 400, { code: "BAD_DATE", message: "businessDate and uploadDate must be yyyy-mm-dd." });
     }
 
-    const closed = closedDateResponse(res, businessDate);
+    const closed = await closedDateResponse(res, catalystApp, businessDate);
     if (closed) return closed;
 
     const bucket = getBucket(catalystApp);
@@ -1029,6 +1033,60 @@ export const listCommitHistory = async (req, res) => {
   }
 };
 
+/* ───────────────────────────── change window ───────────────────────────── */
+
+/** Most dates the screen asks about at once (the dates of one upload date). */
+const MAX_WINDOW_DATES = 60;
+
+/** GET /api/custody-match/reload/windows?dates=2026-10-28,2026-10-29 — each date's T+N window. */
+export const getDateWindows = async (req, res) => {
+  try {
+    const catalystApp = req.catalystApp;
+    if (!catalystApp) return noApp(res);
+    const dates = [...new Set(String(req.query.dates || "").split(",").map((d) => d.trim()).filter(Boolean))];
+    if (dates.length > MAX_WINDOW_DATES || dates.some((d) => !DATE_PATTERN.test(d))) {
+      return fail(res, 400, { code: "BAD_DATES", message: `dates must be up to ${MAX_WINDOW_DATES} yyyy-mm-dd values.` });
+    }
+    const views = await Promise.all(dates.map(async (d) => dateWindowView(d, await readDateWindow(catalystApp, d))));
+    return res.json({ success: true, windows: Object.fromEntries(views.map((v) => [v.date, v])) });
+  } catch (error) {
+    console.error("[EquityReload] getDateWindows:", error);
+    return fail(res, 500, { message: error.message || "Could not read the change windows." });
+  }
+};
+
+/**
+ * PUT /api/custody-match/reload/:date/window   body: { days }
+ *
+ * Chooses the trade date's window. Allowed only until the date's first commit,
+ * which fixes it; after that the window can never change.
+ */
+export const setDateWindow = async (req, res) => {
+  try {
+    const catalystApp = req.catalystApp;
+    if (!catalystApp) return noApp(res);
+    const date = String(req.params.date || "").trim();
+    if (!DATE_PATTERN.test(date)) return fail(res, 400, { code: "BAD_DATE", message: "Date must be yyyy-mm-dd." });
+    const days = parseWindowDays(req.body?.days);
+    if (!days) return fail(res, 400, { code: "BAD_WINDOW", message: "The window must be a whole number of days from 1 to 150." });
+
+    const current = await readDateWindow(catalystApp, date);
+    if (current?.fixed) {
+      return fail(res, 409, {
+        code: "WINDOW_FIXED",
+        message: `The window of ${date} was fixed at its first commit and cannot change.`,
+        window: dateWindowView(date, current),
+      });
+    }
+    const record = { days, fixed: false };
+    await saveDateWindow(catalystApp, date, record);
+    return res.json({ success: true, window: dateWindowView(date, record) });
+  } catch (error) {
+    console.error("[EquityReload] setDateWindow:", error);
+    return fail(res, 500, { message: error.message || "Could not save the window." });
+  }
+};
+
 /* ──────────────────────────────── status ───────────────────────────────── */
 
 /** What the screen shows about a Pre-commit. */
@@ -1069,10 +1127,12 @@ export const getEquityDate = async (req, res) => {
     const progress = await currentProgress(catalystApp, bucket, date);
     const pending = await pendingFaFiles(catalystApp, bucket, date);
     const summary = await readJsonOr(bucket, reloadKey(date, "summary.json"), null);
+    const window = dateWindowView(date, await readDateWindow(catalystApp, date));
 
     return res.json({
       success: true,
       date,
+      window,
       locked: isLocked(progress),
       progress: progressView(progress),
       pendingFiles: pending.map((f) => ({
@@ -1125,7 +1185,7 @@ export const preCommitEquityDate = async (req, res) => {
     const bucket = getBucket(catalystApp);
     const progress = await currentProgress(catalystApp, bucket, date);
     if (isLocked(progress)) return fail(res, 409, { code: "DATE_LOCKED", message: lockedMessage(date, progress) });
-    const closed = closedDateResponse(res, date);
+    const closed = await closedDateResponse(res, catalystApp, date);
     if (closed) return closed;
 
     const busy = await busyElsewhere(catalystApp, date);
@@ -1164,6 +1224,10 @@ export const preCommitEquityDate = async (req, res) => {
         bookedCount: summary.bookedCount,
       });
     }
+
+    // The first commit fixes the date's window; from now on it can never change.
+    const window = await readDateWindow(catalystApp, date);
+    if (!window?.fixed) await saveDateWindow(catalystApp, date, { days: window?.days || DEFAULT_WINDOW_DAYS, fixed: true });
 
     const startedAtMs = Date.now();
     const firstCommit = await isFirstCommit(catalystApp.zcql(), date);

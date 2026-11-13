@@ -85,6 +85,16 @@ const PreCommitPanel = ({ runs, onProgressChange }) => {
                   ]),
         ];
         if (open > 0) lines.push("", `${open.toLocaleString()} match difference(s) are still open.`);
+        const w = info.window;
+        if (w && !w.fixed) {
+            const show = (iso) => iso.split("-").reverse().join("-");
+            lines.push(
+                "",
+                w.lastDay < api.todayIso()
+                    ? `Window T+${w.days} ended on ${show(w.lastDay)}. This commit is final: the date is locked straight after it.`
+                    : `Window T+${w.days} is fixed now: the date can be re-uploaded and re-committed till ${show(w.lastDay)}.`,
+            );
+        }
         if (!window.confirm(lines.join("\n"))) return;
 
         let confirmBigRemoval = false;
@@ -143,6 +153,9 @@ const PreCommitPanel = ({ runs, onProgressChange }) => {
                     const thisRunDone = p?.status === "COMPLETED" && p.runId === run.runId;
                     // No pending FA file: the match only checked our books, so nothing is loaded.
                     const booksOnly = summary?.runId === run.runId && summary.pendingKeys.length === 0;
+                    // Past its change window: booked for good, so no Commit. A commit that is
+                    // running or stopped still shows, so it can finish (Try again).
+                    const dateLocked = Boolean(info?.window?.locked);
 
                     return (
                         <div key={run.runId} className="cm-precommit">
@@ -150,6 +163,8 @@ const PreCommitPanel = ({ runs, onProgressChange }) => {
                                 <strong className="mono">{date}</strong>
                                 {!info ? (
                                     <StatusBadge tone={STATUS.NEUTRAL}>Loading…</StatusBadge>
+                                ) : dateLocked && p?.status !== "RUNNING" && p?.status !== "FAILED" ? (
+                                    <StatusBadge tone={STATUS.NEUTRAL}>Locked</StatusBadge>
                                 ) : p?.status === "RUNNING" ? (
                                     <StatusBadge tone={STATUS.PROCESSING}>Committing</StatusBadge>
                                 ) : p?.status === "FAILED" ? (
@@ -205,7 +220,9 @@ const PreCommitPanel = ({ runs, onProgressChange }) => {
                                 </div>
                             ) : null}
 
-                            {booksOnly && (!p || p.status === "COMPLETED") ? (
+                            {dateLocked && (!p || p.status === "COMPLETED") ? (
+                                <p className="cm-verdict-sub">{info.window.message}</p>
+                            ) : booksOnly && (!p || p.status === "COMPLETED") ? (
                                 <p className="cm-verdict-sub">
                                     No new FA file, so there is nothing to commit. Our{" "}
                                     {summary.bookedCount.toLocaleString()} booked trade(s) were checked against the custodian

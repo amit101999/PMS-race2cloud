@@ -366,34 +366,24 @@ export const todayIso = () => {
 };
 
 /*
- * Equity tab: a trade date can be uploaded or committed until CHANGE_WINDOW_WORKING_DAYS
- * working days after it (that day included; Saturday and Sunday skipped, no holidays).
- * The server decides (lastChangeDate in util/custodyMatch/equityReload.js);
- * this copy only warns before a file is picked. Keep the two in step.
+ * Equity tab: each trade date has its own change window (T+N), chosen on the Fund
+ * Accounting card until the date's first commit fixes it. The server works out
+ * whether a date is open or locked (util/custodyMatch/equityReload.js) and sends
+ * the text to show, so the screen holds no copy of the rule.
  */
-export const CHANGE_WINDOW_WORKING_DAYS = 150;
+export const WINDOW_PRESETS = [1, 2, 3, 150];
+export const DEFAULT_WINDOW_DAYS = 150;
+export const MAX_WINDOW_DAYS = 150;
 
-export const lastChangeDate = (tradeDate) => {
-  const [y, m, d] = String(tradeDate).split("-").map(Number);
-  const day = new Date(Date.UTC(y, m - 1, d, 12));
-  let counted = 0;
-  while (counted < CHANGE_WINDOW_WORKING_DAYS) {
-    day.setUTCDate(day.getUTCDate() + 1);
-    const weekday = day.getUTCDay();
-    if (weekday !== 0 && weekday !== 6) counted++;
-  }
-  const p = (n) => String(n).padStart(2, "0");
-  return `${day.getUTCFullYear()}-${p(day.getUTCMonth() + 1)}-${p(day.getUTCDate())}`;
+/** { [date]: { days, fixed, lastDay, locked, message } } for the given trade dates. */
+export const getDateWindows = async (dates) => {
+  const unique = [...new Set(dates.filter(Boolean))].sort();
+  if (unique.length === 0) return {};
+  const res = await request(`/reload/windows?dates=${encodeURIComponent(unique.join(","))}`);
+  return res.windows || {};
 };
 
-/** The locked-date message, or "" while the trade date is open. Same words as the server's. */
-export const closedDateMessage = (tradeDate) => {
-  if (!tradeDate) return "";
-  const last = lastChangeDate(tradeDate);
-  if (todayIso() <= last) return "";
-  const show = (iso) => iso.split("-").reverse().join("-");
-  return `${show(tradeDate)} is locked. The last day to upload or commit was ${show(last)}.`;
-};
+export const saveDateWindow = (date, days) => json(`/reload/${date}/window`, "PUT", { days });
 
 export function formatBytes(bytes) {
   if (bytes == null || Number.isNaN(Number(bytes))) return "—";

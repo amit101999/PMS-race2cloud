@@ -33,6 +33,8 @@ import {
 import {
   getEquityDate,
   listCommitHistory,
+  getDateWindows,
+  setDateWindow,
   listConsolidatedFiles,
   preCommitEquityDate,
   retryEquityDate,
@@ -157,6 +159,12 @@ router.get("/reload/consolidated-files", listConsolidatedFiles);
 
 // GET /api/custody-match/reload/commit-history — every commit, newest first. Also before /reload/:date.
 router.get("/reload/commit-history", listCommitHistory);
+
+// GET /api/custody-match/reload/windows?dates=… — each trade date's T+N window. Also before /reload/:date.
+router.get("/reload/windows", getDateWindows);
+
+// PUT /api/custody-match/reload/:date/window — choose a date's window (until its first commit fixes it)
+router.put("/reload/:date/window", setDateWindow);
 
 // GET /api/custody-match/reload/:date — pending files, match summary, Pre-commit progress
 router.get("/reload/:date", getEquityDate);
