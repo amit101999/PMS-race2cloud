@@ -595,3 +595,46 @@
 .fm-cleared-list li {
     margin-bottom: 4px;
 }
+
+/* Extra columns on the Mutual Funds mapping: a name box and a remove button
+   in place of the field label, and the Add column button under the table. */
+.fm-extra-name {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.fm-extra-input {
+    flex: 1;
+    min-width: 0;
+    height: 34px;
+    padding: 0 9px;
+    border: 1px solid #d7dbe1;
+    border-radius: 6px;
+    font-size: 13px;
+    color: #111827;
+    background: #fff;
+}
+
+.fm-extra-input:focus {
+    outline: none;
+    border-color: var(--ds-brand);
+}
+
+.fm-extra-remove {
+    border: none;
+    background: transparent;
+    font-size: 20px;
+    line-height: 1;
+    color: #6b7280;
+    cursor: pointer;
+    padding: 0 4px;
+}
+
+.fm-extra-remove:hover {
+    color: #b91c1c;
+}
+
+.fm-add-column {
+    margin-top: 12px;
+}

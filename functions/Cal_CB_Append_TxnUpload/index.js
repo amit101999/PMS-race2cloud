@@ -141,6 +141,12 @@ function sortCashEvents(allEvents) {
    settlement date (mapInflow), money leaving from its trade date (mapOutflow).
    OPI / OPO move shares, not cash, so there is no OPI branch here.
    Keep in sync with the twin in functions/Cal_CB_Per_TNX/index.js. */
+/* A mutual fund row's Net_Amount is already the final money moved (buy: + stamp
+   duty, sell: − STT; see deriveMutualFundAmount in appsail TempTransactionUpload.js),
+   so STT is not applied to it a second time. Same rule in the twin function and
+   in functions/CashCalculation. */
+const isMutualFundRow = (t) => String(t.Security_Type ?? "").trim().toLowerCase() === "m";
+
 function mapInflow(t) {
   return {
     rowId: t.ROWID,
@@ -156,6 +162,7 @@ function mapInflow(t) {
     price: Number(t.NETRATE) || 0,
     isin: String(t.ISIN ?? "").trim() || "",
     stt: Number(t.STT || t.Stt) || 0,
+    isMutualFund: isMutualFundRow(t),
   };
 }
 
@@ -174,6 +181,7 @@ function mapOutflow(t) {
     price: Number(t.NETRATE) || 0,
     isin: String(t.ISIN ?? "").trim() || "",
     stt: Number(t.STT || t.Stt) || 0,
+    isMutualFund: isMutualFundRow(t),
   };
 }
 
@@ -207,7 +215,7 @@ async function fetchNewTransactionEventsSinceImport(zcql, accountCode, importSta
   const outflowTypesList = CASH_SUBTRACT.map((t) => `'${esc(t)}'`).join(", ");
 
   const inflowQuery = `
-    SELECT ROWID, TRANDATE, SETDATE, executionPriority, Tran_Type, Security_Name, Net_Amount, QTY, WS_client_id, NETRATE, ISIN, STT
+    SELECT ROWID, TRANDATE, SETDATE, executionPriority, Tran_Type, Security_Name, Net_Amount, QTY, WS_client_id, NETRATE, ISIN, STT, Security_Type
     FROM Transaction
     WHERE WS_Account_code = '${esc(accountCode)}'
       AND Tran_Type IN (${inflowTypesList})
@@ -216,7 +224,7 @@ async function fetchNewTransactionEventsSinceImport(zcql, accountCode, importSta
   `;
 
   const outflowQuery = `
-    SELECT ROWID, TRANDATE, SETDATE, executionPriority, Tran_Type, Security_Name, Net_Amount, QTY, WS_client_id, NETRATE, ISIN, STT
+    SELECT ROWID, TRANDATE, SETDATE, executionPriority, Tran_Type, Security_Name, Net_Amount, QTY, WS_client_id, NETRATE, ISIN, STT, Security_Type
     FROM Transaction
     WHERE WS_Account_code = '${esc(accountCode)}'
       AND Tran_Type IN (${outflowTypesList})
@@ -260,10 +268,10 @@ async function insertPassbookEvents(zcql, accountCode, events, state) {
   let inserted = 0;
 
   for (const row of events) {
-    const { trandate, setdate, type, securityName, netAmount, isInflow, qty, price, isin, stt } =
+    const { trandate, setdate, type, securityName, netAmount, isInflow, qty, price, isin, stt, isMutualFund } =
       row;
 
-    const sttP = Math.round(Math.abs(Number(stt ?? 0)) * 100) || 0;
+    const sttP = isMutualFund ? 0 : Math.round(Math.abs(Number(stt ?? 0)) * 100) || 0;
     const amtP = Math.round(Math.abs(netAmount) * 100);
 
     if (!usedOpeningCsPlus && type === "CS+") {

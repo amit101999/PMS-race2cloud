@@ -16,6 +16,7 @@
  */
 
 import {
+  CUSTODY_FILE_TYPE,
   FA_FILE_TYPE,
   FA_FILE_TYPE_LABEL,
   FILE_SIDE,
@@ -383,8 +384,19 @@ export const uploadFaFile = async (req, res) => {
         message: `fileType must be one of ${FA_FILE_TYPES.join(", ")}; received "${req.body?.fileType || ""}".`,
       });
     }
+    // Mutual fund files are not reconciled any more: they are uploaded and
+    // committed on the Mutual Funds tab (EquityReload.js with kind MUTUAL_FUND).
+    if (faFileType === FA_FILE_TYPE.MUTUAL_FUND) {
+      return fail(res, 400, {
+        code: "USE_MUTUAL_FUNDS_TAB",
+        message: "Mutual fund transaction files are uploaded on the Mutual Funds tab.",
+      });
+    }
+    const profileType = PROFILE_TYPE.FA;
+    /* Before the Mutual Funds tab:
     const profileType =
       faFileType === FA_FILE_TYPE.MUTUAL_FUND ? PROFILE_TYPE.FA_MUTUAL_FUND : PROFILE_TYPE.FA;
+    */
 
     // The saved mapping decides which column is which. Unsaved -> the built-in
     // 26-column template, i.e. exactly the behaviour before mapping existed.
@@ -405,7 +417,7 @@ export const uploadFaFile = async (req, res) => {
         code: "FA_FILE_TYPE_MISMATCH",
         message:
           profileType === PROFILE_TYPE.FA
-            ? "Wrong file type — Equity selected, but this file has TDS / Stamp Duty amounts, so it is a Mutual Funds transaction file."
+            ? "Wrong file type — this file has TDS / Stamp Duty amounts, so it is a Mutual Funds transaction file. Upload it on the Mutual Funds tab."
             : "Wrong file type — Mutual Funds selected, but TDS and Stamp Duty are empty in every row, so it is an Equity transaction file.",
         fileName: file.name,
       });
@@ -556,6 +568,14 @@ export const uploadCustodyFile = async (req, res) => {
       return fail(res, 400, {
         code: "BAD_FILE_TYPE",
         message: `fileType must be one of ${CUSTODY_FILE_TYPES.join(", ")}; received "${req.body?.fileType || ""}".`,
+      });
+    }
+    // Mutual funds are not reconciled any more, so no custodian file is needed for them.
+    if (fileType === CUSTODY_FILE_TYPE.MUTUAL_FUND) {
+      return fail(res, 400, {
+        code: "USE_MUTUAL_FUNDS_TAB",
+        message:
+          "Mutual funds are not matched against a custodian file any more. Upload the mutual fund transaction file on the Mutual Funds tab.",
       });
     }
 
@@ -924,8 +944,13 @@ export const deleteUploadedFile = async (req, res) => {
       });
     }
 
-    // A trade date past its change window is locked, removal included.
-    const closed = closedDateMessage(parsed.businessDate, await readDateWindow(catalystApp, parsed.businessDate));
+    // A trade date past its change window is locked, removal included. A mutual
+    // fund file follows the Mutual Funds tab's window, every other file Equity's.
+    const mutualFund = parsed.fileType === FA_FILE_TYPE.MUTUAL_FUND;
+    const closed = closedDateMessage(
+      parsed.businessDate,
+      await readDateWindow(catalystApp, parsed.businessDate, { mutualFund }),
+    );
     if (closed) return fail(res, 409, { code: "DATE_CLOSED", message: closed });
 
     const fileName = parsed.originalFileName || key.split("/").pop();
@@ -953,7 +978,8 @@ export const deleteUploadedFile = async (req, res) => {
     );
     await deleteFileRows(catalystApp, rows);
     const uploadedOn = rows[0] ? String(rows[0].uploadedOn) : null;
-    const superseded = uploadedOn
+    // Matching never reads a mutual fund file, so removing one leaves the date's match as it is.
+    const superseded = uploadedOn && !mutualFund
       ? await supersedeRunsForDate(catalystApp, parsed.businessDate, uploadedOn)
       : { runIds: [] };
     const after = await uploadDayFiles(catalystApp, parsed.businessDate, uploadedOn);

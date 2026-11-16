@@ -14,8 +14,8 @@ const STATUS_BADGE = {
     FAILED: { tone: STATUS.BAD, label: "Could not finish" },
 };
 
-/** Every Commit of the Equity tab, newest first. A date committed twice has two rows. */
-const CommitHistory = ({ refreshToken }) => {
+/** Every Commit of one tab (Equity, or Mutual Funds with kind MUTUAL_FUND), newest first. A date committed twice has two rows. */
+const CommitHistory = ({ refreshToken, kind = api.KIND.EQUITY }) => {
     const [items, setItems] = useState([]);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState("");
@@ -24,14 +24,14 @@ const CommitHistory = ({ refreshToken }) => {
         setLoading(true);
         setError("");
         try {
-            const res = await api.getCommitHistory();
+            const res = await api.getCommitHistory(kind);
             setItems(res.items || []);
         } catch (err) {
             setError(err.message);
         } finally {
             setLoading(false);
         }
-    }, []);
+    }, [kind]);
 
     useEffect(() => {
         load();

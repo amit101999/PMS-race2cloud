@@ -158,11 +158,25 @@ export const retryRun = (runId) => json(`/run/${runId}/retry`, "POST");
 
 export const proceedToImport = (runIds) => json("/runs/proceed", "POST", { runIds });
 
-/* ── Equity tab: upload, match and Pre-commit a date ─────────────────── */
+/* ── Equity and Mutual Funds tabs: upload, match and Pre-commit a date ── */
+
+/*
+ * The two tabs share these routes. kind says which tab a call is for; the
+ * server keeps each tab's files, window, Commit and history apart. The Mutual
+ * Funds tab has no custodian file and no match.
+ */
+export const KIND = { EQUITY: "EQUITY", MUTUAL_FUND: "MUTUAL_FUND" };
+
+const kindQuery = (kind) => (kind && kind !== KIND.EQUITY ? `kind=${encodeURIComponent(kind)}` : "");
+const withKind = (path, kind) => {
+  const q = kindQuery(kind);
+  if (!q) return path;
+  return `${path}${path.includes("?") ? "&" : "?"}${q}`;
+};
 
 /* choice ("ADD" | "REPLACE") is sent only after the server answered mode "ASK". */
-export const uploadEquityFaFile = ({ file, businessDate, uploadDate, choice = "" }) =>
-  form("/reload/fa-file", { file, businessDate, uploadDate, choice });
+export const uploadEquityFaFile = ({ file, businessDate, uploadDate, choice = "", kind = KIND.EQUITY }) =>
+  form("/reload/fa-file", { file, businessDate, uploadDate, choice, kind });
 
 export const uploadEquityCustodyFile = ({ file, scheme, fileType, businessDate, uploadDate, replace = false }) =>
   form("/reload/custody-file", {
@@ -177,15 +191,17 @@ export const uploadEquityCustodyFile = ({ file, scheme, fileType, businessDate, 
 export const startEquityRun = (businessDate, uploadDate, startedBy) =>
   json("/reload/run", "POST", { businessDate, uploadDate, startedBy });
 
-/** Pending files, the match summary and the Pre-commit progress of one date. */
-export const getEquityDate = (date) => request(`/reload/${date}`);
+/** Pending files, the commit summary and the Pre-commit progress of one date on a tab. */
+export const getEquityDate = (date, kind = KIND.EQUITY) => request(withKind(`/reload/${date}`, kind));
 
-export const preCommitEquityDate = (date, { runId, confirmBigRemoval = false }) =>
-  json(`/reload/${date}/pre-commit`, "POST", { runId, confirmBigRemoval: confirmBigRemoval ? "true" : "" });
+export const preCommitEquityDate = (date, { runId = "", confirmBigRemoval = false, kind = KIND.EQUITY }) =>
+  json(`/reload/${date}/pre-commit`, "POST", { runId, confirmBigRemoval: confirmBigRemoval ? "true" : "", kind });
 
-export const retryEquityDate = (date) => json(`/reload/${date}/retry`, "POST");
+export const retryEquityDate = (date, kind = KIND.EQUITY) => json(`/reload/${date}/retry`, "POST", { kind });
 
-export const getCommitHistory = () => request("/reload/commit-history");
+export const getCommitHistory = (kind = KIND.EQUITY) => request(withKind("/reload/commit-history", kind));
+
+export const getConsolidatedFiles = (kind = KIND.EQUITY) => request(withKind("/reload/consolidated-files", kind));
 
 export const MODE_LABEL = {
   FIRST: "First upload",
@@ -206,8 +222,9 @@ export const CUSTODY_MODE_LABEL = {
 /** All three profiles plus their field catalogs, in one call. */
 export const getFieldMaps = () => request("/field-map");
 
-export const saveFieldMap = (type, profile, updatedBy) =>
-  json(`/field-map/${type}`, "PUT", { profile, updatedBy });
+/** `labels` = names of the extra columns added on the Mutual Funds mapping. */
+export const saveFieldMap = (type, profile, updatedBy, labels = {}) =>
+  json(`/field-map/${type}`, "PUT", { profile, updatedBy, labels });
 
 /** Deletes the saved mapping for one file type, so every field is mapped again. */
 export const deleteFieldMap = (type) => request(`/field-map/${type}`, { method: "DELETE" });
@@ -375,15 +392,15 @@ export const WINDOW_PRESETS = [1, 2, 3, 150];
 export const DEFAULT_WINDOW_DAYS = 150;
 export const MAX_WINDOW_DAYS = 150;
 
-/** { [date]: { days, fixed, lastDay, locked, message } } for the given trade dates. */
-export const getDateWindows = async (dates) => {
+/** { [date]: { days, fixed, lastDay, locked, message } } for the given trade dates on a tab. */
+export const getDateWindows = async (dates, kind = KIND.EQUITY) => {
   const unique = [...new Set(dates.filter(Boolean))].sort();
   if (unique.length === 0) return {};
-  const res = await request(`/reload/windows?dates=${encodeURIComponent(unique.join(","))}`);
+  const res = await request(withKind(`/reload/windows?dates=${encodeURIComponent(unique.join(","))}`, kind));
   return res.windows || {};
 };
 
-export const saveDateWindow = (date, days) => json(`/reload/${date}/window`, "PUT", { days });
+export const saveDateWindow = (date, days, kind = KIND.EQUITY) => json(`/reload/${date}/window`, "PUT", { days, kind });
 
 export function formatBytes(bytes) {
   if (bytes == null || Number.isNaN(Number(bytes))) return "—";

@@ -25,14 +25,22 @@ const FIRST_COMMIT_STEP_LABEL = {
 };
 
 /**
- * Equity tab — Commit, one block per matched date.
+ * Commit, one block per date. Equity: one per matched date. Mutual Funds
+ * (kind MUTUAL_FUND): one per date with a mutual fund file on the card; there is
+ * no match, so a date is ready once a new file is waiting.
  *
  * A date's first commit just adds its trades. A later one cleans up the whole date
  * (trades, holdings, cash, unused automatic master rows) and loads the final list
- * again, so our books equal the latest files.
+ * again, so our books equal the latest files. Each tab touches only its own trades.
  * Open match differences do not block it; the confirmation states them.
+ *
+ * @param {{ runId: string, businessDate: string, status: string, isRunning?: boolean,
+ *           counts?: { exceptions: number } }[]} runs Equity's match runs, or one entry per
+ *           Mutual Funds date (runId "mf-<date>", no exceptions)
  */
-const PreCommitPanel = ({ runs, onProgressChange }) => {
+const PreCommitPanel = ({ runs, onProgressChange, kind = api.KIND.EQUITY }) => {
+    const isMf = kind === api.KIND.MUTUAL_FUND;
+    const tradeWord = isMf ? "mutual fund" : "equity";
     const [dates, setDates] = useState({});
     const [busyDate, setBusyDate] = useState("");
     const [errors, setErrors] = useState({});
@@ -44,10 +52,10 @@ const PreCommitPanel = ({ runs, onProgressChange }) => {
     const load = useCallback(async () => {
         if (!datesKey) return;
         const results = await Promise.all(
-            datesKey.split(",").map((d) => api.getEquityDate(d).catch((err) => ({ date: d, loadError: err.message }))),
+            datesKey.split(",").map((d) => api.getEquityDate(d, kind).catch((err) => ({ date: d, loadError: err.message }))),
         );
         setDates(Object.fromEntries(results.map((r) => [r.date, r])));
-    }, [datesKey]);
+    }, [datesKey, kind]);
 
     useEffect(() => {
         load();
@@ -73,14 +81,14 @@ const PreCommitPanel = ({ runs, onProgressChange }) => {
 
     const handlePreCommit = async (run, info) => {
         const s = info.summary;
-        const open = run.counts.exceptions || 0;
+        const open = run.counts?.exceptions || 0;
         const lines = [
             `Commit ${run.businessDate}?`,
             "",
             ...(s.bookedCount === 0
                 ? [`${s.finalCount.toLocaleString()} trade(s) are added to our books, and the holdings and cash of the ${s.affectedClients} client(s) are updated.`]
                 : [
-                      `All ${s.bookedCount.toLocaleString()} equity trade(s) of this date are removed from our books, with the holdings and cash of the ${s.affectedClients} affected client(s).`,
+                      `All ${s.bookedCount.toLocaleString()} ${tradeWord} trade(s) of this date are removed from our books, with the holdings and cash of the ${s.affectedClients} affected client(s).`,
                       `Then ${s.finalCount.toLocaleString()} trade(s) are loaded and holdings and cash are rebuilt.`,
                   ]),
         ];
@@ -109,7 +117,7 @@ const PreCommitPanel = ({ runs, onProgressChange }) => {
         setBusyDate(run.businessDate);
         setError(run.businessDate, null);
         try {
-            await api.preCommitEquityDate(run.businessDate, { runId: run.runId, confirmBigRemoval });
+            await api.preCommitEquityDate(run.businessDate, { runId: isMf ? "" : run.runId, confirmBigRemoval, kind });
             refreshNotifications();
             await load();
         } catch (err) {
@@ -129,7 +137,7 @@ const PreCommitPanel = ({ runs, onProgressChange }) => {
         setBusyDate(date);
         setError(date, null);
         try {
-            await api.retryEquityDate(date);
+            await api.retryEquityDate(date, kind);
             await load();
         } catch (err) {
             setError(date, { message: err.message, detail: err.detail });
@@ -150,9 +158,15 @@ const PreCommitPanel = ({ runs, onProgressChange }) => {
                     const date = run.businessDate;
                     const p = info?.progress;
                     const summary = info?.summary;
-                    const thisRunDone = p?.status === "COMPLETED" && p.runId === run.runId;
+                    // Mutual Funds: done once committed and no newer file is waiting.
+                    const thisRunDone = isMf
+                        ? p?.status === "COMPLETED" && !summary
+                        : p?.status === "COMPLETED" && p.runId === run.runId;
                     // No pending FA file: the match only checked our books, so nothing is loaded.
-                    const booksOnly = summary?.runId === run.runId && summary.pendingKeys.length === 0;
+                    const booksOnly = !isMf && summary?.runId === run.runId && summary.pendingKeys.length === 0;
+                    // Mutual Funds: no match, so a waiting file is all a Commit needs.
+                    const readyToCommit = isMf ? Boolean(summary) : Boolean(summary && summary.runId === run.runId);
+                    const exceptions = run.counts?.exceptions || 0;
                     // Past its change window: booked for good, so no Commit. A commit that is
                     // running or stopped still shows, so it can finish (Try again).
                     const dateLocked = Boolean(info?.window?.locked);
@@ -172,13 +186,15 @@ const PreCommitPanel = ({ runs, onProgressChange }) => {
                                 ) : thisRunDone ? (
                                     <StatusBadge tone={STATUS.OK}>Committed</StatusBadge>
                                 ) : booksOnly ? (
-                                    <StatusBadge tone={run.counts.exceptions > 0 ? STATUS.WARN : STATUS.OK}>
+                                    <StatusBadge tone={exceptions > 0 ? STATUS.WARN : STATUS.OK}>
                                         Books checked
                                     </StatusBadge>
                                 ) : summary ? (
-                                    <StatusBadge tone={run.counts.exceptions > 0 ? STATUS.WARN : STATUS.OK}>
+                                    <StatusBadge tone={exceptions > 0 ? STATUS.WARN : STATUS.OK}>
                                         Ready to commit
                                     </StatusBadge>
+                                ) : isMf ? (
+                                    <StatusBadge tone={STATUS.NEUTRAL}>No new file</StatusBadge>
                                 ) : (
                                     <StatusBadge tone={STATUS.NEUTRAL}>Run the match again</StatusBadge>
                                 )}
@@ -227,19 +243,19 @@ const PreCommitPanel = ({ runs, onProgressChange }) => {
                                     No new FA file, so there is nothing to commit. Our{" "}
                                     {summary.bookedCount.toLocaleString()} booked trade(s) were checked against the custodian
                                     files.{" "}
-                                    {run.counts.exceptions > 0
-                                        ? `${run.counts.exceptions} match difference(s) still open.`
+                                    {exceptions > 0
+                                        ? `${exceptions} match difference(s) still open.`
                                         : "No open match differences."}
                                 </p>
                             ) : !p || p.status === "COMPLETED" ? (
-                                summary && summary.runId === run.runId ? (
+                                readyToCommit ? (
                                     <>
                                         {/* Only the button: open differences turn it amber, and the
                                             confirmation states the trade counts before anything runs. */}
                                         <div className="cm-gate-row">
                                             <button
                                                 type="button"
-                                                className={run.counts.exceptions > 0 ? "cm-primary cm-primary--warn" : "cm-primary"}
+                                                className={exceptions > 0 ? "cm-primary cm-primary--warn" : "cm-primary"}
                                                 disabled={busyDate === date}
                                                 onClick={() => handlePreCommit(run, info)}
                                             >
@@ -247,6 +263,12 @@ const PreCommitPanel = ({ runs, onProgressChange }) => {
                                             </button>
                                         </div>
                                     </>
+                                ) : isMf ? (
+                                    !thisRunDone && info && !info.loadError ? (
+                                        <p className="cm-verdict-sub">
+                                            No new mutual fund file for {date}. Upload one to commit it again.
+                                        </p>
+                                    ) : null
                                 ) : !thisRunDone && info && !info.loadError ? (
                                     <p className="cm-blockers">
                                         The files of {date} changed after this match. Run the match again.

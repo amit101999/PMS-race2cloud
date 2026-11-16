@@ -304,6 +304,11 @@ const FA_FIELDS = [
   { field: "serviceTax", label: "Service Tax", kind: "number", required: true },
   { field: "stt", label: "STT", kind: "number", required: true },
   { field: "ref", label: "Transaction Ref", kind: "text", required: true },
+  // Each trade's own unique ID, a different column from Transaction Ref. The
+  // 26-column template has no such column, so it is optional here and the
+  // operator maps it on the Field Mapping screen. The Equity tab refuses a row
+  // without it (EquityReload.js); it is stored in Transaction.Transaction_ID.
+  { field: "transactionId", label: "Transaction ID", kind: "text", required: false },
   { field: "description", label: "Description", kind: "text", required: true },
 
   // Not used by matching, but carried through to the production import. A
@@ -336,10 +341,31 @@ const FA_FIELDS = [
  * Deductions the fund house reports per transaction. Neither is compared — they
  * are carried for the reconciliation to display — so neither can reject a row.
  */
+/*
+ * Extra columns the user adds on the mapping screen with "Add column" (Mutual
+ * Funds file only). Each goes to the Transaction column of the same name
+ * (Column1 ... Column5). The name the user typed for it is stored with the
+ * mapping as `labels` and shown in place of "Extra column N".
+ */
+export const EXTRA_COLUMN_FIELDS = ["column1", "column2", "column3", "column4", "column5"];
+
+/** Longest name a user may give an extra column. */
+export const EXTRA_COLUMN_LABEL_MAX = 40;
+
 const FA_MUTUAL_FUND_FIELDS = [
-  ...FA_FIELDS,
+  // Every mutual fund row carries its own Transaction ID, so it must be mapped here.
+  ...FA_FIELDS.map((entry) =>
+    entry.field === "transactionId" ? { ...entry, required: true } : entry,
+  ),
   { field: "tds", label: "TDS", kind: "number", required: true },
   { field: "stampDuty", label: "Stamp Duty", kind: "number", required: true },
+  ...EXTRA_COLUMN_FIELDS.map((field, i) => ({
+    field,
+    label: `Extra column ${i + 1}`,
+    kind: "text",
+    required: false,
+    extra: true,
+  })),
 ];
 
 export const FIELD_CATALOG = {
@@ -911,7 +937,8 @@ const readsAsCompactDate = (v) => parseContractNoDate(v) !== null;
  * @returns {Array<object>} the same columns, each with samples and compatibility
  */
 export const describeColumns = (columns, sampleRows = [], { type = null } = {}) => {
-  const side = type === PROFILE_TYPE.FA ? SIDE.FA : SIDE.CUSTODY;
+  // Both transaction files (Equity and Mutual Funds) use the fund accounting type codes.
+  const side = isFaProfileType(type) ? SIDE.FA : SIDE.CUSTODY;
   const rows = Array.isArray(sampleRows) ? sampleRows : [];
 
   return (columns || []).map((col) => {
@@ -1078,11 +1105,50 @@ export const resolveFieldMap = (type, profile, rawHeaders, { strict = false } = 
   return { ok: errors.length === 0, index, transforms, errors, unmappedOptional };
 };
 
-/** A stored profile blob, ready for Stratus. */
-export const toStoredProfile = (type, profile, { updatedBy = "", updatedAtMs = Date.now() } = {}) => ({
+/**
+ * Check the names the user typed for the extra columns.
+ *
+ * Every extra column that points at a file column needs a name, because the
+ * name is the only thing that tells the user what Column1 holds. A name for a
+ * slot that points at nothing is dropped: that slot was removed on screen.
+ *
+ * @returns {{ok:boolean, labels:object, errors:Array}}
+ */
+export const checkExtraLabels = (type, profile, labels) => {
+  const given = labels && typeof labels === "object" ? labels : {};
+  const kept = {};
+  const errors = [];
+  if (type !== PROFILE_TYPE.FA_MUTUAL_FUND) return { ok: true, labels: kept, errors };
+
+  for (const field of EXTRA_COLUMN_FIELDS) {
+    const source = profile?.[field];
+    const inUse = source && source.by !== SOURCE_BY.ABSENT;
+    if (!inUse) continue;
+    const name = String(given[field] ?? "").trim();
+    if (!name) {
+      errors.push({ field, message: `Extra column ${field.slice(-1)} needs a name.` });
+    } else if (name.length > EXTRA_COLUMN_LABEL_MAX) {
+      errors.push({
+        field,
+        message: `The name "${name}" is longer than ${EXTRA_COLUMN_LABEL_MAX} characters.`,
+      });
+    } else {
+      kept[field] = name;
+    }
+  }
+  return { ok: errors.length === 0, labels: kept, errors };
+};
+
+/** A stored profile blob, ready for Stratus. `labels` = names of the extra columns. */
+export const toStoredProfile = (
+  type,
+  profile,
+  { updatedBy = "", updatedAtMs = Date.now(), labels = {} } = {},
+) => ({
   version: PROFILE_VERSION,
   type,
   profile,
+  labels,
   updatedBy: String(updatedBy || "").slice(0, 255),
   updatedAtMs,
 });
@@ -1132,6 +1198,7 @@ const withNewFillerFields = (type, profile) => {
 export const fromStoredProfile = (type, blob) => {
   const fallback = {
     profile: defaultProfile(type),
+    labels: {},
     isDefault: true,
     updatedAtMs: null,
     updatedBy: "",
@@ -1145,6 +1212,7 @@ export const fromStoredProfile = (type, blob) => {
 
   return {
     profile,
+    labels: checkExtraLabels(type, profile, blob.labels).labels,
     isDefault: false,
     updatedAtMs: Number(blob.updatedAtMs) || null,
     updatedBy: String(blob.updatedBy || ""),
@@ -1171,6 +1239,17 @@ export const FA_DEFAULT_COLUMNS = FA_HEADERS.map((name, index) => ({
 export const FA_TEMPLATE_SLOT = Object.fromEntries(
   Object.entries(DEFAULT_PROFILES[PROFILE_TYPE.FA]).map(([field, source]) => [field, source.index]),
 );
+
+/**
+ * The Equity tab's consolidated file: the 26 template columns, then the
+ * Transaction ID as column 27 (heading FA_TRANSACTION_ID_HEADER). Read with
+ * this profile, because the plain template has no Transaction ID column.
+ */
+export const FA_TRANSACTION_ID_HEADER = "Transaction ID";
+export const FA_CONSOLIDATED_PROFILE = {
+  ...DEFAULT_PROFILES[PROFILE_TYPE.FA],
+  transactionId: byIndex(FA_HEADERS.length),
+};
 
 /**
  * Is this profile the shipped default?

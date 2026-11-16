@@ -675,6 +675,11 @@
 
 /* Holding Comparison: both headings hold only a title, so the two boxes start
    level, and the shorter box stretches so their bottoms line up too. */
+/* Mutual Funds tab: only the Fund Accounting card, so it takes the full width. */
+.cm-split--single {
+    grid-template-columns: 1fr;
+}
+
 .cm-split--even {
     align-items: stretch;
 }

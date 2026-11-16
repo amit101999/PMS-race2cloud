@@ -417,7 +417,13 @@ const CustodyMatchPanel = ({
     reloadMode = false,
     /* Changes when a Pre-commit starts or finishes, so the FA file statuses are read again. */
     preCommitTick = 0,
+    /* With reloadMode: the tab. MUTUAL_FUND is the Mutual Funds tab, which shows only the
+       Fund Accounting card (no custodian file, no match) and takes mutual fund files only. */
+    kind = api.KIND.EQUITY,
+    /* Mutual Funds tab: told the tab's files listed on the card, so the page can offer their dates for Commit. */
+    onFaFilesChange,
 }) => {
+    const isMf = reloadMode && kind === api.KIND.MUTUAL_FUND;
     /* Schemes already used, from the stored custodian keys. Each entry knows its
        own layout, so choosing a scheme fills the account type as well. */
     const [schemes, setSchemes] = useState([]);
@@ -489,7 +495,7 @@ const CustodyMatchPanel = ({
     const [pending, setPending] = useState(null);
 
     /** Which transaction file the next pick is. Stays put between uploads, as the custodian type does. */
-    const [faFileType, setFaFileType] = useState(api.FA_FILE_TYPE.REGULAR);
+    const [faFileType, setFaFileType] = useState(isMf ? api.FA_FILE_TYPE.MUTUAL_FUND : api.FA_FILE_TYPE.REGULAR);
 
     /* Purely visual — whether a file is currently being dragged over each
        drop zone. Never affects what gets uploaded or how. */
@@ -708,9 +714,17 @@ const CustodyMatchPanel = ({
      * of each type, so this is the regular file, the mutual fund file, or both.
      */
     const faFiles = useMemo(
-        () => (faDay?.fa?.raw || []).filter((f) => !removedKeys.has(f.key)),
-        [faDay, removedKeys],
+        () =>
+            (faDay?.fa?.raw || []).filter(
+                // Each tab lists only its own files: Equity the regular ones, Mutual Funds the mutual fund ones.
+                (f) => !removedKeys.has(f.key) && (!reloadMode || f.fileType === faFileType),
+            ),
+        [faDay, removedKeys, reloadMode, faFileType],
     );
+
+    useEffect(() => {
+        if (onFaFilesChange) onFaFilesChange(faFiles);
+    }, [faFiles, onFaFilesChange]);
 
     /*
      * Equity tab: the FA files still waiting for a Pre-commit. The others are
@@ -722,7 +736,7 @@ const CustodyMatchPanel = ({
         if (!reloadMode) return undefined;
         let stale = false;
         const dates = [...new Set(faFiles.map((f) => f.businessDate))];
-        Promise.all(dates.map((d) => api.getEquityDate(d)))
+        Promise.all(dates.map((d) => api.getEquityDate(d, kind)))
             .then((results) => {
                 if (stale) return;
                 setPendingFaKeys(new Set(results.flatMap((r) => r.pendingFiles.map((p) => p.key))));
@@ -734,7 +748,7 @@ const CustodyMatchPanel = ({
         return () => {
             stale = true;
         };
-    }, [reloadMode, faFiles, preCommitTick]);
+    }, [reloadMode, faFiles, preCommitTick, kind]);
 
     /*
      * The file dates with files saved under the upload date picked at the top.
@@ -775,7 +789,7 @@ const CustodyMatchPanel = ({
     useEffect(() => {
         if (!reloadMode || !windowDatesKey) return undefined;
         let cancelled = false;
-        api.getDateWindows(windowDatesKey.split(","))
+        api.getDateWindows(windowDatesKey.split(","), kind)
             .then((found) => {
                 if (!cancelled) setWindows((prev) => ({ ...prev, ...found }));
             })
@@ -783,7 +797,7 @@ const CustodyMatchPanel = ({
         return () => {
             cancelled = true;
         };
-    }, [reloadMode, windowDatesKey, preCommitTick]);
+    }, [reloadMode, windowDatesKey, preCommitTick, kind]);
 
     useEffect(() => {
         setWindowCustomOpen(false);
@@ -797,7 +811,7 @@ const CustodyMatchPanel = ({
         setWindowSaving(true);
         setFaError(null);
         try {
-            const res = await api.saveDateWindow(faDate, days);
+            const res = await api.saveDateWindow(faDate, days, kind);
             setWindows((prev) => ({ ...prev, [faDate]: res.window }));
             setWindowCustomOpen(false);
         } catch (err) {
@@ -962,7 +976,7 @@ const CustodyMatchPanel = ({
         setFaResult(null);
         try {
             if (reloadMode) {
-                const res = await api.uploadEquityFaFile({ file, businessDate, uploadDate, choice });
+                const res = await api.uploadEquityFaFile({ file, businessDate, uploadDate, choice, kind });
                 // Nothing is stored yet: the operator picks Replace or Add first.
                 if (res.mode === "ASK") {
                     setAsk({ file, res });
@@ -1037,7 +1051,7 @@ const CustodyMatchPanel = ({
     const chooseAskOption = async (choice) => {
         const { file, res } = ask;
         try {
-            await uploadFa(file, { fileType: api.FA_FILE_TYPE.REGULAR, choice, businessDate: res.businessDate });
+            await uploadFa(file, { fileType: faFileType, choice, businessDate: res.businessDate });
         } catch (err) {
             setFaError({ message: err.message, detail: err.detail });
         } finally {
@@ -1262,6 +1276,13 @@ const CustodyMatchPanel = ({
         if (!f) return;
         setFaError(null);
         const profileType = PROFILE_FOR_FA_FILE_TYPE[faFileType];
+        /* Mutual Funds tab: a redemption-only file can have TDS and Stamp Duty empty in
+           every row, so the values cannot tell it from an Equity file. The server checks
+           that the TDS and Stamp Duty columns are there instead. */
+        if (isMf) {
+            setPending({ kind: "fa", file: f, fileType: faFileType, profileType });
+            return;
+        }
         setFaBusy(true);
         try {
             const preview = await api.previewHeaders(f, profileType);
@@ -1270,7 +1291,7 @@ const CustodyMatchPanel = ({
                     message:
                         faFileType === api.FA_FILE_TYPE.MUTUAL_FUND
                             ? "Wrong file type — Mutual Funds selected, but TDS and Stamp Duty are empty in every row, so it is an Equity transaction file."
-                            : "Wrong file type — Equity selected, but this file has TDS / Stamp Duty amounts, so it is a Mutual Funds transaction file.",
+                            : "Wrong file type — this file has TDS / Stamp Duty amounts, so it is a Mutual Funds transaction file. Upload it on the Mutual Funds tab.",
                 });
                 return;
             }
@@ -1342,7 +1363,7 @@ const CustodyMatchPanel = ({
 
             {/* The transaction file on the left, custody on the right: the two
                 things Gate 1 needs, side by side rather than one below the other. */}
-            <div className="cm-split">
+            <div className={isMf ? "cm-split cm-split--single" : "cm-split"}>
               <div className="cm-col">
                 <h3 className="cm-col-title">Fund Accounting</h3>
 
@@ -1361,11 +1382,13 @@ const CustodyMatchPanel = ({
                             }}
                             disabled={faZoneDisabled}
                         >
-                            <option value={api.FA_FILE_TYPE.REGULAR}>
-                                {api.FA_FILE_TYPE_LABEL.REGULAR}
-                            </option>
-                            {/* The Equity tab takes Equity files only. */}
-                            {reloadMode ? null : (
+                            {/* The Equity tab takes Equity files only, the Mutual Funds tab mutual fund files only. */}
+                            {isMf ? null : (
+                                <option value={api.FA_FILE_TYPE.REGULAR}>
+                                    {api.FA_FILE_TYPE_LABEL.REGULAR}
+                                </option>
+                            )}
+                            {reloadMode && !isMf ? null : (
                                 <option value={api.FA_FILE_TYPE.MUTUAL_FUND}>
                                     {api.FA_FILE_TYPE_LABEL.MUTUAL_FUND}
                                 </option>
@@ -1547,6 +1570,8 @@ const CustodyMatchPanel = ({
                 </div>
               </div>
 
+              {/* Mutual Funds: no custodian file. */}
+              {isMf ? null : (
               <div className="cm-col">
                 <h3 className="cm-col-title">Custodian Files</h3>
 
@@ -1608,9 +1633,11 @@ const CustodyMatchPanel = ({
                             <option value={api.CUSTODY_FILE_TYPE.NDPMS}>
                                 {api.FILE_TYPE_LABEL.NDPMS}
                             </option>
+                            {/* Mutual funds are not matched any more; see the Mutual Funds tab.
                             <option value={api.CUSTODY_FILE_TYPE.MUTUAL_FUND}>
                                 {api.FILE_TYPE_LABEL.MUTUAL_FUND}
                             </option>
+                            */}
                         </select>
 
                         {renderDateInput(
@@ -1729,8 +1756,12 @@ const CustodyMatchPanel = ({
                     ) : null}
                 </div>
               </div>
+              )}
             </div>
 
+            {/* The Mutual Funds tab has no custodian file, so nothing is matched. */}
+            {isMf ? null : (
+            <>
             <div className="txo-section-head txo-section-head--tight">
                 <h2>Reconciliation</h2>
             </div>
@@ -1867,6 +1898,8 @@ const CustodyMatchPanel = ({
                 {runError ? <UploadErrorDetails message={runError.message} detail={runError.detail} /> : null}
                 {dayLoading && runs.length === 0 ? <p className="cm-sub">Loading…</p> : null}
             </div>
+            </>
+            )}
 
             {pickerOpen ? (
                 <MatchDialog
@@ -1905,7 +1938,9 @@ const CustodyMatchPanel = ({
                 open={Boolean(pending)}
                 file={pending?.file || null}
                 requestedType={pending?.profileType || null}
-                pickedDate={custodyDate}
+                // The Mutual Funds tab maps mutual fund files only.
+                {...(isMf ? { types: [api.PROFILE_TYPE.FA_MUTUAL_FUND] } : {})}
+                pickedDate={isMf ? faDate : custodyDate}
                 onUpload={uploadPending}
                 onClose={() => setPending(null)}
                 onSaved={loadDay}

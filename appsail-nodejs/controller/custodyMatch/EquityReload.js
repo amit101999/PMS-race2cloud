@@ -37,11 +37,19 @@
  *   reload/<date>/progress.json      the Pre-commit step and counts
  * The date's lock is the Jobs row RELOAD_<date> (RUNNING until finished).
  *
+ * The Mutual Funds tab uses the same engine with kind = MUTUAL_FUND (body or
+ * query). It has no custodian file and no match: its Commit builds the date's
+ * final list itself. It keeps its own folder (reload-mf/<date>/), lock
+ * (RELOAD_MF_<date>), window and history rows, reads its files through the
+ * Mutual Funds mapping, and touches only mutual fund trades (Security_Type 'm'
+ * or INF + DIR). Equity touches only the other trades. See KIND below.
+ *
  * Plan: docs/transaction upload/transient-wibbling-eclipse.md.
  */
 
 import { FA_FILE_TYPE, FILE_SIDE, RUN_STATUS } from "../../util/custodyMatch/constants.js";
-import { FA_CONSOLIDATED_PROFILE, PROFILE_TYPE } from "../../util/custodyMatch/fieldMap.js";
+import { FA_CONSOLIDATED_PROFILE, PROFILE_TYPE, resolveFieldMap } from "../../util/custodyMatch/fieldMap.js";
+import { detectSeparator, firstLineOf, splitHeaderCells } from "../../util/custodyMatch/normalize.js";
 import {
   detectFaFileType,
   faRowTemplateCells,
@@ -91,10 +99,14 @@ import {
   DEFAULT_WINDOW_DAYS,
   dateWindowView,
   parseWindowDays,
-  isMutualFundTrade,
+  isBookedMutualFund,
+  MUTUAL_FUND_BOOKED_COLUMNS,
+  mutualFundTradeProblems,
   tradeFromBookedRow,
   tradeFromCells,
+  tradesToMutualFundCsv,
   tradesToTemplateCsv,
+  withMutualFundValues,
 } from "../../util/custodyMatch/equityReload.js";
 import { readDateWindow, saveDateWindow } from "../../util/custodyMatch/changeWindow.js";
 import {
@@ -127,6 +139,8 @@ const ZCQL_DELETE_LIMIT = 300;
 const CONSOLIDATED_FILES_SHOWN = 30;
 const HISTORY_TABLE = "Transaction_Commit_History";
 const COMMIT_HISTORY_SHOWN = 50;
+/* Both tabs share the table, so more rows are read than one tab shows. */
+const COMMIT_HISTORY_READ = 200;
 const COMMIT_TYPE = { FIRST: "FIRST", RECOMMIT: "RECOMMIT" };
 
 const STEP = {
@@ -152,7 +166,50 @@ const REBUILD_GIVE_UP_MS = 2 * 60 * 60 * 1000;
 const STALLED_AFTER_MS = 15 * 60 * 1000;
 const JOB_CONFIG = { number_of_retries: 5, retry_interval: 60 * 1000 };
 
-/* Pre-commits running in this server, so a double click cannot start two loops for a date. */
+/*
+ * The two tabs that share this engine. Each has its own state folder, lock,
+ * window and history rows, reads its files through its own mapping and touches
+ * only its own booked trades. A request names its tab with kind (body or query);
+ * no kind means Equity.
+ */
+const KIND = {
+  EQUITY: {
+    key: "EQUITY",
+    label: "Equity",
+    folder: "reload",
+    lockPrefix: "RELOAD_",
+    profileType: PROFILE_TYPE.FA,
+    faFileType: FA_FILE_TYPE.REGULAR,
+    mutualFund: false,
+    // Name part of the committed copy kept for download (transactions-original/).
+    fileLabel: "Equity",
+  },
+  MUTUAL_FUND: {
+    key: "MUTUAL_FUND",
+    label: "Mutual Funds",
+    folder: "reload-mf",
+    lockPrefix: "RELOAD_MF_",
+    profileType: PROFILE_TYPE.FA_MUTUAL_FUND,
+    faFileType: FA_FILE_TYPE.MUTUAL_FUND,
+    mutualFund: true,
+    fileLabel: "MutualFunds",
+  },
+};
+
+/** The tab a request is for, or null when it names an unknown one. */
+const kindOfRequest = (req) => {
+  const value = String(req.body?.kind || req.query?.kind || "").trim().toUpperCase();
+  if (!value) return KIND.EQUITY;
+  return KIND[value] || null;
+};
+
+const badKind = (res) =>
+  fail(res, 400, { code: "BAD_KIND", message: "kind must be EQUITY or MUTUAL_FUND." });
+
+/** The tab's own booked trades: mutual funds for the Mutual Funds tab, the rest for Equity. */
+const isOwnBookedRow = (kind, row) => isBookedMutualFund(row) === kind.mutualFund;
+
+/* Pre-commits running in this server ("<kind>:<date>"), so a double click cannot start two loops for a date. */
 const activeReloads = new Set();
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -162,9 +219,9 @@ const fail = (res, status, body) => res.status(status).json({ success: false, ..
 const noApp = (res) =>
   fail(res, 500, { code: "CATALYST_NOT_INITIALIZED", message: "Catalyst not initialized" });
 
-const reloadKey = (date, name) => `reload/${date}/${name}`;
-const lockJobName = (date) => `RELOAD_${date}`;
-const rebuildJobName = (date, kind, index) => `RELOAD_${date}_${kind}_${index}`;
+const reloadKey = (kind, date, name) => `${kind.folder}/${date}/${name}`;
+const lockJobName = (kind, date) => `${kind.lockPrefix}${date}`;
+const rebuildJobName = (kind, date, jobKind, index) => `${kind.lockPrefix}${date}_${jobKind}_${index}`;
 
 const unwrap = (rows, table) => (rows || []).map((r) => r[table] || r);
 
@@ -178,21 +235,21 @@ const readJsonOr = async (bucket, key, fallback) => {
 
 /* ───────────────────────────── pending files ───────────────────────────── */
 
-/** Which FA files of the date are pending (uploaded in the Equity tab since the last Pre-commit). */
-const readState = (bucket, date) => readJsonOr(bucket, reloadKey(date, "state.json"), { files: {} });
+/** Which FA files of the date are pending (uploaded in the tab since its last Pre-commit). */
+const readState = (kind, bucket, date) => readJsonOr(bucket, reloadKey(kind, date, "state.json"), { files: {} });
 
-const writeState = (bucket, date, state) => putJson(bucket, reloadKey(date, "state.json"), state);
+const writeState = (kind, bucket, date, state) => putJson(bucket, reloadKey(kind, date, "state.json"), state);
 
 /**
- * The pending FA files of the date, oldest upload first, each with its mode.
+ * The tab's pending FA files of the date, oldest upload first, each with its mode.
  * A file row not in state.json is already in our books (an earlier Pre-commit, or
  * the old upload screen). It stays listed on the screen and is left out here.
  */
-const pendingFaFiles = async (catalystApp, bucket, date) => {
-  const state = await readState(bucket, date);
+const pendingFaFiles = async (kind, catalystApp, bucket, date) => {
+  const state = await readState(kind, bucket, date);
   const rows = await listFiles(catalystApp, { forDate: date });
   return rows
-    .filter((r) => r.side === FILE_SIDE.FA && state.files[r.fileKey])
+    .filter((r) => r.side === FILE_SIDE.FA && r.fileType === kind.faFileType && state.files[r.fileKey])
     .map((r) => ({ ...r, mode: state.files[r.fileKey].mode }));
 };
 
@@ -200,30 +257,38 @@ const custodyFilesOfDate = async (catalystApp, date) =>
   (await listFiles(catalystApp, { forDate: date })).filter((r) => r.side === FILE_SIDE.CUSTODY);
 
 /** FA files a Replace has overtaken: their rows and objects go, and a copy is kept for audit. */
-const retireFaFiles = async (catalystApp, bucket, date, files) => {
+const retireFaFiles = async (kind, catalystApp, bucket, date, files) => {
   for (const file of files) {
     const name = file.fileKey.split("/").pop();
-    await putBuffer(bucket, reloadKey(date, `replaced/${name}`), await getBuffer(bucket, file.fileKey));
+    await putBuffer(bucket, reloadKey(kind, date, `replaced/${name}`), await getBuffer(bucket, file.fileKey));
   }
   await deleteFileRows(catalystApp, files);
   await deleteKeys(bucket, files.map((f) => f.fileKey));
 };
 
-/** A parsed FA file as trades. */
-const tradesOfParsedFile = (parsed) =>
-  parsed.rows.map((row) =>
+/** A parsed FA file as trades. A mutual fund file's trades also carry TDS, Stamp Duty and Column1–5. */
+const tradesOfParsedFile = (parsed, kind = KIND.EQUITY) =>
+  parsed.rows.map((row) => {
     // The 26 template cells, then the Transaction ID the mapping found (column 27).
-    tradeFromCells([...faRowTemplateCells(row), row.mapped?.transactionId ?? ""], { rowNumber: row.rowNumber }),
-  );
+    const trade = tradeFromCells([...faRowTemplateCells(row), row.mapped?.transactionId ?? ""], {
+      rowNumber: row.rowNumber,
+    });
+    if (!kind.mutualFund) return trade;
+    const m = row.mapped || {};
+    return withMutualFundValues(trade, [m.tds, m.stampDuty, m.column1, m.column2, m.column3, m.column4, m.column5]);
+  });
 
-/** Re-read the pending files, oldest first, as { mode, trades }. */
-const loadPendingTrades = async (bucket, files, date, profile) => {
+/** The trades as the file the import reads: 27 columns for Equity, 34 for mutual funds. */
+const csvOfTrades = (kind, trades) => (kind.mutualFund ? tradesToMutualFundCsv(trades) : tradesToTemplateCsv(trades));
+
+/** Re-read the tab's pending files, oldest first, as { mode, trades }. */
+const loadPendingTrades = async (kind, bucket, files, date, profile) => {
   const loaded = [];
   for (const f of files) {
     const parsed = await parseFaFile(await getBuffer(bucket, f.fileKey), {
       businessDate: date,
       profile,
-      type: PROFILE_TYPE.FA,
+      type: kind.profileType,
     });
     if (!parsed.ok) {
       throw Object.assign(
@@ -233,17 +298,25 @@ const loadPendingTrades = async (bucket, files, date, profile) => {
         { code: "PENDING_FILE_UNREADABLE" },
       );
     }
-    loaded.push({ mode: f.mode, trades: tradesOfParsedFile(parsed) });
+    loaded.push({ mode: f.mode, trades: tradesOfParsedFile(parsed, kind) });
   }
   return loaded;
 };
 
 /* ─────────────────────────────── our books ─────────────────────────────── */
 
-const BOOKED_SELECT = [
-  "ROWID",
-  ...new Set([...BOOKED_COLUMNS.filter(Boolean), "WS_client_id", "Security_Name"]),
-].join(", ");
+/* The mutual fund columns are read only for the Mutual Funds tab; Equity rows never fill them. */
+const bookedSelect = (kind) =>
+  [
+    "ROWID",
+    ...new Set([
+      ...BOOKED_COLUMNS.filter(Boolean),
+      "WS_client_id",
+      "Security_Name",
+      "Security_Type",
+      ...(kind.mutualFund ? MUTUAL_FUND_BOOKED_COLUMNS : []),
+    ]),
+  ].join(", ");
 
 /*
  * Reads on Transaction now and then fail with "Error occurred during query
@@ -263,20 +336,20 @@ const selectWithRetry = async (zcql, query) => {
   }
 };
 
-/** The date's equity trades in Transaction, as trades. Paged by ROWID (OFFSET repeats rows). */
-const readBookedEquityTrades = async (zcql, date) => {
+/** The date's trades of the tab in Transaction, as trades. Paged by ROWID (OFFSET repeats rows). */
+const readBookedTrades = async (kind, zcql, date) => {
   const trades = [];
   let lastRowId = "0";
   for (;;) {
     const batch = unwrap(
       await selectWithRetry(
         zcql,
-        `SELECT ${BOOKED_SELECT} FROM ${TXN_TABLE} WHERE TRANDATE = '${esc(date)}' AND ROWID > ${lastRowId} ORDER BY ROWID ASC LIMIT ${ZCQL_PAGE}`,
+        `SELECT ${bookedSelect(kind)} FROM ${TXN_TABLE} WHERE TRANDATE = '${esc(date)}' AND ROWID > ${lastRowId} ORDER BY ROWID ASC LIMIT ${ZCQL_PAGE}`,
       ),
       TXN_TABLE,
     );
     for (const row of batch) {
-      if (!isMutualFundTrade(row.ISIN, row.EXCHG)) trades.push(tradeFromBookedRow(row));
+      if (isOwnBookedRow(kind, row)) trades.push(tradeFromBookedRow(row, { mutualFund: kind.mutualFund }));
     }
     if (batch.length < ZCQL_PAGE) break;
     lastRowId = String(batch[batch.length - 1].ROWID);
@@ -284,20 +357,20 @@ const readBookedEquityTrades = async (zcql, date) => {
   return trades;
 };
 
-/** ROWIDs of the date's equity trades. Mutual fund trades of the date are never touched. */
-const equityRowIdsOfDate = async (zcql, date) => {
+/** ROWIDs of the date's trades of the tab. The other tab's trades of the date are never touched. */
+const rowIdsOfDate = async (kind, zcql, date) => {
   const ids = [];
   let lastRowId = "0";
   for (;;) {
     const batch = unwrap(
       await selectWithRetry(
         zcql,
-        `SELECT ROWID, ISIN, EXCHG FROM ${TXN_TABLE} WHERE TRANDATE = '${esc(date)}' AND ROWID > ${lastRowId} ORDER BY ROWID ASC LIMIT ${ZCQL_PAGE}`,
+        `SELECT ROWID, ISIN, EXCHG, Security_Type FROM ${TXN_TABLE} WHERE TRANDATE = '${esc(date)}' AND ROWID > ${lastRowId} ORDER BY ROWID ASC LIMIT ${ZCQL_PAGE}`,
       ),
       TXN_TABLE,
     );
     for (const row of batch) {
-      if (!isMutualFundTrade(row.ISIN, row.EXCHG)) ids.push(String(row.ROWID));
+      if (isOwnBookedRow(kind, row)) ids.push(String(row.ROWID));
     }
     if (batch.length < ZCQL_PAGE) break;
     lastRowId = String(batch[batch.length - 1].ROWID);
@@ -306,15 +379,15 @@ const equityRowIdsOfDate = async (zcql, date) => {
 };
 
 /**
- * A date's first commit: no equity trades of the date in our books, so there is
- * nothing to clean up. A date committed before and then deleted counts as first
- * again; trades booked by the old upload screen do not.
+ * A date's first commit on a tab: none of the tab's trades of the date in our
+ * books, so there is nothing to clean up. A date committed before and then
+ * deleted counts as first again; trades booked by the old upload screen do not.
  */
-const isFirstCommit = async (zcql, date) => (await equityRowIdsOfDate(zcql, date)).length === 0;
+const isFirstCommit = async (kind, zcql, date) => (await rowIdsOfDate(kind, zcql, date)).length === 0;
 
 /** Repeating it is safe: a second run finds nothing left to delete. */
-const deleteEquityTradesOfDate = async (zcql, date) => {
-  const ids = await equityRowIdsOfDate(zcql, date);
+const deleteTradesOfDate = async (kind, zcql, date) => {
+  const ids = await rowIdsOfDate(kind, zcql, date);
   for (let i = 0; i < ids.length; i += DELETE_BATCH) {
     await zcql.executeZCQLQuery(
       `DELETE FROM ${TXN_TABLE} WHERE ROWID IN (${ids.slice(i, i + DELETE_BATCH).join(", ")})`,
@@ -393,9 +466,9 @@ const anyTradeUses = async (zcql, column, value) =>
  * ISIN / account code filled) that no trade on any date uses any more. Values in
  * the new file are kept, because the masters job adds them back straight after.
  */
-const deleteUnusedStubMasters = async (zcql, affected, finalTrades) => {
-  const keepIsins = new Set(finalTrades.map((t) => t.isin));
-  const keepAccounts = new Set(finalTrades.map((t) => t.account));
+const deleteUnusedStubMasters = async (zcql, affected, keep) => {
+  const keepIsins = new Set(keep.isins);
+  const keepAccounts = new Set(keep.clients);
   let securities = 0;
   let clients = 0;
 
@@ -433,11 +506,14 @@ const deleteUnusedStubMasters = async (zcql, affected, finalTrades) => {
 
 /* ───────────────────────────── progress and lock ───────────────────────── */
 
-const readProgress = (bucket, date) => readJsonOr(bucket, reloadKey(date, "progress.json"), null);
+/** The tab a saved Pre-commit belongs to. Progress saved before the Mutual Funds tab existed is Equity's. */
+const kindOfProgress = (progress) => KIND[progress?.kind] || KIND.EQUITY;
+
+const readProgress = (kind, bucket, date) => readJsonOr(bucket, reloadKey(kind, date, "progress.json"), null);
 
 const saveProgress = async (bucket, progress) => {
   progress.updatedAtMs = Date.now();
-  await putJson(bucket, reloadKey(progress.date, "progress.json"), progress);
+  await putJson(bucket, reloadKey(kindOfProgress(progress), progress.date, "progress.json"), progress);
 };
 
 const readJobStatuses = async (zcql, names) => {
@@ -466,8 +542,8 @@ const displayDate = (date) => String(date).split("-").reverse().join("-");
 
 const notify = (catalystApp, progress, status, message) =>
   insertNotification(catalystApp.zcql(), {
-    jobName: `RELOAD_${progress.date}_${progress.startedAtMs}`,
-    title: `Commit — ${displayDate(progress.date)}`,
+    jobName: `${kindOfProgress(progress).lockPrefix}${progress.date}_${progress.startedAtMs}`,
+    title: `${kindOfProgress(progress).mutualFund ? "Mutual Funds commit" : "Commit"} — ${displayDate(progress.date)}`,
     status,
     message,
   }).catch((err) => console.warn("[EquityReload] notification failed:", err.message));
@@ -491,7 +567,7 @@ const refreshWaiting = async (catalystApp, bucket, progress) => {
     progress.step = STEP.DONE;
     progress.finishedAtMs = Date.now();
     await saveProgress(bucket, progress);
-    await updateJobsStatus(catalystApp.zcql(), lockJobName(progress.date), STATUS.COMPLETED);
+    await updateJobsStatus(catalystApp.zcql(), lockJobName(kindOfProgress(progress), progress.date), STATUS.COMPLETED);
     await updateCommitHistory(catalystApp, progress, { status: STATUS.COMPLETED, finishedAtMs: progress.finishedAtMs });
     await notify(
       catalystApp,
@@ -507,7 +583,7 @@ const refreshWaiting = async (catalystApp, bucket, progress) => {
     progress.status = STATUS.FAILED;
     progress.error = `${pending} of ${names.length} holdings / cash rebuilds did not finish. Press Try again to run them again.`;
     await saveProgress(bucket, progress);
-    await updateJobsStatus(catalystApp.zcql(), lockJobName(progress.date), STATUS.FAILED);
+    await updateJobsStatus(catalystApp.zcql(), lockJobName(kindOfProgress(progress), progress.date), STATUS.FAILED);
     await updateCommitHistory(catalystApp, progress, { status: STATUS.FAILED });
     await notify(catalystApp, progress, "failed", "Holdings and cash update did not finish. Press Try again.");
     return progress;
@@ -517,9 +593,9 @@ const refreshWaiting = async (catalystApp, bucket, progress) => {
   return progress;
 };
 
-/** The date is locked from the first Pre-commit until it has COMPLETED. */
-const currentProgress = async (catalystApp, bucket, date) =>
-  refreshWaiting(catalystApp, bucket, await readProgress(bucket, date));
+/** The date is locked on the tab from its first Pre-commit until that has COMPLETED. */
+const currentProgress = async (kind, catalystApp, bucket, date) =>
+  refreshWaiting(catalystApp, bucket, await readProgress(kind, bucket, date));
 
 const isLocked = (progress) => Boolean(progress) && progress.status !== STATUS.COMPLETED;
 
@@ -530,23 +606,23 @@ const isLocked = (progress) => Boolean(progress) && progress.status !== STATUS.C
  * finished with Try again, which does not check this, so the books are never
  * left half done.
  */
-const closedDateResponse = async (res, catalystApp, date) => {
-  const message = closedDateMessage(date, await readDateWindow(catalystApp, date));
+const closedDateResponse = async (kind, res, catalystApp, date) => {
+  const message = closedDateMessage(date, await readDateWindow(catalystApp, date, { mutualFund: kind.mutualFund }));
   return message ? fail(res, 409, { code: "DATE_CLOSED", message }) : null;
 };
 
 const lockedMessage = (date, progress) =>
   progress.status === STATUS.FAILED
-    ? `The Commit of ${date} did not finish. Press Try again on the Equity tab before changing this date.`
+    ? `The Commit of ${date} did not finish. Press Try again on the ${kindOfProgress(progress).label} tab before changing this date.`
     : `${date} is being rebuilt. Try again when it finishes.`;
 
 /* ─────────────────────────────── FA upload ─────────────────────────────── */
 
-/** The date's current list: our books plus the pending files. Uploads are compared with it. */
-const currentDateList = async (catalystApp, bucket, date, profile) => {
-  const booked = await readBookedEquityTrades(catalystApp.zcql(), date);
-  const pending = await pendingFaFiles(catalystApp, bucket, date);
-  const pendingTrades = await loadPendingTrades(bucket, pending, date, profile);
+/** The tab's current list of the date: our books plus the pending files. Uploads are compared with it. */
+const currentDateList = async (kind, catalystApp, bucket, date, profile) => {
+  const booked = await readBookedTrades(kind, catalystApp.zcql(), date);
+  const pending = await pendingFaFiles(kind, catalystApp, bucket, date);
+  const pendingTrades = await loadPendingTrades(kind, bucket, pending, date, profile);
   return { booked, pending, ...buildDateList(booked, pendingTrades) };
 };
 
@@ -556,12 +632,12 @@ const currentDateList = async (catalystApp, bucket, date, profile) => {
  * the date's FA files, a folder the download route accepts. The upload goes on
  * if it cannot be saved; only the download link is missing then.
  */
-const withDuplicatesFile = async (bucket, date, comparison) => {
+const withDuplicatesFile = async (kind, bucket, date, comparison) => {
   const { duplicateTrades, ...rest } = comparison;
   if (duplicateTrades.length === 0) return { ...rest, duplicatesKey: "" };
   const key = `FA-Transaction/${date}/duplicates-${date}-${Date.now()}.csv`;
   try {
-    await putText(bucket, key, tradesToTemplateCsv(duplicateTrades), "text/csv");
+    await putText(bucket, key, csvOfTrades(kind, duplicateTrades), "text/csv");
     return { ...rest, duplicatesKey: key };
   } catch (err) {
     console.warn("[EquityReload] duplicates file not saved:", err.message);
@@ -570,16 +646,36 @@ const withDuplicatesFile = async (bucket, date, comparison) => {
 };
 
 /**
+ * A mutual fund file always has TDS and Stamp Duty columns. Without this check a
+ * mapping saved by column number would read an Equity file's missing columns as
+ * blank and accept the wrong file. Returns the refusal, or null.
+ */
+const notMutualFundFileError = (buffer, profile) => {
+  const headerLine = firstLineOf(buffer);
+  const headers = splitHeaderCells(headerLine, detectSeparator(headerLine));
+  const { index } = resolveFieldMap(PROFILE_TYPE.FA_MUTUAL_FUND, profile, headers);
+  if (index.tds !== undefined && index.stampDuty !== undefined) return null;
+  return {
+    code: "NOT_A_MUTUAL_FUND_FILE",
+    message:
+      "This file has no TDS or Stamp Duty column, so it is not a mutual fund transaction file. Upload Equity files on the Equity tab.",
+  };
+};
+
+/**
  * POST /api/custody-match/reload/fa-file
- * form-data: file, businessDate, uploadDate, [choice=ADD|REPLACE]
+ * form-data: file, businessDate, uploadDate, [choice=ADD|REPLACE], [kind=MUTUAL_FUND]
  *
  * choice is sent only after the system asked (mode ASK came back). Nothing is
- * stored while the answer is ASK.
+ * stored while the answer is ASK. kind = MUTUAL_FUND is the Mutual Funds tab:
+ * same rules, its own mapping, checks and list of the date's trades.
  */
 export const uploadEquityFaFile = async (req, res) => {
   try {
     const catalystApp = req.catalystApp;
     if (!catalystApp) return noApp(res);
+    const kind = kindOfRequest(req);
+    if (!kind) return badKind(res);
 
     const file = getUploadedFile(req);
     if (!file) {
@@ -595,19 +691,22 @@ export const uploadEquityFaFile = async (req, res) => {
     const forDate = readUploadDate(req.body?.businessDate);
     if (forDate.error) return fail(res, 400, { code: "BAD_DATE", message: forDate.error });
     const { businessDate } = forDate;
-    const closed = await closedDateResponse(res, catalystApp, businessDate);
+    const closed = await closedDateResponse(kind, res, catalystApp, businessDate);
     if (closed) return closed;
     const uploadDay = readUploadedOn(req.body?.uploadDate);
     if (uploadDay.error) return fail(res, 400, { code: "BAD_UPLOAD_DATE", message: uploadDay.error });
     const { uploadedOn } = uploadDay;
 
     const profiles = await loadFieldMapProfiles(catalystApp);
-    const profile = profiles[PROFILE_TYPE.FA];
+    const profile = profiles[kind.profileType];
 
-    const headerError = validateFaHeader(file.data, { profile, type: PROFILE_TYPE.FA });
+    const headerError = validateFaHeader(file.data, { profile, type: kind.profileType });
     if (headerError) return fail(res, 400, { ...headerError, fileName: file.name });
 
-    if ((await detectFaFileType(file.data, { profiles })) !== PROFILE_TYPE.FA) {
+    if (kind.mutualFund) {
+      const notMutualFund = notMutualFundFileError(file.data, profile);
+      if (notMutualFund) return fail(res, 400, { ...notMutualFund, fileName: file.name });
+    } else if ((await detectFaFileType(file.data, { profiles })) !== PROFILE_TYPE.FA) {
       return fail(res, 400, {
         code: "FA_FILE_TYPE_MISMATCH",
         message: "This file has TDS / Stamp Duty amounts, so it is a Mutual Funds transaction file. Upload it in the Mutual Funds tab.",
@@ -615,13 +714,14 @@ export const uploadEquityFaFile = async (req, res) => {
       });
     }
 
-    const parsed = await parseFaFile(file.data, { businessDate, profile, type: PROFILE_TYPE.FA });
+    const parsed = await parseFaFile(file.data, { businessDate, profile, type: kind.profileType });
     if (parsed.fileError) return fail(res, 400, { ...parsed.fileError, fileName: file.name });
 
-    const newTrades = tradesOfParsedFile(parsed);
+    const newTrades = tradesOfParsedFile(parsed, kind);
     const rowErrors = [
       ...allRowErrors(parsed, businessDate, file.name),
-      ...fileProblems(newTrades).map((p) => ({ ...p, fileName: file.name })),
+      ...fileProblems(newTrades, { mutualFund: kind.mutualFund }).map((p) => ({ ...p, fileName: file.name })),
+      ...(kind.mutualFund ? mutualFundTradeProblems(newTrades) : []).map((p) => ({ ...p, fileName: file.name })),
     ].sort((a, b) => a.row - b.row);
     if (rowErrors.length > 0) {
       return fail(res, 400, {
@@ -635,7 +735,7 @@ export const uploadEquityFaFile = async (req, res) => {
     }
 
     const bucket = getBucket(catalystApp);
-    const progress = await currentProgress(catalystApp, bucket, businessDate);
+    const progress = await currentProgress(kind, catalystApp, bucket, businessDate);
     if (isLocked(progress)) {
       return fail(res, 409, { code: "DATE_LOCKED", message: lockedMessage(businessDate, progress) });
     }
@@ -661,7 +761,7 @@ export const uploadEquityFaFile = async (req, res) => {
       });
     }
 
-    const current = await currentDateList(catalystApp, bucket, businessDate, profile);
+    const current = await currentDateList(kind, catalystApp, bucket, businessDate, profile);
     const decided = choice
       ? { mode: choice, reason: null }
       : decideMode(newTrades, current.trades);
@@ -670,6 +770,7 @@ export const uploadEquityFaFile = async (req, res) => {
     const markBooked = { markBooked: true };
     if (decided.mode === MODE.ASK) {
       const replace = await withDuplicatesFile(
+        kind,
         bucket,
         businessDate,
         compareWithList(newTrades, current.trades, MODE.REPLACE, markBooked),
@@ -689,6 +790,7 @@ export const uploadEquityFaFile = async (req, res) => {
     }
 
     const comparison = await withDuplicatesFile(
+      kind,
       bucket,
       businessDate,
       compareWithList(newTrades, current.trades, decided.mode === MODE.REPLACE ? MODE.REPLACE : MODE.ADD, markBooked),
@@ -698,7 +800,7 @@ export const uploadEquityFaFile = async (req, res) => {
     const uploadedAtMs = Date.now();
     const key = buildFaRawKey({
       businessDate,
-      fileType: FA_FILE_TYPE.REGULAR,
+      fileType: kind.faFileType,
       coveredFrom: businessDate,
       coveredTo: businessDate,
       originalFileName: file.name,
@@ -709,7 +811,7 @@ export const uploadEquityFaFile = async (req, res) => {
       await recordFile(catalystApp, {
         fileKey: key,
         side: FILE_SIDE.FA,
-        fileType: FA_FILE_TYPE.REGULAR,
+        fileType: kind.faFileType,
         forDate: businessDate,
         uploadedOn,
         originalFileName: file.name,
@@ -719,27 +821,28 @@ export const uploadEquityFaFile = async (req, res) => {
       throw new Error(`The file could not be recorded, so it was not kept: ${err.message}`);
     }
 
-    // A Replace takes every older equity FA file of the date off the card at once,
+    // A Replace takes every older FA file of the tab and date off the card at once,
     // also those already in our books (their trades stay until the Pre-commit).
     const replacedFiles =
       decided.mode === MODE.REPLACE
         ? (await listFiles(catalystApp, { forDate: businessDate })).filter(
-            (r) => r.side === FILE_SIDE.FA && r.fileType === FA_FILE_TYPE.REGULAR && r.fileKey !== key,
+            (r) => r.side === FILE_SIDE.FA && r.fileType === kind.faFileType && r.fileKey !== key,
           )
         : [];
 
-    const state = await readState(bucket, businessDate);
+    const state = await readState(kind, bucket, businessDate);
     for (const old of replacedFiles) delete state.files[old.fileKey];
     state.files[key] = { mode: decided.mode, uploadedAtMs, fileName: file.name };
-    await writeState(bucket, businessDate, state);
+    await writeState(kind, bucket, businessDate, state);
 
     // After the state: the new file already decides the date, so a failed tidy-up
     // only leaves an older file listed.
-    await retireFaFiles(catalystApp, bucket, businessDate, replacedFiles).catch((err) =>
+    await retireFaFiles(kind, catalystApp, bucket, businessDate, replacedFiles).catch((err) =>
       console.warn("[EquityReload] could not remove the replaced FA files:", err.message),
     );
 
-    const superseded = await supersedeRunsForDate(catalystApp, businessDate);
+    // Only Equity files are matched, so a mutual fund upload leaves the date's match as it is.
+    const superseded = kind.mutualFund ? { runIds: [] } : await supersedeRunsForDate(catalystApp, businessDate);
 
     return res.status(200).json({
       success: true,
@@ -769,7 +872,7 @@ export const uploadEquityFaFile = async (req, res) => {
 const clearMatchResults = async (catalystApp, bucket, date) => {
   await deleteExceptionsForDate(catalystApp, date);
   const removed = await deleteMatchFilesForDate(bucket, date);
-  const summaryKey = reloadKey(date, "summary.json");
+  const summaryKey = reloadKey(KIND.EQUITY, date, "summary.json");
   const summary = (await objectExists(bucket, summaryKey)) ? await deleteKeys(bucket, [summaryKey]) : { failed: [] };
   const failed = [...removed.failed, ...summary.failed];
   if (failed.length > 0) {
@@ -793,9 +896,9 @@ export const uploadEquityCustodyFile = async (req, res) => {
     const bucket = getBucket(catalystApp);
     const businessDate = String(req.body?.businessDate || "").trim();
     if (DATE_PATTERN.test(businessDate)) {
-      const closed = await closedDateResponse(res, catalystApp, businessDate);
+      const closed = await closedDateResponse(KIND.EQUITY, res, catalystApp, businessDate);
       if (closed) return closed;
-      const progress = await currentProgress(catalystApp, bucket, businessDate);
+      const progress = await currentProgress(KIND.EQUITY, catalystApp, bucket, businessDate);
       if (isLocked(progress)) {
         return fail(res, 409, { code: "DATE_LOCKED", message: lockedMessage(businessDate, progress) });
       }
@@ -830,16 +933,17 @@ export const startEquityRun = async (req, res) => {
       return fail(res, 400, { code: "BAD_DATE", message: "businessDate and uploadDate must be yyyy-mm-dd." });
     }
 
-    const closed = await closedDateResponse(res, catalystApp, businessDate);
+    const kind = KIND.EQUITY;
+    const closed = await closedDateResponse(kind, res, catalystApp, businessDate);
     if (closed) return closed;
 
     const bucket = getBucket(catalystApp);
-    const progress = await currentProgress(catalystApp, bucket, businessDate);
+    const progress = await currentProgress(kind, catalystApp, bucket, businessDate);
     if (isLocked(progress)) {
       return fail(res, 409, { code: "DATE_LOCKED", message: lockedMessage(businessDate, progress) });
     }
 
-    const pending = await pendingFaFiles(catalystApp, bucket, businessDate);
+    const pending = await pendingFaFiles(kind, catalystApp, bucket, businessDate);
     const custodyFiles = await custodyFilesOfDate(catalystApp, businessDate);
     const blocked = (blockers) =>
       fail(res, 409, {
@@ -852,7 +956,7 @@ export const startEquityRun = async (req, res) => {
     }
 
     // The same pending files and custodian files give the same answer; reuse it.
-    const summary = await readJsonOr(bucket, reloadKey(businessDate, "summary.json"), null);
+    const summary = await readJsonOr(bucket, reloadKey(kind, businessDate, "summary.json"), null);
     const runs = await listRunsForDate(catalystApp, businessDate, 50);
     const reusable = runs.find(
       (r) =>
@@ -872,13 +976,13 @@ export const startEquityRun = async (req, res) => {
     }
 
     const profiles = await loadFieldMapProfiles(catalystApp);
-    const booked = await readBookedEquityTrades(catalystApp.zcql(), businessDate);
+    const booked = await readBookedTrades(kind, catalystApp.zcql(), businessDate);
     // With no pending FA file the match simply checks our books against the
     // custodian files, for example after a custodian file was added or replaced.
     if (pending.length === 0 && booked.length === 0) {
       return blocked([{ code: "NO_TRANSACTION_FILE", message: "FA file is not present for this date." }]);
     }
-    const pendingTrades = await loadPendingTrades(bucket, pending, businessDate, profiles[PROFILE_TYPE.FA]);
+    const pendingTrades = await loadPendingTrades(kind, bucket, pending, businessDate, profiles[PROFILE_TYPE.FA]);
     const { trades: finalTrades, merged } = buildDateList(booked, pendingTrades);
 
     // The consolidated file must read back cleanly, or the match and the
@@ -898,9 +1002,9 @@ export const startEquityRun = async (req, res) => {
     const affected = affectedOf(booked, finalTrades);
     const runId = newRunId();
 
-    await putText(bucket, reloadKey(businessDate, "consolidated.csv"), csv, "text/csv");
-    await putJson(bucket, reloadKey(businessDate, "affected.json"), affected);
-    await putJson(bucket, reloadKey(businessDate, "summary.json"), {
+    await putText(bucket, reloadKey(kind, businessDate, "consolidated.csv"), csv, "text/csv");
+    await putJson(bucket, reloadKey(kind, businessDate, "affected.json"), affected);
+    await putJson(bucket, reloadKey(kind, businessDate, "summary.json"), {
       runId,
       businessDate,
       uploadDate,
@@ -934,7 +1038,7 @@ export const startEquityRun = async (req, res) => {
         job_config: { number_of_retries: 3, retry_interval: 60 * 1000 },
         // consolidatedKey makes the runner match the final list against every
         // custodian file of the date, instead of the files of one upload date.
-        params: { runId, businessDate, uploadDate, consolidatedKey: reloadKey(businessDate, "consolidated.csv") },
+        params: { runId, businessDate, uploadDate, consolidatedKey: reloadKey(kind, businessDate, "consolidated.csv") },
       });
     } catch (submitErr) {
       await failRun(catalystApp, runId, {
@@ -961,7 +1065,7 @@ export const startEquityRun = async (req, res) => {
 /* ──────────────────────────── consolidated files ───────────────────────── */
 
 /**
- * GET /api/custody-match/reload/consolidated-files
+ * GET /api/custody-match/reload/consolidated-files[?kind=MUTUAL_FUND]
  *
  * The file each date's trades were last built from: the copy of consolidated.csv
  * Pre-commit keeps, not reload/<date>/consolidated.csv, which the next match
@@ -971,11 +1075,14 @@ export const listConsolidatedFiles = async (req, res) => {
   try {
     const catalystApp = req.catalystApp;
     if (!catalystApp) return noApp(res);
+    const kind = kindOfRequest(req);
+    if (!kind) return badKind(res);
 
     const objects = await listAllObjects(catalystApp.stratus().bucket(TXN_BUCKET), "transactions-original/TxnUpload-");
+    const namePattern = new RegExp(`/TxnUpload-(\\d+)-(${kind.fileLabel}-(\\d{4}-\\d{2}-\\d{2})\\.csv)$`);
     const latestByDate = new Map();
     for (const object of objects) {
-      const match = object.key.match(/\/TxnUpload-(\d+)-(Equity-(\d{4}-\d{2}-\d{2})\.csv)$/);
+      const match = object.key.match(namePattern);
       if (!match) continue;
       const preCommittedAtMs = Number(match[1]);
       const date = match[3];
@@ -1002,19 +1109,29 @@ export const listConsolidatedFiles = async (req, res) => {
 
 /* ──────────────────────────── commit history ───────────────────────────── */
 
-/** GET /api/custody-match/reload/commit-history */
+/**
+ * GET /api/custody-match/reload/commit-history[?kind=MUTUAL_FUND]
+ *
+ * Only Mutual Funds commits fill Asset_Kind; a row without it is Equity's, so
+ * Equity rows read the same whether or not the column exists yet.
+ */
 export const listCommitHistory = async (req, res) => {
   try {
     const catalystApp = req.catalystApp;
     if (!catalystApp) return noApp(res);
+    const kind = kindOfRequest(req);
+    if (!kind) return badKind(res);
 
     const rows = unwrap(
       await catalystApp
         .zcql()
-        .executeZCQLQuery(`SELECT * FROM ${HISTORY_TABLE} ORDER BY startedAtMs DESC LIMIT ${COMMIT_HISTORY_SHOWN}`),
+        .executeZCQLQuery(`SELECT * FROM ${HISTORY_TABLE} ORDER BY startedAtMs DESC LIMIT ${COMMIT_HISTORY_READ}`),
       HISTORY_TABLE,
     );
-    const items = rows.map((row) => ({
+    const ownRows = rows
+      .filter((row) => (String(row.Asset_Kind || "").trim().toUpperCase() === KIND.MUTUAL_FUND.key) === kind.mutualFund)
+      .slice(0, COMMIT_HISTORY_SHOWN);
+    const items = ownRows.map((row) => ({
       id: String(row.ROWID),
       date: String(row.businessDate).slice(0, 10),
       commitType: row.commitType,
@@ -1038,16 +1155,19 @@ export const listCommitHistory = async (req, res) => {
 /** Most dates the screen asks about at once (the dates of one upload date). */
 const MAX_WINDOW_DATES = 60;
 
-/** GET /api/custody-match/reload/windows?dates=2026-10-28,2026-10-29 — each date's T+N window. */
+/** GET /api/custody-match/reload/windows?dates=2026-10-28,2026-10-29[&kind=MUTUAL_FUND] — each date's T+N window on the tab. */
 export const getDateWindows = async (req, res) => {
   try {
     const catalystApp = req.catalystApp;
     if (!catalystApp) return noApp(res);
+    const kind = kindOfRequest(req);
+    if (!kind) return badKind(res);
+    const opts = { mutualFund: kind.mutualFund };
     const dates = [...new Set(String(req.query.dates || "").split(",").map((d) => d.trim()).filter(Boolean))];
     if (dates.length > MAX_WINDOW_DATES || dates.some((d) => !DATE_PATTERN.test(d))) {
       return fail(res, 400, { code: "BAD_DATES", message: `dates must be up to ${MAX_WINDOW_DATES} yyyy-mm-dd values.` });
     }
-    const views = await Promise.all(dates.map(async (d) => dateWindowView(d, await readDateWindow(catalystApp, d))));
+    const views = await Promise.all(dates.map(async (d) => dateWindowView(d, await readDateWindow(catalystApp, d, opts))));
     return res.json({ success: true, windows: Object.fromEntries(views.map((v) => [v.date, v])) });
   } catch (error) {
     console.error("[EquityReload] getDateWindows:", error);
@@ -1056,21 +1176,24 @@ export const getDateWindows = async (req, res) => {
 };
 
 /**
- * PUT /api/custody-match/reload/:date/window   body: { days }
+ * PUT /api/custody-match/reload/:date/window   body: { days, [kind] }
  *
- * Chooses the trade date's window. Allowed only until the date's first commit,
- * which fixes it; after that the window can never change.
+ * Chooses the trade date's window on the tab. Allowed only until the tab's first
+ * commit of the date, which fixes it; after that the window can never change.
  */
 export const setDateWindow = async (req, res) => {
   try {
     const catalystApp = req.catalystApp;
     if (!catalystApp) return noApp(res);
+    const kind = kindOfRequest(req);
+    if (!kind) return badKind(res);
+    const opts = { mutualFund: kind.mutualFund };
     const date = String(req.params.date || "").trim();
     if (!DATE_PATTERN.test(date)) return fail(res, 400, { code: "BAD_DATE", message: "Date must be yyyy-mm-dd." });
     const days = parseWindowDays(req.body?.days);
     if (!days) return fail(res, 400, { code: "BAD_WINDOW", message: "The window must be a whole number of days from 1 to 150." });
 
-    const current = await readDateWindow(catalystApp, date);
+    const current = await readDateWindow(catalystApp, date, opts);
     if (current?.fixed) {
       return fail(res, 409, {
         code: "WINDOW_FIXED",
@@ -1079,7 +1202,7 @@ export const setDateWindow = async (req, res) => {
       });
     }
     const record = { days, fixed: false };
-    await saveDateWindow(catalystApp, date, record);
+    await saveDateWindow(catalystApp, date, record, opts);
     return res.json({ success: true, window: dateWindowView(date, record) });
   } catch (error) {
     console.error("[EquityReload] setDateWindow:", error);
@@ -1115,19 +1238,56 @@ const canRetry = (p) =>
       p.step !== STEP.WAITING &&
       Date.now() - (p.updatedAtMs || 0) > STALLED_AFTER_MS));
 
-/** GET /api/custody-match/reload/:date */
+/**
+ * The date's final list for the Mutual Funds tab, built now from our books and
+ * the pending files, with the counts the Commit confirmation states. There is
+ * no match on this tab, so this is what Equity's match builds (startEquityRun).
+ */
+const buildMutualFundList = async (catalystApp, bucket, date, pending) => {
+  const kind = KIND.MUTUAL_FUND;
+  const profiles = await loadFieldMapProfiles(catalystApp);
+  const booked = await readBookedTrades(kind, catalystApp.zcql(), date);
+  const pendingTrades = await loadPendingTrades(kind, bucket, pending, date, profiles[kind.profileType]);
+  const { trades: finalTrades, merged } = buildDateList(booked, pendingTrades);
+  const comparison = compareWithList(finalTrades, booked, MODE.REPLACE);
+  const affected = affectedOf(booked, finalTrades);
+  const summary = {
+    businessDate: date,
+    builtAtMs: Date.now(),
+    pendingKeys: pendingKeysOf(pending),
+    bookedCount: booked.length,
+    finalCount: finalTrades.length,
+    duplicatesMerged: merged,
+    counts: comparison.counts,
+    samples: comparison.samples,
+    bigRemoval: isBigRemoval(comparison),
+    affectedClients: affected.clients.length,
+    affectedPairs: affected.pairs.length,
+  };
+  return { finalTrades, affected, summary };
+};
+
+/** GET /api/custody-match/reload/:date[?kind=MUTUAL_FUND] */
 export const getEquityDate = async (req, res) => {
   try {
     const catalystApp = req.catalystApp;
     if (!catalystApp) return noApp(res);
+    const kind = kindOfRequest(req);
+    if (!kind) return badKind(res);
     const date = String(req.params.date || "").trim();
     if (!DATE_PATTERN.test(date)) return fail(res, 400, { code: "BAD_DATE", message: "Date must be yyyy-mm-dd." });
 
     const bucket = getBucket(catalystApp);
-    const progress = await currentProgress(catalystApp, bucket, date);
-    const pending = await pendingFaFiles(catalystApp, bucket, date);
-    const summary = await readJsonOr(bucket, reloadKey(date, "summary.json"), null);
-    const window = dateWindowView(date, await readDateWindow(catalystApp, date));
+    const progress = await currentProgress(kind, catalystApp, bucket, date);
+    const pending = await pendingFaFiles(kind, catalystApp, bucket, date);
+    let summary = null;
+    if (!kind.mutualFund) {
+      summary = await readJsonOr(bucket, reloadKey(kind, date, "summary.json"), null);
+    } else if (pending.length > 0) {
+      // No match on this tab: the counts are worked out from the books and files now.
+      summary = (await buildMutualFundList(catalystApp, bucket, date, pending)).summary;
+    }
+    const window = dateWindowView(date, await readDateWindow(catalystApp, date, { mutualFund: kind.mutualFund }));
 
     return res.json({
       success: true,
@@ -1152,8 +1312,11 @@ export const getEquityDate = async (req, res) => {
 
 /* ─────────────────────────────── pre-commit ────────────────────────────── */
 
-/** Is another import or Pre-commit still running? Holdings and cash jobs must not overlap. */
-const busyElsewhere = async (catalystApp, date) => {
+/**
+ * Is another import or Pre-commit still running, on either tab? Holdings and
+ * cash jobs must not overlap, and both tabs rebuild the same holdings and cash.
+ */
+const busyElsewhere = async (kind, catalystApp, date) => {
   const { running } = await findImportsStillProcessing(catalystApp);
   if (running.length > 0) {
     return `The ${running[0].what} for the import started at ${timeOfDay(running[0].startedAtMs)} is still running. Try again when it finishes.`;
@@ -1164,57 +1327,109 @@ const busyElsewhere = async (catalystApp, date) => {
       .executeZCQLQuery("SELECT jobName FROM Jobs WHERE status = 'RUNNING' AND jobName LIKE 'RELOAD_*' LIMIT 200"),
     "Jobs",
   );
+  // Date locks only (RELOAD_<date>, RELOAD_MF_<date>); the rebuild job rows carry a suffix.
   const other = rows
     .map((r) => String(r.jobName || ""))
-    .find((name) => /^RELOAD_\d{4}-\d{2}-\d{2}$/.test(name) && name !== lockJobName(date));
-  return other ? `The Commit of ${other.slice(7)} is still running. Try again when it finishes.` : "";
+    .find((name) => /^RELOAD_(MF_)?\d{4}-\d{2}-\d{2}$/.test(name) && name !== lockJobName(kind, date));
+  if (!other) return "";
+  const tab = other.startsWith(KIND.MUTUAL_FUND.lockPrefix) ? KIND.MUTUAL_FUND : KIND.EQUITY;
+  return `The ${tab.label} Commit of ${other.slice(tab.lockPrefix.length)} is still running. Try again when it finishes.`;
+};
+
+/**
+ * The Equity tab's Commit needs a finished match of the files now pending; the
+ * match built the date's final list. Returns { summary, affected } or the refusal.
+ */
+const equityListFromMatch = async (res, catalystApp, bucket, date, runId, pending) => {
+  const kind = KIND.EQUITY;
+  const run = runId ? await getRun(catalystApp, runId) : null;
+  if (!run || run.businessDate !== date) {
+    return { refused: fail(res, 409, { code: "RUN_MISSING", message: "Run the match first." }) };
+  }
+  if (run.status === RUN_STATUS.SUPERSEDED) {
+    return { refused: fail(res, 409, { code: "RUN_SUPERSEDED", message: "Files changed after the match. Run the match again." }) };
+  }
+  if (run.status !== RUN_STATUS.COMPLETED_CLEAN && run.status !== RUN_STATUS.COMPLETED_WITH_EXCEPTIONS) {
+    return { refused: fail(res, 409, { code: "RUN_NOT_FINISHED", message: "Wait for the match to finish, then Commit." }) };
+  }
+
+  const summary = await readJsonOr(bucket, reloadKey(kind, date, "summary.json"), null);
+  if (!summary || summary.runId !== runId || summary.pendingKeys.join() !== pendingKeysOf(pending).join()) {
+    return { refused: fail(res, 409, { code: "RUN_SUPERSEDED", message: "Files changed after the match. Run the match again." }) };
+  }
+  if (summary.pendingKeys.length === 0) {
+    return {
+      refused: fail(res, 409, {
+        code: "NOTHING_TO_PRE_COMMIT",
+        message: `No new FA file has been uploaded for ${date}, so there is nothing to load. The match only checked our books.`,
+      }),
+    };
+  }
+  const affected = await readJsonOr(bucket, reloadKey(kind, date, "affected.json"), null);
+  if (!affected) return { refused: fail(res, 409, { code: "CONSOLIDATED_MISSING", message: "Run the match again." }) };
+  return { summary, affected };
+};
+
+/**
+ * The Mutual Funds tab has no match, so its Commit builds the date's final list
+ * now from our books and the pending files, and saves it where the Pre-commit
+ * steps read it. affected.keep lists the ISINs and clients of the final list, for
+ * the MASTERS step (Equity's re-reads its consolidated file instead).
+ */
+const mutualFundListNow = async (res, catalystApp, bucket, date, pending) => {
+  const kind = KIND.MUTUAL_FUND;
+  if (pending.length === 0) {
+    return {
+      refused: fail(res, 409, {
+        code: "NOTHING_TO_PRE_COMMIT",
+        message: `No new mutual fund file has been uploaded for ${date}, so there is nothing to commit.`,
+      }),
+    };
+  }
+  const { finalTrades, affected, summary } = await buildMutualFundList(catalystApp, bucket, date, pending);
+  const withKeep = {
+    ...affected,
+    keep: {
+      isins: [...new Set(finalTrades.map((t) => t.isin))],
+      clients: [...new Set(finalTrades.map((t) => t.account))],
+    },
+  };
+  await putText(bucket, reloadKey(kind, date, "consolidated.csv"), tradesToMutualFundCsv(finalTrades), "text/csv");
+  await putJson(bucket, reloadKey(kind, date, "affected.json"), withKeep);
+  await putJson(bucket, reloadKey(kind, date, "summary.json"), summary);
+  return { summary, affected: withKeep };
 };
 
 /**
  * POST /api/custody-match/reload/:date/pre-commit
- * body: { runId, confirmBigRemoval, startedBy }
+ * body: { runId, confirmBigRemoval, startedBy, [kind] }
+ * runId is the Equity tab's match; the Mutual Funds tab sends none.
  */
 export const preCommitEquityDate = async (req, res) => {
   try {
     const catalystApp = req.catalystApp;
     if (!catalystApp) return noApp(res);
+    const kind = kindOfRequest(req);
+    if (!kind) return badKind(res);
     const date = String(req.params.date || "").trim();
     if (!DATE_PATTERN.test(date)) return fail(res, 400, { code: "BAD_DATE", message: "Date must be yyyy-mm-dd." });
-    const runId = String(req.body?.runId || "").trim();
+    const runId = kind.mutualFund ? "" : String(req.body?.runId || "").trim();
 
     const bucket = getBucket(catalystApp);
-    const progress = await currentProgress(catalystApp, bucket, date);
+    const progress = await currentProgress(kind, catalystApp, bucket, date);
     if (isLocked(progress)) return fail(res, 409, { code: "DATE_LOCKED", message: lockedMessage(date, progress) });
-    const closed = await closedDateResponse(res, catalystApp, date);
+    const closed = await closedDateResponse(kind, res, catalystApp, date);
     if (closed) return closed;
 
-    const busy = await busyElsewhere(catalystApp, date);
+    const busy = await busyElsewhere(kind, catalystApp, date);
     if (busy) return fail(res, 409, { code: "IMPORT_STILL_PROCESSING", message: busy });
 
-    const run = runId ? await getRun(catalystApp, runId) : null;
-    if (!run || run.businessDate !== date) {
-      return fail(res, 409, { code: "RUN_MISSING", message: "Run the match first." });
-    }
-    if (run.status === RUN_STATUS.SUPERSEDED) {
-      return fail(res, 409, { code: "RUN_SUPERSEDED", message: "Files changed after the match. Run the match again." });
-    }
-    if (run.status !== RUN_STATUS.COMPLETED_CLEAN && run.status !== RUN_STATUS.COMPLETED_WITH_EXCEPTIONS) {
-      return fail(res, 409, { code: "RUN_NOT_FINISHED", message: "Wait for the match to finish, then Commit." });
-    }
-
-    const summary = await readJsonOr(bucket, reloadKey(date, "summary.json"), null);
-    const pending = await pendingFaFiles(catalystApp, bucket, date);
-    if (!summary || summary.runId !== runId || summary.pendingKeys.join() !== pendingKeysOf(pending).join()) {
-      return fail(res, 409, { code: "RUN_SUPERSEDED", message: "Files changed after the match. Run the match again." });
-    }
-    if (summary.pendingKeys.length === 0) {
-      return fail(res, 409, {
-        code: "NOTHING_TO_PRE_COMMIT",
-        message: `No new FA file has been uploaded for ${date}, so there is nothing to load. The match only checked our books.`,
-      });
-    }
-    const affected = await readJsonOr(bucket, reloadKey(date, "affected.json"), null);
-    if (!affected) return fail(res, 409, { code: "CONSOLIDATED_MISSING", message: "Run the match again." });
+    const pending = await pendingFaFiles(kind, catalystApp, bucket, date);
+    const list = kind.mutualFund
+      ? await mutualFundListNow(res, catalystApp, bucket, date, pending)
+      : await equityListFromMatch(res, catalystApp, bucket, date, runId, pending);
+    if (list.refused) return list.refused;
+    const { summary, affected } = list;
 
     if (summary.bigRemoval && String(req.body?.confirmBigRemoval) !== "true") {
       return fail(res, 409, {
@@ -1225,12 +1440,15 @@ export const preCommitEquityDate = async (req, res) => {
       });
     }
 
-    // The first commit fixes the date's window; from now on it can never change.
-    const window = await readDateWindow(catalystApp, date);
-    if (!window?.fixed) await saveDateWindow(catalystApp, date, { days: window?.days || DEFAULT_WINDOW_DAYS, fixed: true });
+    // The tab's first commit fixes the date's window on that tab; from now on it can never change.
+    const windowOpts = { mutualFund: kind.mutualFund };
+    const window = await readDateWindow(catalystApp, date, windowOpts);
+    if (!window?.fixed) {
+      await saveDateWindow(catalystApp, date, { days: window?.days || DEFAULT_WINDOW_DAYS, fixed: true }, windowOpts);
+    }
 
     const startedAtMs = Date.now();
-    const firstCommit = await isFirstCommit(catalystApp.zcql(), date);
+    const firstCommit = await isFirstCommit(kind, catalystApp.zcql(), date);
     // Before the lock: without this row the commit does not start, and nothing has changed.
     const historyRow = await catalystApp.datastore().table(HISTORY_TABLE).insertRow({
       businessDate: date,
@@ -1242,8 +1460,11 @@ export const preCommitEquityDate = async (req, res) => {
       clients: affected.clients.length,
       fileNames: pending.map((f) => f.originalFileName).join(", "),
       startedAtMs,
+      // Only Mutual Funds rows fill it; a row without it is Equity's (listCommitHistory).
+      ...(kind.mutualFund ? { Asset_Kind: kind.key } : {}),
     });
     const fresh = {
+      kind: kind.key,
       date,
       runId,
       historyRowId: historyRow.ROWID,
@@ -1258,7 +1479,7 @@ export const preCommitEquityDate = async (req, res) => {
       rebuild: null,
       error: "",
     };
-    await ensureJobsRow(catalystApp.zcql(), lockJobName(date), STATUS.RUNNING);
+    await ensureJobsRow(catalystApp.zcql(), lockJobName(kind, date), STATUS.RUNNING);
     await saveProgress(bucket, fresh);
     await notify(
       catalystApp,
@@ -1267,31 +1488,33 @@ export const preCommitEquityDate = async (req, res) => {
       firstCommit ? `Adding ${summary.finalCount} trades.` : `Replacing the date's trades with ${summary.finalCount} trades.`,
     );
 
-    void runPreCommit(catalystApp, date);
+    void runPreCommit(kind, catalystApp, date);
     return res.status(202).json({ success: true, date, progress: progressView(fresh), message: "Commit started." });
   } catch (error) {
     console.error("[EquityReload] preCommitEquityDate:", error);
-    return fail(res, 500, { message: error.message || "Could not start the Commit." });
+    return fail(res, 500, { code: error.code, message: error.message || "Could not start the Commit." });
   }
 };
 
-/** POST /api/custody-match/reload/:date/retry — continue from the saved step. */
+/** POST /api/custody-match/reload/:date/retry   body: { [kind] } — continue from the saved step. */
 export const retryEquityDate = async (req, res) => {
   try {
     const catalystApp = req.catalystApp;
     if (!catalystApp) return noApp(res);
+    const kind = kindOfRequest(req);
+    if (!kind) return badKind(res);
     const date = String(req.params.date || "").trim();
     if (!DATE_PATTERN.test(date)) return fail(res, 400, { code: "BAD_DATE", message: "Date must be yyyy-mm-dd." });
 
     const bucket = getBucket(catalystApp);
-    const progress = await currentProgress(catalystApp, bucket, date);
-    if (!canRetry(progress) || activeReloads.has(date)) {
+    const progress = await currentProgress(kind, catalystApp, bucket, date);
+    if (!canRetry(progress) || activeReloads.has(`${kind.key}:${date}`)) {
       return fail(res, 409, { code: "NOT_RETRYABLE", message: "This Commit is not stopped, so there is nothing to try again." });
     }
 
     progress.status = STATUS.RUNNING;
     progress.error = "";
-    await ensureJobsRow(catalystApp.zcql(), lockJobName(date), STATUS.RUNNING);
+    await ensureJobsRow(catalystApp.zcql(), lockJobName(kind, date), STATUS.RUNNING);
     await updateCommitHistory(catalystApp, progress, { status: STATUS.RUNNING });
 
     if (progress.step === STEP.WAITING) {
@@ -1303,7 +1526,7 @@ export const retryEquityDate = async (req, res) => {
       await saveProgress(bucket, progress);
     } else {
       await saveProgress(bucket, progress);
-      void runPreCommit(catalystApp, date);
+      void runPreCommit(kind, catalystApp, date);
     }
     return res.status(202).json({ success: true, date, progress: progressView(progress), message: "Continuing." });
   } catch (error) {
@@ -1361,15 +1584,16 @@ const submitRebuildJobs = async (catalystApp, jobs) => {
  * crash, a failed bulk write or a "Try again" all take the same path. Runs after
  * the reply has gone, like the import's bulk-write poll does.
  */
-const runPreCommit = async (catalystApp, date) => {
-  if (activeReloads.has(date)) return;
-  activeReloads.add(date);
+const runPreCommit = async (kind, catalystApp, date) => {
+  const activeKey = `${kind.key}:${date}`;
+  if (activeReloads.has(activeKey)) return;
+  activeReloads.add(activeKey);
   const bucket = getBucket(catalystApp);
   const zcql = catalystApp.zcql();
-  let p = await readProgress(bucket, date);
+  let p = await readProgress(kind, bucket, date);
 
   try {
-    const affected = await getJson(bucket, reloadKey(date, "affected.json"));
+    const affected = await getJson(bucket, reloadKey(kind, date, "affected.json"));
     const save = (step, patch = {}) => {
       Object.assign(p, patch, { step });
       return saveProgress(bucket, p);
@@ -1377,7 +1601,7 @@ const runPreCommit = async (catalystApp, date) => {
 
     /* ── phase 1: clean up all five tables ── */
     if (p.step === STEP.TRANSACTION) {
-      const transactions = await deleteEquityTradesOfDate(zcql, date);
+      const transactions = await deleteTradesOfDate(kind, zcql, date);
       await save(STEP.HOLDINGS, { deleted: { ...p.deleted, transactions } });
     }
     if (p.step === STEP.HOLDINGS) {
@@ -1389,9 +1613,14 @@ const runPreCommit = async (catalystApp, date) => {
       await save(STEP.MASTERS, { deleted: { ...p.deleted, cashClients: affected.clients.length } });
     }
     if (p.step === STEP.MASTERS) {
-      const consolidated = await getBuffer(bucket, reloadKey(date, "consolidated.csv"));
-      const finalTrades = tradesOfParsedFile(await parseFaFile(consolidated, { businessDate: date, profile: FA_CONSOLIDATED_PROFILE }));
-      const masters = await deleteUnusedStubMasters(zcql, affected, finalTrades);
+      // The Mutual Funds Commit saved the final list's ISINs and clients; Equity's are read from its file.
+      let keep = affected.keep;
+      if (!keep) {
+        const consolidated = await getBuffer(bucket, reloadKey(kind, date, "consolidated.csv"));
+        const finalTrades = tradesOfParsedFile(await parseFaFile(consolidated, { businessDate: date, profile: FA_CONSOLIDATED_PROFILE }));
+        keep = { isins: finalTrades.map((t) => t.isin), clients: finalTrades.map((t) => t.account) };
+      }
+      const masters = await deleteUnusedStubMasters(zcql, affected, keep);
       await save(STEP.INSERT, { deleted: { ...p.deleted, ...masters } });
     }
 
@@ -1406,7 +1635,7 @@ const runPreCommit = async (catalystApp, date) => {
         p.insert.attempts++;
         // Go forward: whatever a failed or half-finished load left behind goes first.
         // On a first commit's first attempt there is nothing to remove.
-        await deleteEquityTradesOfDate(zcql, date);
+        await deleteTradesOfDate(kind, zcql, date);
         await saveProgress(bucket, p);
         if (p.expectedCount === 0) {
           p.insert.inserted = 0;
@@ -1416,7 +1645,10 @@ const runPreCommit = async (catalystApp, date) => {
         const importStartedAtMs = Date.now();
         // "transactions/" is the prefix the masters job accepts.
         const objectKey = `transactions/TxnReload-${date}-${importStartedAtMs}.csv`;
-        const rewritten = normalizeCsvForBulkUpload(await getBuffer(bucket, reloadKey(date, "consolidated.csv")));
+        // A mutual fund row gets its amount worked out and is marked Security_Type 'm' here.
+        const rewritten = normalizeCsvForBulkUpload(await getBuffer(bucket, reloadKey(kind, date, "consolidated.csv")), {
+          mutualFund: kind.mutualFund,
+        });
         await txnBucket.putObject(objectKey, rewritten, { overwrite: true, contentType: "text/csv" });
         const job = await bulkWrite.createJob({ bucket_name: TXN_BUCKET, object_key: objectKey }, { operation: "insert" });
         const jobId = job?.job_id || job?.id;
@@ -1424,10 +1656,10 @@ const runPreCommit = async (catalystApp, date) => {
         await saveProgress(bucket, p);
 
         const ok = await waitForBulkWrite(bulkWrite, jobId, () => saveProgress(bucket, p));
-        let actual = (await equityRowIdsOfDate(zcql, date)).length;
+        let actual = (await rowIdsOfDate(kind, zcql, date)).length;
         if (ok && actual !== p.expectedCount) {
           await sleep(BULK_POLL_MS);
-          actual = (await equityRowIdsOfDate(zcql, date)).length;
+          actual = (await rowIdsOfDate(kind, zcql, date)).length;
         }
         if (ok && actual === p.expectedCount) {
           p.insert.inserted = actual;
@@ -1438,9 +1670,9 @@ const runPreCommit = async (catalystApp, date) => {
 
       // A copy for "Recent uploads" on the screen, which lists transactions-original/.
       if (p.insert.objectKey) {
-        const copyKey = `transactions-original/TxnUpload-${p.insert.importStartedAtMs}-Equity-${date}.csv`;
+        const copyKey = `transactions-original/TxnUpload-${p.insert.importStartedAtMs}-${kind.fileLabel}-${date}.csv`;
         await txnBucket
-          .putObject(copyKey, await getBuffer(bucket, reloadKey(date, "consolidated.csv")), {
+          .putObject(copyKey, await getBuffer(bucket, reloadKey(kind, date, "consolidated.csv")), {
             overwrite: true,
             contentType: "text/csv",
           })
@@ -1450,10 +1682,12 @@ const runPreCommit = async (catalystApp, date) => {
 
       // Our books now equal the final list, so the pending files are used up. They
       // stay on the screen as the files behind the date's trades.
-      await writeState(bucket, date, { files: {} });
-      await setStageDetail(catalystApp, p.runId, `${IMPORTED_MARKER} — committed ${p.insert.inserted} trades`).catch(
-        (err) => console.warn("[EquityReload] run mark failed:", err.message),
-      );
+      await writeState(kind, bucket, date, { files: {} });
+      if (p.runId) {
+        await setStageDetail(catalystApp, p.runId, `${IMPORTED_MARKER} — committed ${p.insert.inserted} trades`).catch(
+          (err) => console.warn("[EquityReload] run mark failed:", err.message),
+        );
+      }
       await save(STEP.REBUILD);
     }
 
@@ -1481,8 +1715,8 @@ const runPreCommit = async (catalystApp, date) => {
       }
       const jobs = [];
       [...isinsByClient.entries()].forEach(([account, isins], i) => {
-        jobs.push({ name: rebuildJobName(date, "H", i), kind: "H", account, isins });
-        jobs.push({ name: rebuildJobName(date, "C", i), kind: "C", account });
+        jobs.push({ name: rebuildJobName(kind, date, "H", i), kind: "H", account, isins });
+        jobs.push({ name: rebuildJobName(kind, date, "C", i), kind: "C", account });
       });
       await submitRebuildJobs(catalystApp, jobs);
       await save(STEP.WAITING, { rebuild: { clients: isinsByClient.size, jobs, done: 0, queuedAtMs: Date.now() } });
@@ -1493,11 +1727,11 @@ const runPreCommit = async (catalystApp, date) => {
       p.status = STATUS.FAILED;
       p.error = `Stopped at ${String(p.step).toLowerCase()}: ${error.message}`;
       await saveProgress(bucket, p).catch(() => {});
-      await updateJobsStatus(zcql, lockJobName(date), STATUS.FAILED);
+      await updateJobsStatus(zcql, lockJobName(kind, date), STATUS.FAILED);
       await updateCommitHistory(catalystApp, p, { status: STATUS.FAILED });
       await notify(catalystApp, p, "failed", "Commit did not finish. Press Try again.");
     }
   } finally {
-    activeReloads.delete(date);
+    activeReloads.delete(activeKey);
   }
 };

@@ -67,7 +67,7 @@ async function fetchAccountTransactions(zcql, accountCode) {
   let lastRowId = 0;
   while (true) {
     const batch = await zcql.executeZCQLQuery(`
-      SELECT ROWID, SETDATE, TRANDATE, Tran_Type, Net_Amount, STT
+      SELECT ROWID, SETDATE, TRANDATE, Tran_Type, Net_Amount, STT, Security_Type
       FROM Transaction
       WHERE WS_Account_code = '${esc(accountCode)}'
         AND ROWID > ${lastRowId}
@@ -99,7 +99,11 @@ function dailyClosingBalances(accountCode, transactions) {
   const days = [];
   let balance = 0;
   for (const t of sorted) {
-    balance = applyCashEffect(balance, t.Tran_Type, Number(t.Net_Amount) || 0, Number(t.STT) || 0);
+    // A mutual fund row's Net_Amount already has STT taken off (sell), so it is not applied again.
+    // Same rule as functions/Cal_CB_Append_TxnUpload and Cal_CB_Per_TNX.
+    const isMutualFund = String(t.Security_Type ?? "").trim().toLowerCase() === "m";
+    const stt = isMutualFund ? 0 : Number(t.STT) || 0;
+    balance = applyCashEffect(balance, t.Tran_Type, Number(t.Net_Amount) || 0, stt);
     const date = cashDate(t);
     const today = days[days.length - 1];
     // Order within a day does not change the day's closing balance.

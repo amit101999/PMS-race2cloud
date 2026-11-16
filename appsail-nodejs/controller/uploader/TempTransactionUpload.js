@@ -492,6 +492,12 @@ const HEADER_MAP = {
   "Stamp Duty": "STAMPDUTY",
   // Column 27 of the Equity tab's consolidated file (FA_TRANSACTION_ID_HEADER in fieldMap.js).
   "Transaction ID": "Transaction_ID",
+  // The extra columns added on the Mutual Funds mapping screen.
+  Column1: "Column1",
+  Column2: "Column2",
+  Column3: "Column3",
+  Column4: "Column4",
+  Column5: "Column5",
 };
 
 /**
@@ -500,6 +506,10 @@ const HEADER_MAP = {
  * so a 26-column upload is validated and imported exactly as before.
  */
 const OPTIONAL_TRAILING_HEADERS = ["TDS", "Stamp Duty"];
+
+/** How a mutual fund row is marked in Transaction. The inception data already uses these values. */
+const MUTUAL_FUND_SECURITY_TYPE = "m";
+const MUTUAL_FUND_SECURITY_TYPE_DESCRIPTION = "Mutual Funds";
 
 /**
  * @param {string} raw Header cell from row 1 (trimmed).
@@ -662,6 +672,28 @@ function deriveNetRateAndAmount({ tranType, qty, rate, brokeragePerShare }) {
 }
 
 /**
+ * Mutual fund rows. The file has no amount column, so it is worked out here:
+ *   Buy  (BY-, SQB): Net_Amount = QTY × RATE + Stamp Duty
+ *   Sell (SL+, SQS): Net_Amount = QTY × RATE − STT (TRANEXPENSE)
+ *   NETRATE        = Net_Amount ÷ QTY
+ * TDS is stored but does not change the amount. Net_Amount is the final money
+ * moved, so the cash jobs use it as it is for these rows (no second ± STT).
+ * Returns "" for both when RATE or QTY is absent.
+ */
+function deriveMutualFundAmount({ tranType, qty, rate, stampDuty, stt }) {
+  const r = Number(rate) || 0;
+  const q = Math.abs(Number(qty) || 0);
+  if (!r || !q) return { netRate: "", netAmount: "" };
+  const gross = q * r;
+  const netAmount = round4(
+    isBuyTransType(tranType)
+      ? gross + (Math.abs(Number(stampDuty)) || 0)
+      : gross - (Math.abs(Number(stt)) || 0),
+  );
+  return { netRate: String(round4(netAmount / q)), netAmount: String(netAmount) };
+}
+
+/**
  * Splits CSV text into rows of cells, honouring double quotes: a quoted cell may
  * hold the separator, a line break, or a doubled "" for a literal quote. Cutting
  * each line at every comma instead shifts every column after a value such as
@@ -723,7 +755,7 @@ function csvCell(value) {
  * NETRATE and Net_Amount are appended to every row, always derived from
  * RATE / BROKERAGEPERSHARE / QTY / TRANSTYPE (see deriveNetRateAndAmount).
  */
-export function normalizeCsvForBulkUpload(fileBuffer) {
+export function normalizeCsvForBulkUpload(fileBuffer, { mutualFund = false } = {}) {
   const text = stripBom(fileBuffer.toString("utf8"));
   const separator = detectSeparator(getFirstLineText(fileBuffer));
   const rows = parseCsvRows(text, separator).map((cells) =>
@@ -747,8 +779,11 @@ export function normalizeCsvForBulkUpload(fileBuffer) {
   const qtyIdx = srcIdx("QUANTITY");
   const rateIdx = srcIdx("RATE");
   const brokIdx = srcIdx("BROKERAGEPERSHARE");
+  const stampIdx = srcIdx("Stamp Duty");
+  const sttIdx = srcIdx("TRANEXPENSE");
 
   const newHeaders = [...headerMappings.flatMap((m) => m.targets), "NETRATE", "Net_Amount"];
+  if (mutualFund) newHeaders.push("Security_Type", "Security_Type_Description");
   const outSep = ",";
   const newLines = [newHeaders.join(outSep)];
 
@@ -758,12 +793,20 @@ export function normalizeCsvForBulkUpload(fileBuffer) {
     if (cells.length === 1 && cells[0] === "") continue;
     const cellAt = (i) => (i >= 0 && i < cells.length ? cells[i] : "");
 
-    const derived = deriveNetRateAndAmount({
-      tranType: cellAt(typeIdx),
-      qty: cellAt(qtyIdx),
-      rate: cellAt(rateIdx),
-      brokeragePerShare: cellAt(brokIdx),
-    });
+    const derived = mutualFund
+      ? deriveMutualFundAmount({
+          tranType: cellAt(typeIdx),
+          qty: cellAt(qtyIdx),
+          rate: cellAt(rateIdx),
+          stampDuty: cellAt(stampIdx),
+          stt: cellAt(sttIdx),
+        })
+      : deriveNetRateAndAmount({
+          tranType: cellAt(typeIdx),
+          qty: cellAt(qtyIdx),
+          rate: cellAt(rateIdx),
+          brokeragePerShare: cellAt(brokIdx),
+        });
 
     const outCells = [];
     for (const m of headerMappings) {
@@ -772,6 +815,9 @@ export function normalizeCsvForBulkUpload(fileBuffer) {
       for (let t = 0; t < m.targets.length; t++) outCells.push(csvCell(raw));
     }
     outCells.push(derived.netRate, derived.netAmount);
+    if (mutualFund) {
+      outCells.push(MUTUAL_FUND_SECURITY_TYPE, MUTUAL_FUND_SECURITY_TYPE_DESCRIPTION);
+    }
     newLines.push(outCells.join(outSep));
   }
 

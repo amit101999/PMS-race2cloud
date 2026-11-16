@@ -37,6 +37,18 @@
 
 const catalyst = require("zcatalyst-sdk-node");
 
+/* ===== MUTUAL FUND BUY: settlement-dated =====
+   A mutual fund buy (Security_Type 'm', BY- / SQB) adds units on its settlement
+   date, not its trade date. TRANDATE takes the SETDATE value in memory as the
+   row is read, so every date rule after this and the Holdings row use it. The
+   Transaction table keeps the real trade date. Same rule in
+   functions/CalculateHoldingWorkers and RebuildHoldingtable. */
+const settleMutualFundBuy = (r) => {
+  const isMutualFund = String(r.Security_Type ?? "").trim().toLowerCase() === "m";
+  const isMfBuy = isMutualFund && /^BY-|SQB/i.test(String(r.Tran_Type || ""));
+  return isMfBuy && r.SETDATE ? { ...r, TRANDATE: r.SETDATE } : r;
+};
+
 /**
  * Decimals are stored in binary, so 190.88 - 190 gives 0.8799999999999955 and
  * 0.88 x 1000 gives 879.9999999999955. Rounding every quantity (6 decimals) and
@@ -326,7 +338,7 @@ async function fetchPairTransactions(zcql, accountCode, isin, asOnDate) {
   while (true) {
     try {
       const batch = await zcql.executeZCQLQuery(`
-        SELECT TRANDATE, SETDATE, Tran_Type, QTY, NETRATE, Net_Amount, ISIN, ROWID
+        SELECT TRANDATE, SETDATE, Tran_Type, QTY, NETRATE, Net_Amount, ISIN, ROWID, Security_Type
         FROM Transaction
         WHERE WS_Account_code = '${esc(accountCode)}' AND ISIN = '${esc(isin)}'
         ${dateClause}
@@ -338,7 +350,7 @@ async function fetchPairTransactions(zcql, accountCode, isin, asOnDate) {
         const r = row.Transaction || row;
         if (r.ROWID && seen.has(r.ROWID)) continue;
         if (r.ROWID) seen.add(r.ROWID);
-        rows.push(r);
+        rows.push(settleMutualFundBuy(r));
       }
       if (batch.length < BATCH) break;
       offset += BATCH;
@@ -364,7 +376,7 @@ async function fetchNewTxnsForPair(zcql, accountCode, isin, importStartedAtMs) {
   while (true) {
     try {
       const batch = await zcql.executeZCQLQuery(`
-        SELECT TRANDATE, SETDATE, Tran_Type, QTY, NETRATE, Net_Amount, ISIN, ROWID
+        SELECT TRANDATE, SETDATE, Tran_Type, QTY, NETRATE, Net_Amount, ISIN, ROWID, Security_Type
         FROM Transaction
         WHERE WS_Account_code = '${esc(accountCode)}'
           AND ISIN = '${esc(isin)}'
@@ -377,7 +389,7 @@ async function fetchNewTxnsForPair(zcql, accountCode, isin, importStartedAtMs) {
         const r = row.Transaction || row;
         if (r.ROWID && seen.has(r.ROWID)) continue;
         if (r.ROWID) seen.add(r.ROWID);
-        rows.push(r);
+        rows.push(settleMutualFundBuy(r));
       }
       if (batch.length < BATCH) break;
       offset += BATCH;

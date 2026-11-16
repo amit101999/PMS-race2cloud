@@ -1,9 +1,9 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import MainLayout from "../../layouts/MainLayout";
 import { BASE_URL } from "../../constant";
 import CommitHistory from "./custody/CommitHistory";
 import CustodyMatchPanel from "./custody/CustodyMatchPanel";
-import { todayIso } from "./custody/api";
+import { KIND, todayIso } from "./custody/api";
 import DifferenceReports from "./custody/DifferenceReports";
 import ExceptionGrid from "./custody/ExceptionGrid";
 // import GateTwo from "./custody/GateTwo"; — old Commit, replaced by PreCommitPanel
@@ -64,7 +64,12 @@ const TABS = [
  * Commit. A re-uploaded file replaces or adds to the date's trades by
  * transaction ID. A date's first Commit just adds its trades; a later one cleans
  * up the whole date before loading it again, so our books always equal the
- * latest files (EquityReload.js on the server). Mutual Funds and Cash Balance are not built yet.
+ * latest files (EquityReload.js on the server).
+ *
+ * Mutual Funds: the same upload, T+N window and Commit as Equity (kind
+ * MUTUAL_FUND on the server), but with no custodian file and no match. Each tab
+ * touches only its own trades and keeps its own window and history. Cash
+ * Balance is not built yet.
  *
  * The old single-page upload is kept below, commented out.
  */
@@ -79,6 +84,20 @@ const TempTransaction = () => {
     /* A Pre-commit moved on, so the FA card's file statuses and the consolidated files are out of date. */
     const [preCommitTick, setPreCommitTick] = useState(0);
     const handlePreCommitProgress = useCallback(() => setPreCommitTick((tick) => tick + 1), []);
+
+    /* Mutual Funds tab: the files on its card. Each of their dates gets a Commit block. */
+    const [mfFiles, setMfFiles] = useState([]);
+    const mfDatesKey = [...new Set(mfFiles.map((f) => f.businessDate).filter(Boolean))].sort().join(",");
+    const mfCommitDates = useMemo(
+        () =>
+            (mfDatesKey ? mfDatesKey.split(",") : []).map((date) => ({
+                runId: `mf-${date}`,
+                businessDate: date,
+                status: "READY",
+                isRunning: false,
+            })),
+        [mfDatesKey],
+    );
 
     const [historyItems, setHistoryItems] = useState([]);
     const [historyLoading, setHistoryLoading] = useState(false);
@@ -180,6 +199,22 @@ const TempTransaction = () => {
                         ))}
                     </div>
 
+                    {activeTab === "mutualFunds" ? (
+                        <div className="txo-tracker-bar txo-tracker-bar--static">
+                            {/* No match on this tab, so no workflow steps: just the upload date. */}
+                            <span />
+                            <label className="cm-date">
+                                <span>Upload date</span>
+                                <input
+                                    type="date"
+                                    value={uploadDate}
+                                    max={todayIso()}
+                                    onChange={(e) => setUploadDate(e.target.value)}
+                                />
+                            </label>
+                        </div>
+                    ) : null}
+
                     {activeTab === "equity" ? (
                         <div className="txo-tracker-bar txo-tracker-bar--static">
                             <WorkflowTracker
@@ -203,9 +238,31 @@ const TempTransaction = () => {
                 </div>
 
                 <div className="txn-scroll-body">
-                {activeTab !== "equity" ? (
+                {activeTab === "mutualFunds" ? (
+                    <>
+                        <CustodyMatchPanel
+                            reloadMode
+                            kind={KIND.MUTUAL_FUND}
+                            uploadDate={uploadDate}
+                            onFaFilesChange={setMfFiles}
+                            preCommitTick={preCommitTick}
+                        />
+
+                        <PreCommitPanel
+                            key={mfDatesKey}
+                            runs={mfCommitDates}
+                            kind={KIND.MUTUAL_FUND}
+                            onProgressChange={handlePreCommitProgress}
+                        />
+
+                        <div className="txo-section-head txo-section-head--tight">
+                            <h2>History</h2>
+                        </div>
+                        <CommitHistory refreshToken={preCommitTick} kind={KIND.MUTUAL_FUND} />
+                    </>
+                ) : activeTab === "cashBalance" ? (
                     <div className="temp-transaction-card cm-tab-empty">
-                        {activeTab === "mutualFunds" ? "Mutual Funds" : "Cash Balance"} upload is not available yet.
+                        Cash Balance upload is not available yet.
                     </div>
                 ) : (
                     <>

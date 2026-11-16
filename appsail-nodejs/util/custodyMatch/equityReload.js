@@ -196,6 +196,44 @@ const numText = (v) => {
 export const isMutualFundTrade = (isin, exchange) =>
   upper(isin).startsWith("INF") && upper(exchange) === "DIR";
 
+/**
+ * A booked mutual fund trade: INF + DIR, or any row the Mutual Funds tab
+ * committed (Security_Type 'm', whatever its exchange). Each tab reads, deletes
+ * and re-books only its own rows.
+ */
+export const isBookedMutualFund = (row) =>
+  isMutualFundTrade(row.ISIN, row.EXCHG) || text(row.Security_Type).toLowerCase() === "m";
+
+/*
+ * Mutual Funds tab: the values a mutual fund trade carries besides the 27
+ * columns — TDS, Stamp Duty and the five extra columns added on the mapping
+ * screen — as Transaction columns, in the order the import file has them.
+ */
+export const MUTUAL_FUND_BOOKED_COLUMNS = [
+  "TDSAMOUNT",
+  "STAMPDUTY",
+  "Column1",
+  "Column2",
+  "Column3",
+  "Column4",
+  "Column5",
+];
+
+/** Adds the mutual fund values (TDS, Stamp Duty, Column1–5, in that order) to a trade. */
+export const withMutualFundValues = (trade, values) => {
+  const cells = MUTUAL_FUND_BOOKED_COLUMNS.map((_, i) => {
+    const cell = text(values[i]);
+    return cell.toLowerCase() === "null" ? "" : cell;
+  });
+  return {
+    ...trade,
+    mfCells: cells,
+    tds: numText(cells[0]),
+    stampDuty: numText(cells[1]),
+    extras: cells.slice(2).join("|"),
+  };
+};
+
 /** One trade, from its 27 consolidated cells. Both sides of every comparison use this shape. */
 export const tradeFromCells = (cells, extra = {}) => ({
   ...extra,
@@ -221,7 +259,7 @@ export const tradeFromCells = (cells, extra = {}) => ({
  * Security_Name for older rows that never filled Tran_Desc. Dates are cut to
  * YYYY-MM-DD; a blank cell stays blank.
  */
-export const tradeFromBookedRow = (row) => {
+export const tradeFromBookedRow = (row, { mutualFund = false } = {}) => {
   const cells = BOOKED_COLUMNS.map((column) => {
     if (!column) return "";
     let value = row[column];
@@ -231,10 +269,16 @@ export const tradeFromBookedRow = (row) => {
     if (cell.toLowerCase() === "null") return "";
     return DATE_COLUMNS.has(column) ? cell.slice(0, 10) : cell;
   });
-  return tradeFromCells(cells, { rowId: text(row.ROWID), booked: true });
+  const trade = tradeFromCells(cells, { rowId: text(row.ROWID), booked: true });
+  return mutualFund
+    ? withMutualFundValues(trade, MUTUAL_FUND_BOOKED_COLUMNS.map((column) => row[column]))
+    : trade;
 };
 
-/** The values that say whether a trade changed. */
+/**
+ * The values that say whether a trade changed. tds, stampDuty and extras are
+ * set on mutual fund trades only; on equity trades both sides leave them unset.
+ */
 const COMPARED_FIELDS = [
   "account",
   "isin",
@@ -249,6 +293,9 @@ const COMPARED_FIELDS = [
   "stt",
   "cashSetdate",
   "ref",
+  "tds",
+  "stampDuty",
+  "extras",
 ];
 
 export const sameValues = (a, b) => COMPARED_FIELDS.every((f) => a[f] === b[f]);
@@ -270,7 +317,7 @@ export const fingerprint = (t) =>
  * whole file, because the system cannot tell a new trade from a changed one
  * without the ID, nor which of two different rows with one ID is right.
  */
-export const fileProblems = (trades) => {
+export const fileProblems = (trades, { mutualFund = false } = {}) => {
   const problems = [];
   const firstById = new Map();
   for (const t of trades) {
@@ -285,7 +332,8 @@ export const fileProblems = (trades) => {
       });
       continue;
     }
-    if (isMutualFundTrade(t.isin, t.exchange)) {
+    // The Mutual Funds tab takes every row of its file as a mutual fund, whatever the exchange.
+    if (!mutualFund && isMutualFundTrade(t.isin, t.exchange)) {
       problems.push({
         row: t.rowNumber,
         code: "MUTUAL_FUND_ROW",
@@ -306,6 +354,52 @@ export const fileProblems = (trades) => {
         column: FA_TRANSACTION_ID_HEADER,
         value: t.txnId,
       });
+    }
+  }
+  return problems;
+};
+
+/*
+ * The only transaction types allowed in a mutual fund file. The cash and
+ * holdings jobs look these codes up exactly as written, so anything else would
+ * be stored but never move cash or units.
+ */
+export const MF_BUY_TYPES = ["BY-", "SQB"];
+export const MF_SELL_TYPES = ["SL+"];
+
+/**
+ * Mutual Funds tab: checks that matter only for mutual funds. The type must be
+ * one the jobs know, the rate (NAV) above zero, and TDS, Stamp Duty and
+ * TRANEXPENSE, when filled, numbers of zero or more.
+ */
+export const mutualFundTradeProblems = (trades) => {
+  const problems = [];
+  const allowed = [...MF_BUY_TYPES, ...MF_SELL_TYPES];
+  for (const t of trades) {
+    const add = (code, message, column, value) => problems.push({ row: t.rowNumber, code, message, column, value });
+
+    if (!allowed.includes(t.tranType)) {
+      add(
+        "MF_UNSUPPORTED_TYPE",
+        `"${t.tranType}" is not allowed in the mutual fund file. Use ${MF_BUY_TYPES.join(" or ")} for a buy and ${MF_SELL_TYPES.join(" or ")} for a sell.`,
+        "TRANSTYPE",
+        t.tranType,
+      );
+    }
+    const rate = Number(t.rate);
+    if (t.rate === "" || !Number.isFinite(rate) || rate <= 0) {
+      add("BAD_NUMBER", "Rate must be a number greater than zero.", "RATE", t.rate);
+    }
+    for (const [field, label] of [
+      ["stampDuty", "Stamp Duty"],
+      ["stt", "TRANEXPENSE"],
+      ["tds", "TDS"],
+    ]) {
+      if (t[field] === "" || t[field] === undefined) continue;
+      const value = Number(t[field]);
+      if (!Number.isFinite(value) || value < 0) {
+        add("BAD_NUMBER", `${label} must be a number of zero or more; found "${t[field]}".`, label, t[field]);
+      }
     }
   }
   return problems;
@@ -634,5 +728,22 @@ const csvField = (v) => {
 /** The trades as the 27-column consolidated CSV (template + Transaction ID), which the import reads. */
 export const tradesToTemplateCsv = (trades) =>
   [[...FA_HEADERS, FA_TRANSACTION_ID_HEADER], ...trades.map((t) => t.cells)]
+    .map((cells) => cells.map(csvField).join(","))
+    .join("\n");
+
+/**
+ * Mutual Funds tab: the trades as the 34-column file the import reads for
+ * mutual funds — the 26, TDS, Stamp Duty, Transaction ID, then Column1–5
+ * (normalizeCsvForBulkUpload with mutualFund in TempTransactionUpload.js reads
+ * these headings through HEADER_MAP; keep the two in step).
+ */
+export const tradesToMutualFundCsv = (trades) =>
+  [
+    [...FA_HEADERS, "TDS", "Stamp Duty", FA_TRANSACTION_ID_HEADER, ...MUTUAL_FUND_BOOKED_COLUMNS.slice(2)],
+    ...trades.map((t) => {
+      const mf = t.mfCells || MUTUAL_FUND_BOOKED_COLUMNS.map(() => "");
+      return [...t.cells.slice(0, FA_HEADERS.length), mf[0], mf[1], t.cells[COL.txnId], ...mf.slice(2)];
+    }),
+  ]
     .map((cells) => cells.map(csvField).join(","))
     .join("\n");

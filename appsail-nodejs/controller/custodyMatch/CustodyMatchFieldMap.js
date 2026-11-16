@@ -23,6 +23,7 @@ import {
   PROFILE_TYPE,
   PROFILE_TYPES,
   TRANSFORM,
+  checkExtraLabels,
   checkProfileComplete,
   defaultProfile,
   describeColumns,
@@ -90,6 +91,8 @@ const viewFor = (type, blob) => {
     type,
     fields: FIELD_CATALOG[type],
     profile: read.profile,
+    // Names the user gave the extra columns (Mutual Funds file only).
+    labels: read.labels,
     // The shipped layout, so the screen can show what "go with the current"
     // actually means and offer a per-field revert.
     builtIn,
@@ -196,6 +199,11 @@ const supersedeForType = async (app, type) => {
   if (type === PROFILE_TYPE.CUSTODY_CORP_ACTION || type === PROFILE_TYPE.CUSTODY_CORP_ALLOCATION) {
     return { superseded: [], supersedeErrors: [] };
   }
+  // The mutual fund file is not matched any more (Mutual Funds tab), so no
+  // Equity run was read under its mapping.
+  if (type === PROFILE_TYPE.FA_MUTUAL_FUND) {
+    return { superseded: [], supersedeErrors: [] };
+  }
   if (type !== PROFILE_TYPE.CUSTODY_HOLDINGS) return supersedeStoredDates(app);
   try {
     const { runIds } = await supersedeHoldingComparisonRuns(app);
@@ -215,7 +223,7 @@ const supersedeMessage = (type, verb, superseded) => {
 
 /**
  * PUT /api/custody-match/field-map/:type
- * Body: { profile: { field: {by, name|index, transform} }, updatedBy? }
+ * Body: { profile: { field: {by, name|index, transform} }, labels?: { column1: "name" }, updatedBy? }
  *
  * A profile that cannot build the match key is refused. Saving one that can is
  * still a change to how every future file is READ, so every run for a date whose
@@ -269,9 +277,19 @@ export const saveFieldMap = async (req, res) => {
       });
     }
 
+    const extra = checkExtraLabels(type, profile, req.body?.labels);
+    if (!extra.ok) {
+      return fail(res, 400, {
+        code: "INVALID_EXTRA_COLUMN_NAME",
+        message: extra.errors.map((e) => e.message).join(" "),
+        mapErrors: extra.errors,
+      });
+    }
+
     const blob = toStoredProfile(type, profile, {
       updatedBy: req.body?.updatedBy || "",
       updatedAtMs: Date.now(),
+      labels: extra.labels,
     });
     const key = await writeFieldMapBlob(app, type, blob);
 
