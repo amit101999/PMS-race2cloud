@@ -1402,6 +1402,8 @@ const CustodyMatchPanel = ({
                     {/* Which transaction file this is. Mutual fund transactions
                         arrive in their own fund-accounting file and are read
                         through their own mapping. */}
+                    {/* OPI/OPO: one file type and no file date, so the card has no controls row. */}
+                    {isOpiOpo ? null : (
                     <div className="up-controls">
                         <select
                             className="up-select"
@@ -1414,15 +1416,6 @@ const CustodyMatchPanel = ({
                             disabled={faZoneDisabled}
                         >
                             {/* The Equity tab takes Equity files only, the Mutual Funds tab mutual fund files only. */}
-                            {isOpiOpo ? (
-                                <>
-                                    <option value={api.FA_FILE_TYPE.OPI_OPO}>{api.FA_FILE_TYPE_LABEL.OPI_OPO}</option>
-                                    {/* Not built yet: the mutual fund OPI/OPO file layout is not known. */}
-                                    <option value="" disabled>
-                                        Mutual Funds (coming later)
-                                    </option>
-                                </>
-                            ) : null}
                             {faOnly ? null : (
                                 <option value={api.FA_FILE_TYPE.REGULAR}>
                                     {api.FA_FILE_TYPE_LABEL.REGULAR}
@@ -1435,18 +1428,15 @@ const CustodyMatchPanel = ({
                             )}
                         </select>
 
-                        {/* OPI/OPO: a file may hold many trade dates, so there is no date to pick. */}
-                        {isOpiOpo
-                            ? null
-                            : renderDateInput(
-                                  "Date the transaction file is for",
-                                  faDate,
-                                  changeFaDate,
-                                  faBusy || pending?.kind === "fa",
-                              )}
+                        {renderDateInput(
+                            "Date the transaction file is for",
+                            faDate,
+                            changeFaDate,
+                            faBusy || pending?.kind === "fa",
+                        )}
 
-                        {/* The date's change window: chosen until its first commit fixes it. OPI/OPO has none. */}
-                        {reloadMode && !isOpiOpo && !faWindow?.fixed ? (
+                        {/* The date's change window: chosen until its first commit fixes it. */}
+                        {reloadMode && !faWindow?.fixed ? (
                             <>
                                 <select
                                     className="up-select up-select--window"
@@ -1500,6 +1490,7 @@ const CustodyMatchPanel = ({
                             </>
                         ) : null}
                     </div>
+                    )}
 
                     {reloadMode && faWindow && faWindow.fixed && !faWindow.locked ? (
                         <p className="up-window-note">{faWindow.message}</p>

@@ -3,7 +3,7 @@
  * another system, for example when a client's account comes over from another
  * PMS.
  *
- *   POST /api/custody-match/opi-opo/file             check one file and keep it until Commit
+ *   POST /api/custody-match/opi-opo/file             read one file and keep it until Commit
  *   GET  /api/custody-match/opi-opo/:fileId          the file's summary and Commit progress
  *   POST /api/custody-match/opi-opo/:fileId/commit   add its rows to Transaction, rebuild holdings
  *   POST /api/custody-match/opi-opo/:fileId/retry    continue a Commit that stopped
@@ -11,10 +11,11 @@
  * Unlike the Equity and Mutual Funds tabs (EquityReload.js), which work one
  * trade date at a time, this tab works one file at a time: a file may hold many
  * trade and settlement dates, and one Commit adds all of its rows. Rows carry no
- * Transaction ID. A file is refused when any of its rows is already in our books
- * or in another file waiting for Commit (same account, ISIN, OPI/OPO, trade
- * date, settlement date, quantity and rate: `fingerprint`), so the same file
- * can never be booked twice. A Commit only adds rows; it never removes any.
+ * Transaction ID. Upload only reads the file and saves it, with no database
+ * look-up, so it stays quick. Commit is refused when any of the file's rows is
+ * already in our books (same account, ISIN, OPI/OPO, trade date, settlement
+ * date, quantity and rate: `fingerprint`), so the same entries can never be
+ * booked twice. A Commit only adds rows; it never removes any.
  *
  * fileId is the upload time in ms, which is also part of the raw file's key
  * (FA/<upload date>/raw-OPI_OPO-<first>-<last>-<fileId>-<name>). The rest lives
@@ -42,7 +43,6 @@ import {
   getBucket,
   getBuffer,
   getJson,
-  listAllObjects,
   loadFieldMapProfiles,
   putBuffer,
   putJson,
@@ -108,7 +108,7 @@ const readJsonOr = async (bucket, key, fallback) => {
   }
 };
 
-/* ─────────────────────────────── duplicates ─────────────────────────────── */
+/* ───────────────────────── rows already in our books ────────────────────── */
 
 /** fingerprint -> how many times it occurs. */
 const countPrints = (prints) => {
@@ -117,18 +117,25 @@ const countPrints = (prints) => {
   return counts;
 };
 
+/* How many trade dates one query asks for; keeps the IN list short. */
+const DATES_PER_QUERY = 50;
+/* Tran_Type is stored as the file wrote it, so both spellings are asked for; bookedTradeTab decides. */
+const OPI_OPO_TYPES_SQL = "'OPI', 'OPO', 'opi', 'opo'";
+
 /**
  * The OPI/OPO rows already in our books on the given trade dates, as
- * { rowId, print }. Paged by ROWID (ZCQL OFFSET repeats rows).
+ * { rowId, print }. Only OPI/OPO rows are read, many dates per query, paged by
+ * ROWID (ZCQL OFFSET repeats rows).
  */
 const bookedOpiOpoRows = async (zcql, dates) => {
   const found = [];
-  for (const date of dates) {
+  for (let i = 0; i < dates.length; i += DATES_PER_QUERY) {
+    const dateList = dates.slice(i, i + DATES_PER_QUERY).map((d) => `'${esc(d)}'`).join(", ");
     let lastRowId = "0";
     for (;;) {
       const batch = unwrap(
         await zcql.executeZCQLQuery(
-          `SELECT ROWID, WS_Account_code, ISIN, EXCHG, Security_Type, Tran_Type, TRANDATE, SETDATE, QTY, RATE FROM ${TXN_TABLE} WHERE TRANDATE = '${esc(date)}' AND ROWID > ${lastRowId} ORDER BY ROWID ASC LIMIT ${ZCQL_PAGE}`,
+          `SELECT ROWID, WS_Account_code, ISIN, EXCHG, Security_Type, Tran_Type, TRANDATE, SETDATE, QTY, RATE FROM ${TXN_TABLE} WHERE TRANDATE IN (${dateList}) AND Tran_Type IN (${OPI_OPO_TYPES_SQL}) AND ROWID > ${lastRowId} ORDER BY ROWID ASC LIMIT ${ZCQL_PAGE}`,
         ),
         TXN_TABLE,
       );
@@ -143,72 +150,15 @@ const bookedOpiOpoRows = async (zcql, dates) => {
   return found;
 };
 
-/**
- * The other OPI/OPO files still waiting for Commit: not committed, and their
- * raw file still on a card (removing a file, or the nightly clean-up, takes it
- * out of the running).
- */
-const waitingFiles = async (catalystApp, bucket, exceptFileId = "") => {
-  const rawKeys = new Set(
-    (await listFiles(catalystApp))
-      .filter((r) => r.fileType === FA_FILE_TYPE.OPI_OPO)
-      .map((r) => r.fileKey),
-  );
-  const objects = await listAllObjects(bucket, `${FOLDER}/`);
-  const files = [];
-  for (const object of objects) {
-    if (!object.key.endsWith("/file.json")) continue;
-    const info = await readJsonOr(bucket, object.key, null);
-    if (!info || info.committed || info.fileId === exceptFileId || !rawKeys.has(info.fileKey)) continue;
-    files.push(info);
-  }
-  return files;
-};
-
-/**
- * One row error per row of the file that is already in our books, or already in
- * a file waiting for Commit. Any of them refuses the whole file.
- */
-const duplicateRowErrors = async (catalystApp, bucket, trades, dates, fileName) => {
-  const booked = new Set((await bookedOpiOpoRows(catalystApp.zcql(), dates)).map((r) => r.print));
-  const waitingByPrint = new Map();
-  for (const other of await waitingFiles(catalystApp, bucket)) {
-    for (const print of other.fingerprints) waitingByPrint.set(print, other.fileName);
-  }
-  const errors = [];
-  for (const t of trades) {
-    const print = fingerprint(t);
-    if (booked.has(print)) {
-      errors.push({
-        row: t.rowNumber,
-        code: "ALREADY_BOOKED",
-        message: `This ${t.tranType} of ${t.quantity} ${t.isin} for ${t.account} on ${displayDate(t.tranDate)} is already in our books.`,
-        column: null,
-        value: t.account,
-        fileName,
-      });
-    } else if (waitingByPrint.has(print)) {
-      errors.push({
-        row: t.rowNumber,
-        code: "IN_WAITING_FILE",
-        message: `This ${t.tranType} of ${t.quantity} ${t.isin} for ${t.account} on ${displayDate(t.tranDate)} is already in ${waitingByPrint.get(print)}, which is waiting for Commit.`,
-        column: null,
-        value: t.account,
-        fileName,
-      });
-    }
-  }
-  return errors;
-};
-
 /* ─────────────────────────────────── upload ─────────────────────────────── */
 
 /**
  * POST /api/custody-match/opi-opo/file   form-data: file, uploadDate
  *
- * Checks the file and keeps it for Commit. Nothing is booked here. Every row
- * must be OPI or OPO with readable dates; there is no file date, because one
- * file may hold many trade and settlement dates.
+ * Reads the file and keeps it for Commit. Nothing is booked here and the
+ * database is not read, so this is quick. Every row must be OPI or OPO with
+ * readable dates; there is no file date, because one file may hold many trade
+ * and settlement dates. Rows already in our books are found at Commit.
  */
 export const uploadOpiOpoFile = async (req, res) => {
   try {
@@ -262,16 +212,6 @@ export const uploadOpiOpoFile = async (req, res) => {
 
     const bucket = getBucket(catalystApp);
     const dates = [...new Set(trades.map((t) => t.tranDate))].sort();
-    const duplicates = await duplicateRowErrors(catalystApp, bucket, trades, dates, file.name);
-    if (duplicates.length > 0) {
-      return fail(res, 409, {
-        code: "DUPLICATE_ROWS",
-        message: `${duplicates.length} row(s) of this file are already in our books or in another file waiting for Commit. A file can be uploaded only once. Nothing was uploaded.`,
-        fileName: file.name,
-        ...summariseIssues(duplicates, []),
-        hint: "If this is a corrected file, remove the waiting one first. Entries already committed cannot be uploaded again.",
-      });
-    }
 
     const uploadedAtMs = Date.now();
     const fileId = String(uploadedAtMs);
@@ -523,11 +463,13 @@ export const commitOpiOpoFile = async (req, res) => {
     const busy = await busyElsewhere(catalystApp, lockName(fileId));
     if (busy) return fail(res, 409, { code: "IMPORT_STILL_PROCESSING", message: busy });
 
-    // Another file with the same rows may have been committed since this one was uploaded.
-    if ((await loadedRowIds(zcql, info)).length > 0) {
+    // The same entries may already be booked (an earlier file, or opening data). Booking them
+    // again would count them twice, and the count check below relies on there being none.
+    const alreadyBooked = (await loadedRowIds(zcql, info)).length;
+    if (alreadyBooked > 0) {
       return fail(res, 409, {
         code: "ALREADY_BOOKED",
-        message: `Some rows of ${info.fileName} are already in our books, so it cannot be committed. Remove it.`,
+        message: `${alreadyBooked} of the ${info.rowCount} entries in ${info.fileName} are already in our books (same account, ISIN, OPI/OPO, dates, quantity and rate), so it cannot be committed. Remove the file, or upload one without those entries.`,
       });
     }
 
