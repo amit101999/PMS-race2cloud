@@ -5,29 +5,30 @@
  *   reload-mf/<date>/window.json   Mutual Funds tab
  * `fixed` turns true at the tab's first commit of the date, so a commit on one
  * tab never fixes or locks the other tab's window. The rules that use it are in
- * equityReload.js.
+ * equityReload.js. The OPI/OPO tab has no window, so it never reads one.
  * AppSail only: storage.js is copied into the CustodyMatchRunner /
  * CustodyMatchCleanup functions, which do not need this.
  */
 
 import { getBucket, getJson, objectExists, putJson } from "./storage.js";
-import { DEFAULT_WINDOW_DAYS, isBookedMutualFund, parseWindowDays } from "./equityReload.js";
+import { DEFAULT_WINDOW_DAYS, bookedTradeTab, parseWindowDays } from "./equityReload.js";
 
 const windowKey = (date, mutualFund) => `${mutualFund ? "reload-mf" : "reload"}/${date}/window.json`;
 
 const PAGE = 300;
 
-/** Does the date have at least one booked trade of this tab? Stops at the first one found. */
+/** Does the date have at least one booked trade of this tab? Stops at the first one found. OPI/OPO rows belong to neither tab. */
 const hasBookedTrades = async (catalystApp, date, mutualFund) => {
   const zcql = catalystApp.zcql();
+  const tab = mutualFund ? "MUTUAL_FUND" : "EQUITY";
   let lastRowId = "0";
   for (;;) {
     const rows = (
       await zcql.executeZCQLQuery(
-        `SELECT ROWID, ISIN, EXCHG, Security_Type FROM Transaction WHERE TRANDATE = '${date}' AND ROWID > ${lastRowId} ORDER BY ROWID ASC LIMIT ${PAGE}`,
+        `SELECT ROWID, ISIN, EXCHG, Security_Type, Tran_Type FROM Transaction WHERE TRANDATE = '${date}' AND ROWID > ${lastRowId} ORDER BY ROWID ASC LIMIT ${PAGE}`,
       )
     ).map((r) => r.Transaction || r);
-    if (rows.some((row) => isBookedMutualFund(row) === mutualFund)) return true;
+    if (rows.some((row) => bookedTradeTab(row) === tab)) return true;
     if (rows.length < PAGE) return false;
     lastRowId = String(rows[rows.length - 1].ROWID);
   }

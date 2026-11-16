@@ -40,7 +40,10 @@ const FIRST_COMMIT_STEP_LABEL = {
  */
 const PreCommitPanel = ({ runs, onProgressChange, kind = api.KIND.EQUITY }) => {
     const isMf = kind === api.KIND.MUTUAL_FUND;
+    /* Mutual Funds has no match: a waiting file is all a Commit needs. */
+    const noMatch = isMf;
     const tradeWord = isMf ? "mutual fund" : "equity";
+    const rebuilt = "holdings and cash";
     const [dates, setDates] = useState({});
     const [busyDate, setBusyDate] = useState("");
     const [errors, setErrors] = useState({});
@@ -86,10 +89,10 @@ const PreCommitPanel = ({ runs, onProgressChange, kind = api.KIND.EQUITY }) => {
             `Commit ${run.businessDate}?`,
             "",
             ...(s.bookedCount === 0
-                ? [`${s.finalCount.toLocaleString()} trade(s) are added to our books, and the holdings and cash of the ${s.affectedClients} client(s) are updated.`]
+                ? [`${s.finalCount.toLocaleString()} trade(s) are added to our books, and the ${rebuilt} of the ${s.affectedClients} client(s) are updated.`]
                 : [
-                      `All ${s.bookedCount.toLocaleString()} ${tradeWord} trade(s) of this date are removed from our books, with the holdings and cash of the ${s.affectedClients} affected client(s).`,
-                      `Then ${s.finalCount.toLocaleString()} trade(s) are loaded and holdings and cash are rebuilt.`,
+                      `All ${s.bookedCount.toLocaleString()} ${tradeWord} trade(s) of this date are removed from our books, with the ${rebuilt} of the ${s.affectedClients} affected client(s).`,
+                      `Then ${s.finalCount.toLocaleString()} trade(s) are loaded and ${rebuilt} are rebuilt.`,
                   ]),
         ];
         if (open > 0) lines.push("", `${open.toLocaleString()} match difference(s) are still open.`);
@@ -117,7 +120,7 @@ const PreCommitPanel = ({ runs, onProgressChange, kind = api.KIND.EQUITY }) => {
         setBusyDate(run.businessDate);
         setError(run.businessDate, null);
         try {
-            await api.preCommitEquityDate(run.businessDate, { runId: isMf ? "" : run.runId, confirmBigRemoval, kind });
+            await api.preCommitEquityDate(run.businessDate, { runId: noMatch ? "" : run.runId, confirmBigRemoval, kind });
             refreshNotifications();
             await load();
         } catch (err) {
@@ -158,14 +161,13 @@ const PreCommitPanel = ({ runs, onProgressChange, kind = api.KIND.EQUITY }) => {
                     const date = run.businessDate;
                     const p = info?.progress;
                     const summary = info?.summary;
-                    // Mutual Funds: done once committed and no newer file is waiting.
-                    const thisRunDone = isMf
+                    // Mutual Funds and OPI/OPO: done once committed and no newer file is waiting.
+                    const thisRunDone = noMatch
                         ? p?.status === "COMPLETED" && !summary
                         : p?.status === "COMPLETED" && p.runId === run.runId;
                     // No pending FA file: the match only checked our books, so nothing is loaded.
-                    const booksOnly = !isMf && summary?.runId === run.runId && summary.pendingKeys.length === 0;
-                    // Mutual Funds: no match, so a waiting file is all a Commit needs.
-                    const readyToCommit = isMf ? Boolean(summary) : Boolean(summary && summary.runId === run.runId);
+                    const booksOnly = !noMatch && summary?.runId === run.runId && summary.pendingKeys.length === 0;
+                    const readyToCommit = noMatch ? Boolean(summary) : Boolean(summary && summary.runId === run.runId);
                     const exceptions = run.counts?.exceptions || 0;
                     // Past its change window: booked for good, so no Commit. A commit that is
                     // running or stopped still shows, so it can finish (Try again).
@@ -193,7 +195,7 @@ const PreCommitPanel = ({ runs, onProgressChange, kind = api.KIND.EQUITY }) => {
                                     <StatusBadge tone={exceptions > 0 ? STATUS.WARN : STATUS.OK}>
                                         Ready to commit
                                     </StatusBadge>
-                                ) : isMf ? (
+                                ) : noMatch ? (
                                     <StatusBadge tone={STATUS.NEUTRAL}>No new file</StatusBadge>
                                 ) : (
                                     <StatusBadge tone={STATUS.NEUTRAL}>Run the match again</StatusBadge>
@@ -263,10 +265,10 @@ const PreCommitPanel = ({ runs, onProgressChange, kind = api.KIND.EQUITY }) => {
                                             </button>
                                         </div>
                                     </>
-                                ) : isMf ? (
+                                ) : noMatch ? (
                                     !thisRunDone && info && !info.loadError ? (
                                         <p className="cm-verdict-sub">
-                                            No new mutual fund file for {date}. Upload one to commit it again.
+                                            No new {tradeWord} file for {date}. Upload one to commit it again.
                                         </p>
                                     ) : null
                                 ) : !thisRunDone && info && !info.loadError ? (

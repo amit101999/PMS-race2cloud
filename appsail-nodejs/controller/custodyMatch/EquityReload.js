@@ -44,6 +44,10 @@
  * Mutual Funds mapping, and touches only mutual fund trades (Security_Type 'm'
  * or INF + DIR). Equity touches only the other trades. See KIND below.
  *
+ * OPI and OPO rows belong to the OPI/OPO tab, which commits one file at a time
+ * (OpiOpoUpload.js). Neither tab here reads, deletes or re-books them
+ * (bookedTradeTab), and an Equity file with an OPI or OPO row is refused.
+ *
  * Plan: docs/transaction upload/transient-wibbling-eclipse.md.
  */
 
@@ -99,7 +103,7 @@ import {
   DEFAULT_WINDOW_DAYS,
   dateWindowView,
   parseWindowDays,
-  isBookedMutualFund,
+  bookedTradeTab,
   MUTUAL_FUND_BOOKED_COLUMNS,
   mutualFundTradeProblems,
   tradeFromBookedRow,
@@ -196,6 +200,9 @@ const KIND = {
   },
 };
 
+/** Asset_Kind of the OPI/OPO tab's rows in Transaction_Commit_History (written by OpiOpoUpload.js). */
+const OPI_OPO_ASSET_KIND = "OPI_OPO";
+
 /** The tab a request is for, or null when it names an unknown one. */
 const kindOfRequest = (req) => {
   const value = String(req.body?.kind || req.query?.kind || "").trim().toUpperCase();
@@ -206,8 +213,8 @@ const kindOfRequest = (req) => {
 const badKind = (res) =>
   fail(res, 400, { code: "BAD_KIND", message: "kind must be EQUITY or MUTUAL_FUND." });
 
-/** The tab's own booked trades: mutual funds for the Mutual Funds tab, the rest for Equity. */
-const isOwnBookedRow = (kind, row) => isBookedMutualFund(row) === kind.mutualFund;
+/** The tab's own booked trades: mutual funds for the Mutual Funds tab, the rest (apart from OPI/OPO) for Equity. */
+const isOwnBookedRow = (kind, row) => bookedTradeTab(row) === kind.key;
 
 /* Pre-commits running in this server ("<kind>:<date>"), so a double click cannot start two loops for a date. */
 const activeReloads = new Set();
@@ -357,7 +364,7 @@ const readBookedTrades = async (kind, zcql, date) => {
   return trades;
 };
 
-/** ROWIDs of the date's trades of the tab. The other tab's trades of the date are never touched. */
+/** ROWIDs of the date's trades of the tab. The other tabs' trades of the date are never touched (Tran_Type tells OPI/OPO apart). */
 const rowIdsOfDate = async (kind, zcql, date) => {
   const ids = [];
   let lastRowId = "0";
@@ -365,7 +372,7 @@ const rowIdsOfDate = async (kind, zcql, date) => {
     const batch = unwrap(
       await selectWithRetry(
         zcql,
-        `SELECT ROWID, ISIN, EXCHG, Security_Type FROM ${TXN_TABLE} WHERE TRANDATE = '${esc(date)}' AND ROWID > ${lastRowId} ORDER BY ROWID ASC LIMIT ${ZCQL_PAGE}`,
+        `SELECT ROWID, ISIN, EXCHG, Security_Type, Tran_Type FROM ${TXN_TABLE} WHERE TRANDATE = '${esc(date)}' AND ROWID > ${lastRowId} ORDER BY ROWID ASC LIMIT ${ZCQL_PAGE}`,
       ),
       TXN_TABLE,
     );
@@ -516,7 +523,8 @@ const saveProgress = async (bucket, progress) => {
   await putJson(bucket, reloadKey(kindOfProgress(progress), progress.date, "progress.json"), progress);
 };
 
-const readJobStatuses = async (zcql, names) => {
+/* Shared with OpiOpoUpload.js. */
+export const readJobStatuses = async (zcql, names) => {
   const statusByName = new Map();
   for (let i = 0; i < names.length; i += 50) {
     const list = names.slice(i, i + 50).map((n) => `'${esc(n)}'`).join(", ");
@@ -1110,17 +1118,20 @@ export const listConsolidatedFiles = async (req, res) => {
 /* ──────────────────────────── commit history ───────────────────────────── */
 
 /**
- * GET /api/custody-match/reload/commit-history[?kind=MUTUAL_FUND]
+ * GET /api/custody-match/reload/commit-history[?kind=MUTUAL_FUND|OPI_OPO]
  *
- * Only Mutual Funds commits fill Asset_Kind; a row without it is Equity's, so
- * Equity rows read the same whether or not the column exists yet.
+ * Only Mutual Funds and OPI/OPO commits fill Asset_Kind; a row without it is
+ * Equity's, so Equity rows read the same whether or not the column exists yet.
  */
 export const listCommitHistory = async (req, res) => {
   try {
     const catalystApp = req.catalystApp;
     if (!catalystApp) return noApp(res);
-    const kind = kindOfRequest(req);
-    if (!kind) return badKind(res);
+    // The OPI/OPO tab (OpiOpoUpload.js) writes its commits to the same table.
+    const assetKind = String(req.query?.kind || KIND.EQUITY.key).trim().toUpperCase();
+    if (![KIND.EQUITY.key, KIND.MUTUAL_FUND.key, OPI_OPO_ASSET_KIND].includes(assetKind)) {
+      return fail(res, 400, { code: "BAD_KIND", message: "kind must be EQUITY, MUTUAL_FUND or OPI_OPO." });
+    }
 
     const rows = unwrap(
       await catalystApp
@@ -1129,7 +1140,7 @@ export const listCommitHistory = async (req, res) => {
       HISTORY_TABLE,
     );
     const ownRows = rows
-      .filter((row) => (String(row.Asset_Kind || "").trim().toUpperCase() === KIND.MUTUAL_FUND.key) === kind.mutualFund)
+      .filter((row) => (String(row.Asset_Kind || "").trim().toUpperCase() || KIND.EQUITY.key) === assetKind)
       .slice(0, COMMIT_HISTORY_SHOWN);
     const items = ownRows.map((row) => ({
       id: String(row.ROWID),
@@ -1313,10 +1324,12 @@ export const getEquityDate = async (req, res) => {
 /* ─────────────────────────────── pre-commit ────────────────────────────── */
 
 /**
- * Is another import or Pre-commit still running, on either tab? Holdings and
- * cash jobs must not overlap, and both tabs rebuild the same holdings and cash.
+ * Is another import or Pre-commit still running, on any tab? Holdings and cash
+ * jobs must not overlap, and the tabs rebuild the same holdings and cash.
+ * ownLock is the caller's own lock row, which does not count. Also used by the
+ * OPI/OPO tab (OpiOpoUpload.js), whose lock is RELOAD_OPI_<fileId>.
  */
-const busyElsewhere = async (kind, catalystApp, date) => {
+export const busyElsewhere = async (catalystApp, ownLock) => {
   const { running } = await findImportsStillProcessing(catalystApp);
   if (running.length > 0) {
     return `The ${running[0].what} for the import started at ${timeOfDay(running[0].startedAtMs)} is still running. Try again when it finishes.`;
@@ -1327,11 +1340,12 @@ const busyElsewhere = async (kind, catalystApp, date) => {
       .executeZCQLQuery("SELECT jobName FROM Jobs WHERE status = 'RUNNING' AND jobName LIKE 'RELOAD_*' LIMIT 200"),
     "Jobs",
   );
-  // Date locks only (RELOAD_<date>, RELOAD_MF_<date>); the rebuild job rows carry a suffix.
+  // Commit locks only (RELOAD_<date>, RELOAD_MF_<date>, RELOAD_OPI_<fileId>); the rebuild job rows carry a suffix.
   const other = rows
     .map((r) => String(r.jobName || ""))
-    .find((name) => /^RELOAD_(MF_)?\d{4}-\d{2}-\d{2}$/.test(name) && name !== lockJobName(kind, date));
+    .find((name) => /^RELOAD_(MF_)?\d{4}-\d{2}-\d{2}$|^RELOAD_OPI_\d+$/.test(name) && name !== ownLock);
   if (!other) return "";
+  if (other.startsWith("RELOAD_OPI_")) return "An OPI/OPO Commit is still running. Try again when it finishes.";
   const tab = other.startsWith(KIND.MUTUAL_FUND.lockPrefix) ? KIND.MUTUAL_FUND : KIND.EQUITY;
   return `The ${tab.label} Commit of ${other.slice(tab.lockPrefix.length)} is still running. Try again when it finishes.`;
 };
@@ -1421,7 +1435,7 @@ export const preCommitEquityDate = async (req, res) => {
     const closed = await closedDateResponse(kind, res, catalystApp, date);
     if (closed) return closed;
 
-    const busy = await busyElsewhere(kind, catalystApp, date);
+    const busy = await busyElsewhere(catalystApp, lockJobName(kind, date));
     if (busy) return fail(res, 409, { code: "IMPORT_STILL_PROCESSING", message: busy });
 
     const pending = await pendingFaFiles(kind, catalystApp, bucket, date);
@@ -1460,7 +1474,7 @@ export const preCommitEquityDate = async (req, res) => {
       clients: affected.clients.length,
       fileNames: pending.map((f) => f.originalFileName).join(", "),
       startedAtMs,
-      // Only Mutual Funds rows fill it; a row without it is Equity's (listCommitHistory).
+      // Only Mutual Funds rows fill it (OPI/OPO rows are written by OpiOpoUpload.js); a row without it is Equity's.
       ...(kind.mutualFund ? { Asset_Kind: kind.key } : {}),
     });
     const fresh = {
@@ -1535,8 +1549,8 @@ export const retryEquityDate = async (req, res) => {
   }
 };
 
-/** Wait for a bulk write to finish. true = success, false = failed or gave up. */
-const waitForBulkWrite = async (bulkWrite, jobId, onTick) => {
+/** Wait for a bulk write to finish. true = success, false = failed or gave up. Shared with OpiOpoUpload.js. */
+export const waitForBulkWrite = async (bulkWrite, jobId, onTick) => {
   const start = Date.now();
   while (Date.now() - start < BULK_MAX_WAIT_MS) {
     await sleep(BULK_POLL_MS);
@@ -1556,7 +1570,8 @@ const waitForBulkWrite = async (bulkWrite, jobId, onTick) => {
   return false;
 };
 
-const submitRebuildJobs = async (catalystApp, jobs) => {
+/* Shared with OpiOpoUpload.js, which queues holdings jobs (kind "H") only. */
+export const submitRebuildJobs = async (catalystApp, jobs) => {
   const zcql = catalystApp.zcql();
   const scheduling = catalystApp.jobScheduling();
   for (const job of jobs) {

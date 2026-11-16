@@ -42,6 +42,12 @@ import {
   uploadEquityCustodyFile,
   uploadEquityFaFile,
 } from "../../controller/custodyMatch/EquityReload.js";
+import {
+  commitOpiOpoFile,
+  getOpiOpoFile,
+  retryOpiOpoFile,
+  uploadOpiOpoFile,
+} from "../../controller/custodyMatch/OpiOpoUpload.js";
 
 const router = express.Router();
 
@@ -174,6 +180,12 @@ router.post("/reload/:date/pre-commit", preCommitEquityDate);
 
 // POST /api/custody-match/reload/:date/retry — continue a Pre-commit that stopped
 router.post("/reload/:date/retry", retryEquityDate);
+
+// OPI/OPO tab: one file (any number of dates) is one Commit. See OpiOpoUpload.js.
+router.post("/opi-opo/file", uploadOpiOpoFile);
+router.get("/opi-opo/:fileId", getOpiOpoFile);
+router.post("/opi-opo/:fileId/commit", commitOpiOpoFile);
+router.post("/opi-opo/:fileId/retry", retryOpiOpoFile);
 
 // GET /api/custody-match/run/:runId — poll target
 router.get("/run/:runId", getRunStatus);

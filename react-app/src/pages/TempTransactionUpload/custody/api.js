@@ -165,7 +165,7 @@ export const proceedToImport = (runIds) => json("/runs/proceed", "POST", { runId
  * server keeps each tab's files, window, Commit and history apart. The Mutual
  * Funds tab has no custodian file and no match.
  */
-export const KIND = { EQUITY: "EQUITY", MUTUAL_FUND: "MUTUAL_FUND" };
+export const KIND = { EQUITY: "EQUITY", MUTUAL_FUND: "MUTUAL_FUND", OPI_OPO: "OPI_OPO" };
 
 const kindQuery = (kind) => (kind && kind !== KIND.EQUITY ? `kind=${encodeURIComponent(kind)}` : "");
 const withKind = (path, kind) => {
@@ -200,6 +200,13 @@ export const preCommitEquityDate = (date, { runId = "", confirmBigRemoval = fals
 export const retryEquityDate = (date, kind = KIND.EQUITY) => json(`/reload/${date}/retry`, "POST", { kind });
 
 export const getCommitHistory = (kind = KIND.EQUITY) => request(withKind("/reload/commit-history", kind));
+
+/* OPI/OPO tab: one file (any number of dates) is one Commit. fileId is the file's uploadedAtMs. */
+export const uploadOpiOpoFile = ({ file, uploadDate }) => form("/opi-opo/file", { file, uploadDate });
+export const getOpiOpoFile = (fileId) => request(`/opi-opo/${encodeURIComponent(fileId)}`);
+export const commitOpiOpoFile = (fileId, { startedBy = "" } = {}) =>
+  json(`/opi-opo/${encodeURIComponent(fileId)}/commit`, "POST", { startedBy });
+export const retryOpiOpoFile = (fileId) => json(`/opi-opo/${encodeURIComponent(fileId)}/retry`, "POST", {});
 
 export const getConsolidatedFiles = (kind = KIND.EQUITY) => request(withKind("/reload/consolidated-files", kind));
 
@@ -242,6 +249,7 @@ export const previewHeaders = (file, type) => form("/field-map/preview", { file,
 export const PROFILE_TYPE = {
   FA: "FA",
   FA_MUTUAL_FUND: "FA_MUTUAL_FUND",
+  FA_OPI_OPO: "FA_OPI_OPO",
   CUSTODY_RESIDENTIAL: "CUSTODY_RESIDENTIAL",
   CUSTODY_NDPMS: "CUSTODY_NDPMS",
   CUSTODY_MUTUAL_FUND: "CUSTODY_MUTUAL_FUND",
@@ -253,6 +261,7 @@ export const PROFILE_TYPE = {
 export const PROFILE_LABEL = {
   FA: "Transaction file (FA)",
   FA_MUTUAL_FUND: "Transaction file (FA) — Mutual Funds",
+  FA_OPI_OPO: "Transaction file (FA) — OPI/OPO",
   CUSTODY_RESIDENTIAL: "Custodian — Residential",
   CUSTODY_NDPMS: "Custodian — NRE/NRO/NDPMS",
   CUSTODY_MUTUAL_FUND: "Custodian — Mutual Funds",
@@ -265,6 +274,8 @@ export const PROFILE_HELP = {
   FA: "The daily transaction file. Whatever layout you map here is rewritten into the standard 26-column format before it is imported, so the import is unaffected.",
   FA_MUTUAL_FUND:
     "The mutual fund fund-accounting file. Same 26 fields as the regular transaction file — it renames one heading (SYMBOLCODE/ISIN CODE), which is why it is mapped separately. Its rows are matched only against the Mutual Funds custodian files. Dates may be in any common format (2026-08-20, 20-08-2026, 20-Aug-2026) and are stored as YYYY-MM-DD.",
+  FA_OPI_OPO:
+    "The OPI/OPO file: shares moved in (OPI) or out (OPO) from another system. Same columns as the Equity transaction file, without a Transaction ID. Saved separately, so it never changes the Equity mapping.",
   CUSTODY_RESIDENTIAL: "The deal allocation file for Resident accounts.",
   CUSTODY_NDPMS: "The deal allocation file for NRE/NRO/NDPMS accounts.",
   CUSTODY_MUTUAL_FUND:
@@ -281,11 +292,14 @@ export const PROFILE_HELP = {
 export const FA_FILE_TYPE = {
   REGULAR: "REGULAR",
   MUTUAL_FUND: "MUTUAL_FUND",
+  /* The OPI/OPO tab's file: an Equity file whose rows are all OPI or OPO. */
+  OPI_OPO: "OPI_OPO",
 };
 
 export const FA_FILE_TYPE_LABEL = {
   REGULAR: "Equity",
   MUTUAL_FUND: "Mutual Funds",
+  OPI_OPO: "Equity",
 };
 
 export const SOURCE_BY = { NAME: "name", INDEX: "index", ABSENT: "absent" };

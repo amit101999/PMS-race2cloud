@@ -8,6 +8,7 @@ import DifferenceReports from "./custody/DifferenceReports";
 import ExceptionGrid from "./custody/ExceptionGrid";
 // import GateTwo from "./custody/GateTwo"; — old Commit, replaced by PreCommitPanel
 import PreCommitPanel from "./custody/PreCommitPanel";
+import OpiOpoCommitPanel from "./custody/OpiOpoCommitPanel";
 import WorkflowTracker from "./WorkflowTracker";
 import DownloadButton from "../../components/common/DownloadButton";
 import "./tokens.css";
@@ -55,10 +56,22 @@ const TABS = [
     { key: "equity", label: "Equity" },
     { key: "mutualFunds", label: "Mutual Funds" },
     { key: "cashBalance", label: "Cash" },
+    { key: "opiOpo", label: "OPI/OPO" },
 ];
 
+/** One Commit block per date that has a file on the Mutual Funds tab. */
+function commitDatesOf(files, runIdPrefix) {
+    const dates = [...new Set(files.map((f) => f.businessDate).filter(Boolean))].sort();
+    return dates.map((date) => ({
+        runId: `${runIdPrefix}-${date}`,
+        businessDate: date,
+        status: "READY",
+        isRunning: false,
+    }));
+}
+
 /**
- * Transaction Upload — three tabs.
+ * Transaction Upload — four tabs.
  *
  * Equity: upload the FA and custodian files of a date, match them, then
  * Commit. A re-uploaded file replaces or adds to the date's trades by
@@ -70,6 +83,11 @@ const TABS = [
  * MUTUAL_FUND on the server), but with no custodian file and no match. Each tab
  * touches only its own trades and keeps its own window and history. Cash
  * Balance is not built yet.
+ *
+ * OPI/OPO: shares moved in (OPI) or out (OPO) from another system. One file
+ * may hold many trade dates and is committed once as a whole (OpiOpoUpload.js on
+ * the server): no file date, no Transaction ID, no change window, and holdings
+ * rebuilt but not cash.
  *
  * The old single-page upload is kept below, commented out.
  */
@@ -85,19 +103,12 @@ const TempTransaction = () => {
     const [preCommitTick, setPreCommitTick] = useState(0);
     const handlePreCommitProgress = useCallback(() => setPreCommitTick((tick) => tick + 1), []);
 
-    /* Mutual Funds tab: the files on its card. Each of their dates gets a Commit block. */
+    /* Mutual Funds and OPI/OPO tabs: the files on each card. Each of their dates gets a Commit block. */
     const [mfFiles, setMfFiles] = useState([]);
-    const mfDatesKey = [...new Set(mfFiles.map((f) => f.businessDate).filter(Boolean))].sort().join(",");
-    const mfCommitDates = useMemo(
-        () =>
-            (mfDatesKey ? mfDatesKey.split(",") : []).map((date) => ({
-                runId: `mf-${date}`,
-                businessDate: date,
-                status: "READY",
-                isRunning: false,
-            })),
-        [mfDatesKey],
-    );
+    const mfCommitDates = useMemo(() => commitDatesOf(mfFiles, "mf"), [mfFiles]);
+    const mfDatesKey = mfCommitDates.map((r) => r.businessDate).join(",");
+    /* OPI/OPO tab: the files on its card. Each file gets its own Commit block. */
+    const [opiOpoFiles, setOpiOpoFiles] = useState([]);
 
     const [historyItems, setHistoryItems] = useState([]);
     const [historyLoading, setHistoryLoading] = useState(false);
@@ -184,26 +195,26 @@ const TempTransaction = () => {
             <div className="temp-transaction-container txn-ops txn-fixed-head-page">
                 {/* Tabs and the workflow steps stay fixed; only the content below them scrolls. */}
                 <div className="txn-sticky-head">
-                    <div className="txn-tabs" role="tablist">
-                        {TABS.map((tab) => (
-                            <button
-                                key={tab.key}
-                                type="button"
-                                role="tab"
-                                aria-selected={activeTab === tab.key}
-                                className={`txn-tab ${activeTab === tab.key ? "active" : ""}`}
-                                onClick={() => setActiveTab(tab.key)}
-                            >
-                                {tab.label}
-                            </button>
-                        ))}
-                    </div>
+                    <div className="txn-tabs">
+                        <div className="txn-tabs-list" role="tablist">
+                            {TABS.map((tab) => (
+                                <button
+                                    key={tab.key}
+                                    type="button"
+                                    role="tab"
+                                    aria-selected={activeTab === tab.key}
+                                    className={`txn-tab ${activeTab === tab.key ? "active" : ""}`}
+                                    onClick={() => setActiveTab(tab.key)}
+                                >
+                                    {tab.label}
+                                </button>
+                            ))}
+                        </div>
 
-                    {activeTab === "mutualFunds" ? (
-                        <div className="txo-tracker-bar txo-tracker-bar--static">
-                            {/* No match on this tab, so no workflow steps: just the upload date. */}
-                            <span />
-                            <label className="cm-date">
+                        {/* Mutual Funds and OPI/OPO have no workflow steps, so their upload
+                            date sits in the tab bar instead of a bar of its own. */}
+                        {activeTab === "mutualFunds" || activeTab === "opiOpo" ? (
+                            <label className="cm-date txn-tabs-date">
                                 <span>Upload date</span>
                                 <input
                                     type="date"
@@ -212,8 +223,8 @@ const TempTransaction = () => {
                                     onChange={(e) => setUploadDate(e.target.value)}
                                 />
                             </label>
-                        </div>
-                    ) : null}
+                        ) : null}
+                    </div>
 
                     {activeTab === "equity" ? (
                         <div className="txo-tracker-bar txo-tracker-bar--static">
@@ -240,7 +251,10 @@ const TempTransaction = () => {
                 <div className="txn-scroll-body">
                 {activeTab === "mutualFunds" ? (
                     <>
+                        {/* Each tab gets its own card (key), so switching tabs never carries
+                            one tab's date, file type or window over to another. */}
                         <CustodyMatchPanel
+                            key="mutualFunds"
                             reloadMode
                             kind={KIND.MUTUAL_FUND}
                             uploadDate={uploadDate}
@@ -260,6 +274,24 @@ const TempTransaction = () => {
                         </div>
                         <CommitHistory refreshToken={preCommitTick} kind={KIND.MUTUAL_FUND} />
                     </>
+                ) : activeTab === "opiOpo" ? (
+                    <>
+                        <CustodyMatchPanel
+                            key="opiOpo"
+                            reloadMode
+                            kind={KIND.OPI_OPO}
+                            uploadDate={uploadDate}
+                            onFaFilesChange={setOpiOpoFiles}
+                            preCommitTick={preCommitTick}
+                        />
+
+                        <OpiOpoCommitPanel files={opiOpoFiles} onProgressChange={handlePreCommitProgress} />
+
+                        <div className="txo-section-head txo-section-head--tight">
+                            <h2>History</h2>
+                        </div>
+                        <CommitHistory refreshToken={preCommitTick} kind={KIND.OPI_OPO} />
+                    </>
                 ) : activeTab === "cashBalance" ? (
                     <div className="temp-transaction-card cm-tab-empty">
                         Cash Balance upload is not available yet.
@@ -267,6 +299,7 @@ const TempTransaction = () => {
                 ) : (
                     <>
                         <CustodyMatchPanel
+                            key="equity"
                             reloadMode
                             uploadDate={uploadDate}
                             onRunChange={setRuns}

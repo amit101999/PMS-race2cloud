@@ -40,6 +40,11 @@ import {
 export const PROFILE_TYPE = {
   FA: "FA",
   FA_MUTUAL_FUND: "FA_MUTUAL_FUND",
+  /*
+   * The OPI/OPO tab's file: the Equity layout without a Transaction ID, so it
+   * has its own mapping. Saving it never changes the Equity tab's mapping.
+   */
+  FA_OPI_OPO: "FA_OPI_OPO",
   CUSTODY_RESIDENTIAL: "CUSTODY_RESIDENTIAL",
   CUSTODY_NDPMS: "CUSTODY_NDPMS",
   CUSTODY_MUTUAL_FUND: "CUSTODY_MUTUAL_FUND",
@@ -65,9 +70,9 @@ export const PROFILE_TYPE = {
 
 export const PROFILE_TYPES = Object.values(PROFILE_TYPE);
 
-/** The two transaction-file (fund accounting) profiles, as opposed to the custodian ones. */
+/** The transaction-file (fund accounting) profiles, as opposed to the custodian ones. */
 export const isFaProfileType = (type) =>
-  type === PROFILE_TYPE.FA || type === PROFILE_TYPE.FA_MUTUAL_FUND;
+  type === PROFILE_TYPE.FA || type === PROFILE_TYPE.FA_MUTUAL_FUND || type === PROFILE_TYPE.FA_OPI_OPO;
 
 /** Stored blobs carry this so a later shape change can migrate rather than misread. */
 export const PROFILE_VERSION = 1;
@@ -368,9 +373,13 @@ const FA_MUTUAL_FUND_FIELDS = [
   })),
 ];
 
+// OPI / OPO entries come from another system and carry no Transaction ID.
+const FA_OPI_OPO_FIELDS = FA_FIELDS.filter((entry) => entry.field !== "transactionId");
+
 export const FIELD_CATALOG = {
   [PROFILE_TYPE.FA]: FA_FIELDS,
   [PROFILE_TYPE.FA_MUTUAL_FUND]: FA_MUTUAL_FUND_FIELDS,
+  [PROFILE_TYPE.FA_OPI_OPO]: FA_OPI_OPO_FIELDS,
 
   [PROFILE_TYPE.CUSTODY_RESIDENTIAL]: [
     { field: "actualCode", label: "Actual Code", kind: "code", required: true, matchKey: true },
@@ -540,6 +549,8 @@ const FA_FILLER_FIELDS = ["subFolio", "transactionFee", "transactionFeeServiceTa
 
 export const DEFAULT_PROFILES = {
   [PROFILE_TYPE.FA]: FA_DEFAULT_PROFILE,
+  // The same 26 template positions as the Equity file.
+  [PROFILE_TYPE.FA_OPI_OPO]: FA_DEFAULT_PROFILE,
 
   // The 26 template positions, then this file's own two on the end.
   [PROFILE_TYPE.FA_MUTUAL_FUND]: {
@@ -1171,6 +1182,7 @@ export const toStoredProfile = (
 const RETIRED_FIELDS = {
   [PROFILE_TYPE.FA]: ["netRate", "netAmount"],
   [PROFILE_TYPE.FA_MUTUAL_FUND]: ["netRate", "netAmount"],
+  [PROFILE_TYPE.FA_OPI_OPO]: ["netRate", "netAmount", "transactionId"],
   [PROFILE_TYPE.CUSTODY_NDPMS]: ["tranDate"],
 };
 

@@ -1244,6 +1244,22 @@
     box-shadow: 0 1px 2px rgba(17, 24, 39, 0.04);
 }
 
+/* The tab buttons, with an optional upload date at the right end of the bar. */
+.txn-tabs {
+    align-items: center;
+}
+
+.txn-tabs-list {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.txn-tabs-date {
+    margin-left: auto;
+    padding-right: 6px;
+}
+
 .txn-tab {
     padding: 9px 22px;
     border: 1px solid transparent;

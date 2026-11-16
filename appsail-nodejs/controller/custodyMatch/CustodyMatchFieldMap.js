@@ -73,7 +73,7 @@ const headingsFor = (type, profile) => {
     if (!source) continue;
     if (source.by === SOURCE_BY.INDEX) {
       out[field] =
-        type === PROFILE_TYPE.FA && FA_HEADERS[source.index] !== undefined
+        (type === PROFILE_TYPE.FA || type === PROFILE_TYPE.FA_OPI_OPO) && FA_HEADERS[source.index] !== undefined
           ? FA_HEADERS[source.index]
           : `column ${source.index + 1}`;
     } else {
@@ -199,9 +199,9 @@ const supersedeForType = async (app, type) => {
   if (type === PROFILE_TYPE.CUSTODY_CORP_ACTION || type === PROFILE_TYPE.CUSTODY_CORP_ALLOCATION) {
     return { superseded: [], supersedeErrors: [] };
   }
-  // The mutual fund file is not matched any more (Mutual Funds tab), so no
-  // Equity run was read under its mapping.
-  if (type === PROFILE_TYPE.FA_MUTUAL_FUND) {
+  // The mutual fund and OPI/OPO files are never matched (their own tabs), so no
+  // Equity run was read under their mappings.
+  if (type === PROFILE_TYPE.FA_MUTUAL_FUND || type === PROFILE_TYPE.FA_OPI_OPO) {
     return { superseded: [], supersedeErrors: [] };
   }
   if (type !== PROFILE_TYPE.CUSTODY_HOLDINGS) return supersedeStoredDates(app);
@@ -443,6 +443,8 @@ export const previewHeaders = async (req, res) => {
       try {
         const profiles = req.catalystApp ? await loadFieldMapProfiles(req.catalystApp) : null;
         detectedType = await detectFaFileType(file.data, { profiles });
+        // An OPI/OPO file has the Equity layout, so it reads as an Equity file here.
+        if (asked === PROFILE_TYPE.FA_OPI_OPO && detectedType === PROFILE_TYPE.FA) detectedType = asked;
       } catch (detectErr) {
         console.warn("previewHeaders: could not detect the transaction file type:", detectErr.message);
       }

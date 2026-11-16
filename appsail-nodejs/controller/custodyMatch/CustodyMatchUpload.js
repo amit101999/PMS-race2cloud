@@ -48,6 +48,7 @@ import {
   listCustodyHistory,
   listKnownSchemes,
   loadFieldMapProfiles,
+  objectExists,
   parseCustodyHistoryKey,
   putBuffer,
   saveToCustodyHistory,
@@ -322,6 +323,8 @@ export const listMatchDates = async (req, res) => {
 
     const byPair = new Map();
     for (const f of await listFiles(catalystApp)) {
+      // OPI/OPO files are filed under their upload date and never matched.
+      if (f.fileType === FA_FILE_TYPE.OPI_OPO) continue;
       const uploadDate = String(f.uploadedOn);
       const date = String(f.forDate);
       const pairKey = `${uploadDate}|${date}`;
@@ -390,6 +393,12 @@ export const uploadFaFile = async (req, res) => {
       return fail(res, 400, {
         code: "USE_MUTUAL_FUNDS_TAB",
         message: "Mutual fund transaction files are uploaded on the Mutual Funds tab.",
+      });
+    }
+    if (faFileType === FA_FILE_TYPE.OPI_OPO) {
+      return fail(res, 400, {
+        code: "USE_OPI_OPO_TAB",
+        message: "OPI/OPO transaction files are uploaded on the OPI/OPO tab.",
       });
     }
     const profileType = PROFILE_TYPE.FA;
@@ -945,13 +954,22 @@ export const deleteUploadedFile = async (req, res) => {
     }
 
     // A trade date past its change window is locked, removal included. A mutual
-    // fund file follows the Mutual Funds tab's window, every other file Equity's.
+    // fund file follows the Mutual Funds tab's window, an OPI/OPO file has none,
+    // and every other file follows Equity's.
     const mutualFund = parsed.fileType === FA_FILE_TYPE.MUTUAL_FUND;
-    const closed = closedDateMessage(
-      parsed.businessDate,
-      await readDateWindow(catalystApp, parsed.businessDate, { mutualFund }),
-    );
+    const opiOpo = parsed.fileType === FA_FILE_TYPE.OPI_OPO;
+    const closed = opiOpo
+      ? ""
+      : closedDateMessage(parsed.businessDate, await readDateWindow(catalystApp, parsed.businessDate, { mutualFund }));
     if (closed) return fail(res, 409, { code: "DATE_CLOSED", message: closed });
+    // An OPI/OPO file stays once its Commit has started (OpiOpoUpload.js keeps
+    // opi-opo/<fileId>/progress.json from then on), so it can never be uploaded again.
+    if (opiOpo && (await objectExists(getBucket(catalystApp), `opi-opo/${parsed.uploadedAtMs}/progress.json`))) {
+      return fail(res, 409, {
+        code: "ALREADY_COMMITTED",
+        message: "This OPI/OPO file is committed (or being committed), so it cannot be removed.",
+      });
+    }
 
     const fileName = parsed.originalFileName || key.split("/").pop();
     const notice = { jobName: `RM-${Date.now()}`, title: "File removal" };
@@ -978,8 +996,8 @@ export const deleteUploadedFile = async (req, res) => {
     );
     await deleteFileRows(catalystApp, rows);
     const uploadedOn = rows[0] ? String(rows[0].uploadedOn) : null;
-    // Matching never reads a mutual fund file, so removing one leaves the date's match as it is.
-    const superseded = uploadedOn && !mutualFund
+    // Matching never reads a mutual fund or OPI/OPO file, so removing one leaves the date's match as it is.
+    const superseded = uploadedOn && !mutualFund && !opiOpo
       ? await supersedeRunsForDate(catalystApp, parsed.businessDate, uploadedOn)
       : { runIds: [] };
     const after = await uploadDayFiles(catalystApp, parsed.businessDate, uploadedOn);

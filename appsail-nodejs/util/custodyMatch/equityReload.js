@@ -205,6 +205,28 @@ export const isBookedMutualFund = (row) =>
   isMutualFundTrade(row.ISIN, row.EXCHG) || text(row.Security_Type).toLowerCase() === "m";
 
 /*
+ * OPI (shares in) and OPO (shares out) move shares between another system and
+ * our books. They are uploaded and committed only on the OPI/OPO tab.
+ */
+export const OPI_OPO_TYPES = ["OPI", "OPO"];
+export const isOpiOpoType = (tranType) => OPI_OPO_TYPES.includes(upper(tranType));
+
+/**
+ * The tab that owns a booked trade: "OPI_OPO", "MUTUAL_FUND" or "EQUITY". Each
+ * tab reads, deletes and re-books only its own rows. OPI / OPO is checked first:
+ * an OPI/OPO file may move mutual fund units too (INF on DIR), and those rows
+ * must stay the OPI/OPO tab's, or a Mutual Funds re-commit of their date would
+ * remove them (its file never holds OPI or OPO). The Mutual Funds tab only
+ * books BY-, SQB and SL+, so it loses none of its own rows.
+ * The row needs ISIN, EXCHG, Security_Type and Tran_Type.
+ */
+export const bookedTradeTab = (row) => {
+  if (isOpiOpoType(row.Tran_Type)) return "OPI_OPO";
+  if (isBookedMutualFund(row)) return "MUTUAL_FUND";
+  return "EQUITY";
+};
+
+/*
  * Mutual Funds tab: the values a mutual fund trade carries besides the 27
  * columns — TDS, Stamp Duty and the five extra columns added on the mapping
  * screen — as Transaction columns, in the order the import file has them.
@@ -316,12 +338,14 @@ export const fingerprint = (t) =>
  * Upload checks on the rows of one new file. Each returned problem refuses the
  * whole file, because the system cannot tell a new trade from a changed one
  * without the ID, nor which of two different rows with one ID is right.
+ * OPI/OPO files carry no ID: that tab commits a whole file once and never has
+ * to tell a changed row from a new one (OpiOpoUpload.js).
  */
-export const fileProblems = (trades, { mutualFund = false } = {}) => {
+export const fileProblems = (trades, { mutualFund = false, opiOpo = false } = {}) => {
   const problems = [];
   const firstById = new Map();
   for (const t of trades) {
-    if (!t.txnId) {
+    if (!t.txnId && !opiOpo) {
       problems.push({
         row: t.rowNumber,
         code: "MISSING_TRANSACTION_ID",
@@ -333,7 +357,8 @@ export const fileProblems = (trades, { mutualFund = false } = {}) => {
       continue;
     }
     // The Mutual Funds tab takes every row of its file as a mutual fund, whatever the exchange.
-    if (!mutualFund && isMutualFundTrade(t.isin, t.exchange)) {
+    // The OPI/OPO tab takes mutual fund units moved in or out as well.
+    if (!mutualFund && !opiOpo && isMutualFundTrade(t.isin, t.exchange)) {
       problems.push({
         row: t.rowNumber,
         code: "MUTUAL_FUND_ROW",
@@ -343,6 +368,20 @@ export const fileProblems = (trades, { mutualFund = false } = {}) => {
       });
       continue;
     }
+    // OPI/OPO rows go only through the OPI/OPO tab, and that tab takes nothing else.
+    if (!mutualFund && opiOpo !== isOpiOpoType(t.tranType)) {
+      problems.push({
+        row: t.rowNumber,
+        code: opiOpo ? "NOT_OPI_OPO_ROW" : "OPI_OPO_ROW",
+        message: opiOpo
+          ? `"${t.tranType}" is not allowed in the OPI/OPO file. Every row must be OPI (shares in) or OPO (shares out).`
+          : `${t.tranType} moves shares in or out from another system. Upload it in the OPI/OPO tab.`,
+        column: "TRANSTYPE",
+        value: t.tranType,
+      });
+      continue;
+    }
+    if (!t.txnId) continue;
     const first = firstById.get(t.txnId);
     if (!first) {
       firstById.set(t.txnId, t);
@@ -728,6 +767,16 @@ const csvField = (v) => {
 /** The trades as the 27-column consolidated CSV (template + Transaction ID), which the import reads. */
 export const tradesToTemplateCsv = (trades) =>
   [[...FA_HEADERS, FA_TRANSACTION_ID_HEADER], ...trades.map((t) => t.cells)]
+    .map((cells) => cells.map(csvField).join(","))
+    .join("\n");
+
+/**
+ * OPI/OPO tab: the 26 template columns only. Its rows have no Transaction ID, so
+ * the column is left out and the import never writes a blank ID into the unique
+ * Transaction_ID column.
+ */
+export const tradesToOpiOpoCsv = (trades) =>
+  [FA_HEADERS, ...trades.map((t) => t.cells.slice(0, FA_HEADERS.length))]
     .map((cells) => cells.map(csvField).join(","))
     .join("\n");
 

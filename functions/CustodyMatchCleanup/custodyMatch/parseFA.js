@@ -319,7 +319,7 @@ export const parseFaFile = (
           fail(
             rowNumber,
             ROW_ERROR.UNKNOWN_TRAN_TYPE,
-            `"${rawType}" is not a recognised transaction type. Expected BY-*, BY+, SQB, OPI, BUY or B for a buy; SELL, SL+, SL or S for a sell.`,
+            `"${rawType}" is not a recognised transaction type. Expected BY-*, BY+, SQB, OPI, BUY or B for a buy; SELL, SL+, SL, S or OPO for a sell.`,
             colName.tranType,
             rawType,
           );
@@ -359,8 +359,12 @@ export const parseFaFile = (
 
         // The settlement dates are required too. Placeholders such as 0, null
         // or NA are not dates, so they fail like any other unreadable value.
+        // OPI / OPO move shares, not cash, so their cash settlement date may be
+        // blank; the import already stores a blank one as empty.
+        const movesNoCash = ["OPI", "OPO"].includes(String(rawType || "").trim().toUpperCase());
         for (const field of ["settlementDate", "cashSetdate"]) {
           if (!(field in at)) continue;
+          if (field === "cashSetdate" && movesNoCash && !get(field)) continue;
           if (!readDate(field)) rejected = true;
         }
         /*

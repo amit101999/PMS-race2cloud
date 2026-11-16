@@ -176,16 +176,23 @@ export const CUSTODY_TYPE_TO_FORMAT = {
  * through its own field mapping: it carries the same 26 fields as the regular
  * file under one different heading, so one mapping cannot describe both. A day
  * holds at most one file of each type.
+ *
+ * OPI_OPO is the OPI/OPO tab's file: shares moved in (OPI) or out (OPO) from
+ * another system. It uses the regular file's layout and mapping; it has its own
+ * type so each tab lists, replaces and commits only its own files. It is never
+ * matched against the custodian files.
  */
 export const FA_FILE_TYPE = {
   REGULAR: "REGULAR",
   MUTUAL_FUND: "MUTUAL_FUND",
+  OPI_OPO: "OPI_OPO",
 };
 
 /** How each transaction file is named in a message to the user. */
 export const FA_FILE_TYPE_LABEL = {
   [FA_FILE_TYPE.REGULAR]: "transaction",
   [FA_FILE_TYPE.MUTUAL_FUND]: "mutual fund transaction",
+  [FA_FILE_TYPE.OPI_OPO]: "OPI/OPO transaction",
 };
 
 /**
