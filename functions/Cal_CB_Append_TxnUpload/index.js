@@ -141,8 +141,8 @@ function sortCashEvents(allEvents) {
    settlement date (mapInflow), money leaving from its trade date (mapOutflow).
    OPI / OPO move shares, not cash, so there is no OPI branch here.
    Keep in sync with the twin in functions/Cal_CB_Per_TNX/index.js. */
-/* A mutual fund row's Net_Amount is already the final money moved (buy: + stamp
-   duty, sell: − STT; see deriveMutualFundAmount in appsail TempTransactionUpload.js),
+/* A mutual fund row's Net_Amount is already the final money moved (the file's
+   TOTAL AMOUNT, or buy: + stamp duty, sell: − STT; see deriveMutualFundAmount in appsail TempTransactionUpload.js),
    so STT is not applied to it a second time. Same rule in the twin function and
    in functions/CashCalculation. */
 const isMutualFundRow = (t) => String(t.Security_Type ?? "").trim().toLowerCase() === "m";

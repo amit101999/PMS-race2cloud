@@ -106,7 +106,9 @@ const TempTransaction = () => {
     /* Mutual Funds and OPI/OPO tabs: the files on each card. Each of their dates gets a Commit block. */
     const [mfFiles, setMfFiles] = useState([]);
     const mfCommitDates = useMemo(() => commitDatesOf(mfFiles, "mf"), [mfFiles]);
-    const mfDatesKey = mfCommitDates.map((r) => r.businessDate).join(",");
+    /* The Commit blocks re-read their dates whenever a file is added or removed, not only
+       when a date appears: a second file for an already committed date makes it Ready again. */
+    const mfDatesKey = `${mfCommitDates.map((r) => r.businessDate).join(",")}|${mfFiles.map((f) => f.key).join(",")}`;
     /* OPI/OPO tab: the files on its card. Each file gets its own Commit block. */
     const [opiOpoFiles, setOpiOpoFiles] = useState([]);
 

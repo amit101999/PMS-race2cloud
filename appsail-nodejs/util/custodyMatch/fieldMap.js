@@ -45,6 +45,11 @@ export const PROFILE_TYPE = {
    * has its own mapping. Saving it never changes the Equity tab's mapping.
    */
   FA_OPI_OPO: "FA_OPI_OPO",
+  /*
+   * The Mutual Funds tab's TDS file. For now it is only mapped and stored; no
+   * row of it is read into our books (EquityReload.js uploadMfTdsFile).
+   */
+  FA_MUTUAL_FUND_TDS: "FA_MUTUAL_FUND_TDS",
   CUSTODY_RESIDENTIAL: "CUSTODY_RESIDENTIAL",
   CUSTODY_NDPMS: "CUSTODY_NDPMS",
   CUSTODY_MUTUAL_FUND: "CUSTODY_MUTUAL_FUND",
@@ -362,8 +367,11 @@ const FA_MUTUAL_FUND_FIELDS = [
   ...FA_FIELDS.map((entry) =>
     entry.field === "transactionId" ? { ...entry, required: true } : entry,
   ),
-  { field: "tds", label: "TDS", kind: "number", required: true },
-  { field: "stampDuty", label: "Stamp Duty", kind: "number", required: true },
+  // The trade's final amount. When filled it is booked as it is; when blank the
+  // import works it out (TempTransactionUpload.js deriveMutualFundAmount).
+  { field: "totalAmount", label: "TOTAL AMOUNT", kind: "number", required: false },
+  { field: "tds", label: "TDS", kind: "number", required: false },
+  { field: "stampDuty", label: "Stamp Duty", kind: "number", required: false },
   ...EXTRA_COLUMN_FIELDS.map((field, i) => ({
     field,
     label: `Extra column ${i + 1}`,
@@ -376,10 +384,47 @@ const FA_MUTUAL_FUND_FIELDS = [
 // OPI / OPO entries come from another system and carry no Transaction ID.
 const FA_OPI_OPO_FIELDS = FA_FIELDS.filter((entry) => entry.field !== "transactionId");
 
+/*
+ * The Mutual Funds TDS file, one row per TDI / TDO entry. Only the columns that
+ * say whose tax it is, which entry, which day and how much are required. Types
+ * are "text" because TDI / TDO are not buy/sell codes.
+ */
+const MF_TDS_COLUMNS = [
+  ["brokerCode", "Broker code", "code", false],
+  ["accountCode", "Broker acc id", "code", true],
+  ["securityCode", "Security code", "code", false],
+  ["exchange", "Exchange", "text", false],
+  ["tranType", "Transaction type", "text", true],
+  ["tranDate", "Transaction date", "date", true],
+  ["paymentDate", "Payment date", "date", false],
+  ["amount", "AMT", "number", true],
+  ["price", "Price", "number", false],
+  ["brokerage", "Brokerage", "number", false],
+  ["serviceTax", "Service tax", "number", false],
+  ["setDateFlag", "Settlement date flag", "text", false],
+  ["mktRate", "Market rate as on security in date", "number", false],
+  ["cashSymbol", "Cash symbol", "code", false],
+  ["stt", "STT amount", "number", false],
+  ["accruedInterest", "Accrued interest", "number", false],
+  ["blockRef", "Block ref.", "text", false],
+  ["remarks", "Remarks", "text", false],
+  ["chequeNumber", "Cheque number", "text", false],
+  ["chequeDetail", "Cheque details", "text", false],
+  ["bankRef", "bankref", "text", false],
+];
+
+const FA_MUTUAL_FUND_TDS_FIELDS = MF_TDS_COLUMNS.map(([field, label, kind, required]) => ({
+  field,
+  label,
+  kind,
+  required,
+}));
+
 export const FIELD_CATALOG = {
   [PROFILE_TYPE.FA]: FA_FIELDS,
   [PROFILE_TYPE.FA_MUTUAL_FUND]: FA_MUTUAL_FUND_FIELDS,
   [PROFILE_TYPE.FA_OPI_OPO]: FA_OPI_OPO_FIELDS,
+  [PROFILE_TYPE.FA_MUTUAL_FUND_TDS]: FA_MUTUAL_FUND_TDS_FIELDS,
 
   [PROFILE_TYPE.CUSTODY_RESIDENTIAL]: [
     { field: "actualCode", label: "Actual Code", kind: "code", required: true, matchKey: true },
@@ -558,6 +603,11 @@ export const DEFAULT_PROFILES = {
     tds: byIndex(26),
     stampDuty: byIndex(27),
   },
+
+  // The headings of the sample TDS file.
+  [PROFILE_TYPE.FA_MUTUAL_FUND_TDS]: Object.fromEntries(
+    MF_TDS_COLUMNS.map(([field, header]) => [field, byName(header)]),
+  ),
 
   [PROFILE_TYPE.CUSTODY_RESIDENTIAL]: {
     actualCode: byName("CLIENT_CODE"),

@@ -3,6 +3,7 @@ import { PassThrough, Readable } from "stream";
 
 import { stratusSignedUrlToString } from "../../util/stratusSignedUrl.js";
 import { releaseImportMarker } from "../../util/custodyMatch/runStore.js";
+import { MUTUAL_FUND_TOTAL_AMOUNT_HEADER, mutualFundAmount } from "../../util/custodyMatch/equityReload.js";
 
 export const BUCKET_NAME = "client-transaction-files";
 export const TABLE_NAME = "Transaction";
@@ -672,25 +673,21 @@ function deriveNetRateAndAmount({ tranType, qty, rate, brokeragePerShare }) {
 }
 
 /**
- * Mutual fund rows. The file has no amount column, so it is worked out here:
- *   Buy  (BY-, SQB): Net_Amount = QTY × RATE + Stamp Duty
- *   Sell (SL+, SQS): Net_Amount = QTY × RATE − STT (TRANEXPENSE)
- *   NETRATE        = Net_Amount ÷ QTY
+ * Mutual fund rows:
+ *   Net_Amount = TOTAL AMOUNT when the cell is filled, exactly as given;
+ *                otherwise worked out by mutualFundAmount
+ *                (buy: QTY × RATE + Stamp Duty, sell: QTY × RATE − STT)
+ *   NETRATE    = Net_Amount ÷ QTY
  * TDS is stored but does not change the amount. Net_Amount is the final money
  * moved, so the cash jobs use it as it is for these rows (no second ± STT).
- * Returns "" for both when RATE or QTY is absent.
+ * Returns "" for both when there is no amount or no quantity.
  */
-function deriveMutualFundAmount({ tranType, qty, rate, stampDuty, stt }) {
-  const r = Number(rate) || 0;
+function deriveMutualFundAmount({ tranType, qty, rate, stampDuty, stt, totalAmount }) {
   const q = Math.abs(Number(qty) || 0);
-  if (!r || !q) return { netRate: "", netAmount: "" };
-  const gross = q * r;
-  const netAmount = round4(
-    isBuyTransType(tranType)
-      ? gross + (Math.abs(Number(stampDuty)) || 0)
-      : gross - (Math.abs(Number(stt)) || 0),
-  );
-  return { netRate: String(round4(netAmount / q)), netAmount: String(netAmount) };
+  const given = String(totalAmount ?? "").trim();
+  const amount = given !== "" ? Number(given) : mutualFundAmount({ tranType, qty, rate, stampDuty, stt });
+  if (!q || amount === null || !Number.isFinite(amount)) return { netRate: "", netAmount: "" };
+  return { netRate: String(round4(amount / q)), netAmount: given !== "" ? given : String(amount) };
 }
 
 /**
@@ -781,6 +778,8 @@ export function normalizeCsvForBulkUpload(fileBuffer, { mutualFund = false } = {
   const brokIdx = srcIdx("BROKERAGEPERSHARE");
   const stampIdx = srcIdx("Stamp Duty");
   const sttIdx = srcIdx("TRANEXPENSE");
+  // Mutual funds only; it has no Transaction column of its own (not in HEADER_MAP).
+  const totalAmountIdx = srcIdx(MUTUAL_FUND_TOTAL_AMOUNT_HEADER);
 
   const newHeaders = [...headerMappings.flatMap((m) => m.targets), "NETRATE", "Net_Amount"];
   if (mutualFund) newHeaders.push("Security_Type", "Security_Type_Description");
@@ -800,6 +799,7 @@ export function normalizeCsvForBulkUpload(fileBuffer, { mutualFund = false } = {
           rate: cellAt(rateIdx),
           stampDuty: cellAt(stampIdx),
           stt: cellAt(sttIdx),
+          totalAmount: cellAt(totalAmountIdx),
         })
       : deriveNetRateAndAmount({
           tranType: cellAt(typeIdx),

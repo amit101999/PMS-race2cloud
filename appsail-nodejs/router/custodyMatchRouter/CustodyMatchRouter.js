@@ -41,6 +41,7 @@ import {
   startEquityRun,
   uploadEquityCustodyFile,
   uploadEquityFaFile,
+  uploadMfTdsFile,
 } from "../../controller/custodyMatch/EquityReload.js";
 import {
   commitOpiOpoFile,
@@ -180,6 +181,9 @@ router.post("/reload/:date/pre-commit", preCommitEquityDate);
 
 // POST /api/custody-match/reload/:date/retry — continue a Pre-commit that stopped
 router.post("/reload/:date/retry", retryEquityDate);
+
+// POST /api/custody-match/reload/:date/tds-file — Mutual Funds: keep the date's TDS file (no effect on our books yet)
+router.post("/reload/:date/tds-file", uploadMfTdsFile);
 
 // OPI/OPO tab: one file (any number of dates) is one Commit. See OpiOpoUpload.js.
 router.post("/opi-opo/file", uploadOpiOpoFile);

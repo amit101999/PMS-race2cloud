@@ -241,11 +241,42 @@ export const MUTUAL_FUND_BOOKED_COLUMNS = [
   "Column5",
 ];
 
-/** Adds the mutual fund values (TDS, Stamp Duty, Column1–5, in that order) to a trade. */
-export const withMutualFundValues = (trade, values) => {
+/**
+ * A mutual fund trade's amount when the file gives no TOTAL AMOUNT:
+ *   Buy  (BY-, SQB): QTY × RATE + Stamp Duty
+ *   Sell (SL+):      QTY × RATE − STT (TRANEXPENSE)
+ * A blank Stamp Duty or STT counts as 0. Rounded to 4 decimals. Returns null
+ * when RATE or QTY is missing. The import (normalizeCsvForBulkUpload in
+ * TempTransactionUpload.js) uses this same function.
+ */
+export const mutualFundAmount = ({ tranType, qty, rate, stampDuty, stt }) => {
+  const r = Number(rate) || 0;
+  const q = Math.abs(Number(qty) || 0);
+  if (!r || !q) return null;
+  const gross = q * r;
+  const isBuy = /^(BY-|SQB)/i.test(text(tranType));
+  const amount = isBuy ? gross + (Math.abs(Number(stampDuty)) || 0) : gross - (Math.abs(Number(stt)) || 0);
+  return Math.round((amount + Number.EPSILON) * 1e4) / 1e4;
+};
+
+/**
+ * Adds the mutual fund values to a trade: TDS, Stamp Duty, Column1–5 (in that
+ * order) and the amount. `amount` is the file's TOTAL AMOUNT, or the booked
+ * Net_Amount. A blank file amount is worked out with mutualFundAmount, so a
+ * re-uploaded row without TOTAL AMOUNT still compares equal to its booked row.
+ */
+export const withMutualFundValues = (trade, values, amount = "") => {
   const cells = MUTUAL_FUND_BOOKED_COLUMNS.map((_, i) => {
     const cell = text(values[i]);
     return cell.toLowerCase() === "null" ? "" : cell;
+  });
+  const given = text(amount).toLowerCase() === "null" ? "" : text(amount);
+  const worked = mutualFundAmount({
+    tranType: trade.tranType,
+    qty: trade.quantity,
+    rate: trade.rate,
+    stampDuty: cells[1],
+    stt: trade.stt,
   });
   return {
     ...trade,
@@ -253,6 +284,7 @@ export const withMutualFundValues = (trade, values) => {
     tds: numText(cells[0]),
     stampDuty: numText(cells[1]),
     extras: cells.slice(2).join("|"),
+    totalAmount: given !== "" ? numText(given) : worked === null ? "" : numText(worked),
   };
 };
 
@@ -293,13 +325,14 @@ export const tradeFromBookedRow = (row, { mutualFund = false } = {}) => {
   });
   const trade = tradeFromCells(cells, { rowId: text(row.ROWID), booked: true });
   return mutualFund
-    ? withMutualFundValues(trade, MUTUAL_FUND_BOOKED_COLUMNS.map((column) => row[column]))
+    ? withMutualFundValues(trade, MUTUAL_FUND_BOOKED_COLUMNS.map((column) => row[column]), row.Net_Amount)
     : trade;
 };
 
 /**
- * The values that say whether a trade changed. tds, stampDuty and extras are
- * set on mutual fund trades only; on equity trades both sides leave them unset.
+ * The values that say whether a trade changed. tds, stampDuty, extras and
+ * totalAmount are set on mutual fund trades only; on equity trades both sides
+ * leave them unset.
  */
 const COMPARED_FIELDS = [
   "account",
@@ -318,6 +351,7 @@ const COMPARED_FIELDS = [
   "tds",
   "stampDuty",
   "extras",
+  "totalAmount",
 ];
 
 export const sameValues = (a, b) => COMPARED_FIELDS.every((f) => a[f] === b[f]);
@@ -428,6 +462,13 @@ export const mutualFundTradeProblems = (trades) => {
     const rate = Number(t.rate);
     if (t.rate === "" || !Number.isFinite(rate) || rate <= 0) {
       add("BAD_NUMBER", "Rate must be a number greater than zero.", "RATE", t.rate);
+    }
+    // Blank only when the rate or quantity is missing, which is reported already.
+    if (t.totalAmount !== "" && t.totalAmount !== undefined) {
+      const amount = Number(t.totalAmount);
+      if (!Number.isFinite(amount) || amount <= 0) {
+        add("BAD_NUMBER", `TOTAL AMOUNT must be a number greater than zero; found "${t.totalAmount}".`, "TOTAL AMOUNT", t.totalAmount);
+      }
     }
     for (const [field, label] of [
       ["stampDuty", "Stamp Duty"],
@@ -781,17 +822,35 @@ export const tradesToOpiOpoCsv = (trades) =>
     .join("\n");
 
 /**
- * Mutual Funds tab: the trades as the 34-column file the import reads for
- * mutual funds — the 26, TDS, Stamp Duty, Transaction ID, then Column1–5
- * (normalizeCsvForBulkUpload with mutualFund in TempTransactionUpload.js reads
- * these headings through HEADER_MAP; keep the two in step).
+ * Mutual Funds tab: the trades as the 35-column file the import reads for
+ * mutual funds — the 26, TDS, Stamp Duty, Transaction ID, Column1–5, then
+ * TOTAL AMOUNT (normalizeCsvForBulkUpload with mutualFund in
+ * TempTransactionUpload.js reads these headings; keep the two in step).
+ * TOTAL AMOUNT is the file's value, the worked-out amount, or a booked row's
+ * Net_Amount, so a re-commit keeps every amount as it was booked.
  */
+export const MUTUAL_FUND_TOTAL_AMOUNT_HEADER = "TOTAL AMOUNT";
+
 export const tradesToMutualFundCsv = (trades) =>
   [
-    [...FA_HEADERS, "TDS", "Stamp Duty", FA_TRANSACTION_ID_HEADER, ...MUTUAL_FUND_BOOKED_COLUMNS.slice(2)],
+    [
+      ...FA_HEADERS,
+      "TDS",
+      "Stamp Duty",
+      FA_TRANSACTION_ID_HEADER,
+      ...MUTUAL_FUND_BOOKED_COLUMNS.slice(2),
+      MUTUAL_FUND_TOTAL_AMOUNT_HEADER,
+    ],
     ...trades.map((t) => {
       const mf = t.mfCells || MUTUAL_FUND_BOOKED_COLUMNS.map(() => "");
-      return [...t.cells.slice(0, FA_HEADERS.length), mf[0], mf[1], t.cells[COL.txnId], ...mf.slice(2)];
+      return [
+        ...t.cells.slice(0, FA_HEADERS.length),
+        mf[0],
+        mf[1],
+        t.cells[COL.txnId],
+        ...mf.slice(2),
+        t.totalAmount ?? "",
+      ];
     }),
   ]
     .map((cells) => cells.map(csvField).join(","))
