@@ -471,7 +471,16 @@ export const sendBonusReceivable = async (req, res) => {
 /* ======================================================
    APPLY BONUS (BACKGROUND JOB)
    ====================================================== */
-export const applyStockBonus = async (req, res) => {
+/**
+ * POST /bonus/apply — the normal Confirm & Apply (custodian check required).
+ * POST /bonus/apply-bypass — temporary: applies without the custodian files.
+ * The switch comes from the route only, never from the request body, so the
+ * normal route can never skip the check.
+ */
+export const applyStockBonus = (req, res) => runBonusApply(req, res, { bypassCustodian: false });
+export const applyStockBonusBypass = (req, res) => runBonusApply(req, res, { bypassCustodian: true });
+
+const runBonusApply = async (req, res, { bypassCustodian }) => {
   try {
     if (!req.catalystApp) {
       return res.status(500).json({
@@ -534,18 +543,29 @@ export const applyStockBonus = async (req, res) => {
     );
     if (receivable.length === 0) {
       const applied = await isBonusApplied(zcql, bonusEvent);
-      return res.status(409).json({
-        success: false,
-        code: applied ? "ALREADY_APPLIED" : "NOT_RECEIVABLE",
-        message: applied
-          ? "This bonus has already been applied."
-          : `This bonus (${isin}, Record Date ${recordDateISO}) has not been sent as Receivable yet. ` +
-            "Compare with the Ex-Entitlement file and send it as receivable first.",
-      });
+      if (applied || !bypassCustodian) {
+        return res.status(409).json({
+          success: false,
+          code: applied ? "ALREADY_APPLIED" : "NOT_RECEIVABLE",
+          message: applied
+            ? "This bonus has already been applied."
+            : `This bonus (${isin}, Record Date ${recordDateISO}) has not been sent as Receivable yet. ` +
+              "Compare with the Ex-Entitlement file and send it as receivable first.",
+        });
+      }
     }
-    const receipt = await recordBonusReceivedDates(catalystApp, zcql, { isin, recordDateISO, receivable });
-    if (receipt.error) {
-      return res.status(409).json({ success: false, code: receipt.code, message: receipt.error });
+    if (bypassCustodian) {
+      // Temporary bypass: no custodian files, so no Received Dates are stored.
+      // The bonus job still marks any Receivable accounts Received once applied.
+      console.log(
+        `[BonusController] Custodian check bypassed: ${isin}, record date ${recordDateISO}, ` +
+          `ratio ${r1}:${r2}, ${receivable.length} Receivable account(s) to mark Received.`,
+      );
+    } else {
+      const receipt = await recordBonusReceivedDates(catalystApp, zcql, { isin, recordDateISO, receivable });
+      if (receipt.error) {
+        return res.status(409).json({ success: false, code: receipt.code, message: receipt.error });
+      }
     }
 
     const jobName = `BON_${isin.slice(-6)}_${recordDateISO}`;

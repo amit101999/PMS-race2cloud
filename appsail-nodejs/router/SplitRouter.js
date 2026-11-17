@@ -1,6 +1,7 @@
 import express from "express";
 import {
   addStockSplit,
+  addStockSplitBypass,
   getAllSecuritiesISINs,
   previewStockSplit,
   getSplitApplyStatus,
@@ -16,6 +17,8 @@ import {
 const router = express.Router();
 
 router.post("/add", addStockSplit);
+// Temporary: apply without the custodian files (no Receivable / Benefit check).
+router.post("/apply-bypass", addStockSplitBypass);
 router.post("/preview", previewStockSplit);
 // Stage 1: vs the Ex-Entitlement file, then mark every account Receivable.
 router.post("/compare-custodian", compareWithCustodian("split"));
