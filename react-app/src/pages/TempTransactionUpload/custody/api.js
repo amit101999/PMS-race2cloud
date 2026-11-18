@@ -201,9 +201,12 @@ export const retryEquityDate = (date, kind = KIND.EQUITY) => json(`/reload/${dat
 
 export const getCommitHistory = (kind = KIND.EQUITY) => request(withKind("/reload/commit-history", kind));
 
-/* Mutual Funds tab: the trade date's TDS file. It is only kept for now; answers with the date's tdsFiles. */
-export const uploadMfTdsFile = ({ file, businessDate, uploadDate }) =>
-  form(`/reload/${businessDate}/tds-file`, { file, uploadDate });
+/* TDS tab: a trade date's TDS files, only kept for now. Each call answers with the date's files. */
+export const getTdsFiles = (date) => request(`/tds/${date}`);
+export const uploadTdsFile = ({ file, date, uploadDate }) => form(`/tds/${date}`, { file, uploadDate });
+export const deleteTdsFile = (date, key) =>
+  request(`/tds/${date}?key=${encodeURIComponent(key)}`, { method: "DELETE" });
+export const getTdsDownloadUrl = (key) => request(`/tds/download?key=${encodeURIComponent(key)}`);
 
 /* OPI/OPO tab: one file (any number of dates) is one Commit. fileId is the file's uploadedAtMs. */
 export const uploadOpiOpoFile = ({ file, uploadDate }) => form("/opi-opo/file", { file, uploadDate });

@@ -54,7 +54,6 @@
 import { FA_FILE_TYPE, FILE_SIDE, RUN_STATUS } from "../../util/custodyMatch/constants.js";
 import {
   FA_CONSOLIDATED_PROFILE,
-  FIELD_CATALOG,
   PROFILE_TYPE,
   resolveFieldMap,
 } from "../../util/custodyMatch/fieldMap.js";
@@ -1303,91 +1302,6 @@ const buildMutualFundList = async (catalystApp, bucket, date, pending) => {
   return { finalTrades, affected, summary };
 };
 
-/* ──────────────────────────── mutual fund TDS file ─────────────────────────── */
-
-/*
- * The Mutual Funds TDS file of a trade date is only mapped and kept, at
- *   reload-mf/<date>/tds/<uploadedAtMs>_<uploadedOn>_<file name>
- * Every upload is kept; none is replaced, and nothing in our books changes.
- */
-const tdsFolder = (date) => reloadKey(KIND.MUTUAL_FUND, date, "tds/");
-const TDS_KEY_PATTERN = /\/tds\/(\d+)_(\d{4}-\d{2}-\d{2})_(.+)$/;
-
-/** The date's TDS files, newest first. */
-const listTdsFiles = async (bucket, date) =>
-  (await listAllObjects(bucket, tdsFolder(date)))
-    .map((object) => {
-      const match = object.key.match(TDS_KEY_PATTERN);
-      if (!match) return null;
-      return {
-        key: object.key,
-        fileName: match[3],
-        uploadedAtMs: Number(match[1]),
-        uploadedOn: match[2],
-        sizeBytes: object.sizeBytes,
-      };
-    })
-    .filter(Boolean)
-    .sort((a, b) => b.uploadedAtMs - a.uploadedAtMs);
-
-/**
- * POST /api/custody-match/reload/:date/tds-file
- * form-data: file, uploadDate
- *
- * Checks only that the file is a CSV and that its headings give every required
- * field of the saved TDS mapping; the rows are not read.
- */
-export const uploadMfTdsFile = async (req, res) => {
-  try {
-    const catalystApp = req.catalystApp;
-    if (!catalystApp) return noApp(res);
-
-    const date = String(req.params.date || "").trim();
-    if (!DATE_PATTERN.test(date)) return fail(res, 400, { code: "BAD_DATE", message: "Date must be yyyy-mm-dd." });
-    const uploadDay = readUploadedOn(req.body?.uploadDate);
-    if (uploadDay.error) return fail(res, 400, { code: "BAD_UPLOAD_DATE", message: uploadDay.error });
-
-    const file = getUploadedFile(req);
-    if (!file) {
-      return fail(res, 400, { code: "NO_FILE", message: "CSV file is required. Send it as form-data with key 'file'." });
-    }
-    if (!isCsv(file.name)) return fail(res, 400, { code: "NOT_CSV", message: "Only CSV files are allowed." });
-
-    const headerLine = firstLineOf(file.data);
-    const headers = splitHeaderCells(headerLine, detectSeparator(headerLine));
-    const profiles = await loadFieldMapProfiles(catalystApp);
-    const { index } = resolveFieldMap(PROFILE_TYPE.FA_MUTUAL_FUND_TDS, profiles[PROFILE_TYPE.FA_MUTUAL_FUND_TDS], headers);
-    const missing = FIELD_CATALOG[PROFILE_TYPE.FA_MUTUAL_FUND_TDS]
-      .filter((entry) => entry.required && index[entry.field] === undefined)
-      .map((entry) => entry.label);
-    if (missing.length > 0) {
-      return fail(res, 400, {
-        code: "TDS_COLUMNS_MISSING",
-        message: `The TDS file has no column for: ${missing.join(", ")}. Check the file or its mapping.`,
-        fileName: file.name,
-        missing,
-      });
-    }
-
-    const uploadedAtMs = Date.now();
-    const safeName = String(file.name).replace(/[^A-Za-z0-9._ ()-]+/g, "_").slice(0, 120);
-    const key = `${tdsFolder(date)}${uploadedAtMs}_${uploadDay.uploadedOn}_${safeName}`;
-    const bucket = getBucket(catalystApp);
-    await putBuffer(bucket, key, file.data);
-
-    return res.json({
-      success: true,
-      date,
-      key,
-      message: `TDS file ${file.name} saved for ${displayDate(date)}.`,
-      tdsFiles: await listTdsFiles(bucket, date),
-    });
-  } catch (error) {
-    console.error("[EquityReload] uploadMfTdsFile:", error);
-    return fail(res, 500, { message: error.message || "Could not save the TDS file." });
-  }
-};
-
 /** GET /api/custody-match/reload/:date[?kind=MUTUAL_FUND] */
 export const getEquityDate = async (req, res) => {
   try {
@@ -1424,7 +1338,6 @@ export const getEquityDate = async (req, res) => {
       })),
       // A summary describes the pending files it was built from; older ones say nothing now.
       summary: summary && summary.pendingKeys?.join() === pendingKeysOf(pending).join() ? summary : null,
-      ...(kind.mutualFund ? { tdsFiles: await listTdsFiles(bucket, date) } : {}),
     });
   } catch (error) {
     console.error("[EquityReload] getEquityDate:", error);

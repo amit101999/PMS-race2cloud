@@ -635,38 +635,6 @@ const CustodyMatchPanel = ({
         loadFaDay();
     }, [loadFaDay]);
 
-    /* Mutual Funds tab: the TDS files kept for the FA card's date, newest first.
-       For now they are only stored; nothing in our books reads them. The TDS
-       block shows only once the date has a trade file: one waiting for Commit,
-       or a committed one (its window is then fixed). */
-    const [tdsFiles, setTdsFiles] = useState([]);
-    const [tdsDateHasTradeFile, setTdsDateHasTradeFile] = useState(false);
-    const [tdsError, setTdsError] = useState(null);
-    const tdsInputRef = useRef(null);
-    const faFileCount = faDay?.fa?.raw?.length || 0;
-
-    const loadTdsFiles = useCallback(async () => {
-        if (!isMf || !faDate) {
-            setTdsFiles([]);
-            setTdsDateHasTradeFile(false);
-            return;
-        }
-        try {
-            const res = await api.getEquityDate(faDate, api.KIND.MUTUAL_FUND);
-            setTdsFiles(res.tdsFiles || []);
-            setTdsDateHasTradeFile((res.pendingFiles || []).length > 0 || Boolean(res.window?.fixed));
-        } catch (err) {
-            setTdsError({ message: err.message, detail: err.detail });
-        }
-        // faFileCount and preCommitTick: re-read after a trade file is uploaded, removed or committed.
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [isMf, faDate, faFileCount, preCommitTick]);
-
-    useEffect(() => {
-        setTdsError(null);
-        loadTdsFiles();
-    }, [loadTdsFiles]);
-
     /* The page shell shows a compact status summary above this panel and
        needs the same `day` this panel already loads — exposed rather than
        re-fetched, so there is exactly one place that reads storage for a date. */
@@ -1083,33 +1051,8 @@ const CustodyMatchPanel = ({
      * layout the user corrected there — a Residential file dropped into the
      * NDPMS slot — is uploaded as what it actually is.
      */
-    /* Mutual Funds TDS file: mapped, then only kept. Throws, so the mapping panel shows the reason. */
-    const uploadTds = async (file) => {
-        setTdsError(null);
-        const res = await api.uploadMfTdsFile({ file, businessDate: faDate, uploadDate });
-        setTdsFiles(res.tdsFiles || []);
-        reportJob({
-            id: `txn-tds-upload-${Date.now()}`,
-            label: "TDS file uploaded",
-            status: "completed",
-            message: res.message,
-        });
-        return res;
-    };
-
-    const handleTdsFilePicked = (f) => {
-        if (!f) return;
-        setTdsError(null);
-        if (!uploadDate || !faDate) {
-            setTdsError({ message: "Choose the upload date and the file date before uploading the TDS file." });
-            return;
-        }
-        setPending({ kind: "tds", file: f, profileType: api.PROFILE_TYPE.FA_MUTUAL_FUND_TDS });
-    };
-
     const uploadPending = async ({ profileType, replace }) => {
         if (!pending) return null;
-        if (pending.kind === "tds") return uploadTds(pending.file);
         if (pending.kind === "fa") {
             return uploadFa(pending.file, {
                 fileType: FA_FILE_TYPE_FOR_PROFILE[profileType] || pending.fileType,
@@ -1489,7 +1432,7 @@ const CustodyMatchPanel = ({
                             "Date the transaction file is for",
                             faDate,
                             changeFaDate,
-                            faBusy || pending?.kind === "fa" || pending?.kind === "tds",
+                            faBusy || pending?.kind === "fa",
                         )}
 
                         {/* The date's change window: chosen until its first commit fixes it. */}
@@ -1660,53 +1603,6 @@ const CustodyMatchPanel = ({
                         </div>
                     ) : null}
 
-                    {/* Mutual Funds: the date's TDS file, mapped and then only kept for now.
-                        Shown once the picked date has a trade file (waiting or committed). */}
-                    {isMf && faDate && (tdsDateHasTradeFile || faFiles.length > 0) ? (
-                        <div className="up-filelist-wrap">
-                            <div className="up-filelist-head">TDS file</div>
-                            <input
-                                ref={tdsInputRef}
-                                type="file"
-                                accept=".csv"
-                                hidden
-                                aria-label="Upload TDS file"
-                                onChange={(e) => {
-                                    const f = e.target.files[0];
-                                    e.target.value = "";
-                                    handleTdsFilePicked(f);
-                                }}
-                            />
-                            <button
-                                type="button"
-                                className="cm-secondary"
-                                disabled={!uploadDate || Boolean(pending)}
-                                title={uploadDate ? "" : "Choose the upload date first"}
-                                onClick={() => tdsInputRef.current?.click()}
-                            >
-                                Upload TDS file
-                            </button>
-                            {tdsError ? <UploadErrorDetails message={tdsError.message} detail={tdsError.detail} /> : null}
-                            {tdsFiles.length > 0 ? (
-                                <div className="up-filelist">
-                                    {tdsFiles.map((f) => (
-                                        <div className="up-file-row" key={f.key}>
-                                            <FileGlyph />
-                                            <div className="up-file-main">
-                                                <span className="up-file-name" title={f.fileName}>
-                                                    {f.fileName}
-                                                </span>
-                                                <span className="up-file-meta">
-                                                    TDS · {toDisplayDate(faDate)} · {api.formatBytes(f.sizeBytes)} · uploaded{" "}
-                                                    {toDisplayDate(f.uploadedOn)}
-                                                </span>
-                                            </div>
-                                        </div>
-                                    ))}
-                                </div>
-                            ) : null}
-                        </div>
-                    ) : null}
                 </div>
               </div>
 
@@ -2078,16 +1974,8 @@ const CustodyMatchPanel = ({
                 open={Boolean(pending)}
                 file={pending?.file || null}
                 requestedType={pending?.profileType || null}
-                // The Mutual Funds tab maps mutual fund files (and their TDS file) only, the OPI/OPO tab OPI/OPO files only.
-                {...(isMf
-                    ? {
-                          types: [
-                              pending?.kind === "tds"
-                                  ? api.PROFILE_TYPE.FA_MUTUAL_FUND_TDS
-                                  : api.PROFILE_TYPE.FA_MUTUAL_FUND,
-                          ],
-                      }
-                    : {})}
+                // The Mutual Funds tab maps mutual fund files only, the OPI/OPO tab OPI/OPO files only.
+                {...(isMf ? { types: [api.PROFILE_TYPE.FA_MUTUAL_FUND] } : {})}
                 {...(isOpiOpo ? { types: [api.PROFILE_TYPE.FA_OPI_OPO] } : {})}
                 pickedDate={faOnly ? faDate : custodyDate}
                 onUpload={uploadPending}

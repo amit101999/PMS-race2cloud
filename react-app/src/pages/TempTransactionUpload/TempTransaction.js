@@ -9,6 +9,7 @@ import ExceptionGrid from "./custody/ExceptionGrid";
 // import GateTwo from "./custody/GateTwo"; — old Commit, replaced by PreCommitPanel
 import PreCommitPanel from "./custody/PreCommitPanel";
 import OpiOpoCommitPanel from "./custody/OpiOpoCommitPanel";
+import TdsUploadPanel from "./custody/TdsUploadPanel";
 import WorkflowTracker from "./WorkflowTracker";
 import DownloadButton from "../../components/common/DownloadButton";
 import "./tokens.css";
@@ -55,6 +56,7 @@ function deriveStage({ faReady, custodyReady, runs }) {
 const TABS = [
     { key: "equity", label: "Equity" },
     { key: "mutualFunds", label: "Mutual Funds" },
+    { key: "tds", label: "TDS" },
     { key: "cashBalance", label: "Cash" },
     { key: "opiOpo", label: "OPI/OPO" },
 ];
@@ -71,7 +73,7 @@ function commitDatesOf(files, runIdPrefix) {
 }
 
 /**
- * Transaction Upload — four tabs.
+ * Transaction Upload — five tabs.
  *
  * Equity: upload the FA and custodian files of a date, match them, then
  * Commit. A re-uploaded file replaces or adds to the date's trades by
@@ -83,6 +85,9 @@ function commitDatesOf(files, runIdPrefix) {
  * MUTUAL_FUND on the server), but with no custodian file and no match. Each tab
  * touches only its own trades and keeps its own window and history. Cash
  * Balance is not built yet.
+ *
+ * TDS: the mutual fund TDS files of a trade date, several per date, checked
+ * against the TDS mapping and only kept for now (TdsUploadPanel, TdsUpload.js).
  *
  * OPI/OPO: shares moved in (OPI) or out (OPO) from another system. One file
  * may hold many trade dates and is committed once as a whole (OpiOpoUpload.js on
@@ -213,9 +218,9 @@ const TempTransaction = () => {
                             ))}
                         </div>
 
-                        {/* Mutual Funds and OPI/OPO have no workflow steps, so their upload
+                        {/* Mutual Funds, TDS and OPI/OPO have no workflow steps, so their upload
                             date sits in the tab bar instead of a bar of its own. */}
-                        {activeTab === "mutualFunds" || activeTab === "opiOpo" ? (
+                        {activeTab === "mutualFunds" || activeTab === "tds" || activeTab === "opiOpo" ? (
                             <label className="cm-date txn-tabs-date">
                                 <span>Upload date</span>
                                 <input
@@ -276,6 +281,8 @@ const TempTransaction = () => {
                         </div>
                         <CommitHistory refreshToken={preCommitTick} kind={KIND.MUTUAL_FUND} />
                     </>
+                ) : activeTab === "tds" ? (
+                    <TdsUploadPanel uploadDate={uploadDate} />
                 ) : activeTab === "opiOpo" ? (
                     <>
                         <CustodyMatchPanel

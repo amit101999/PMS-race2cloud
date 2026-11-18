@@ -46,8 +46,8 @@ export const PROFILE_TYPE = {
    */
   FA_OPI_OPO: "FA_OPI_OPO",
   /*
-   * The Mutual Funds tab's TDS file. For now it is only mapped and stored; no
-   * row of it is read into our books (EquityReload.js uploadMfTdsFile).
+   * The TDS tab's mutual fund TDS file. For now it is only mapped and stored; no
+   * row of it is read into our books (TdsUpload.js).
    */
   FA_MUTUAL_FUND_TDS: "FA_MUTUAL_FUND_TDS",
   CUSTODY_RESIDENTIAL: "CUSTODY_RESIDENTIAL",
