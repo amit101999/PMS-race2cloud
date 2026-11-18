@@ -236,7 +236,7 @@ export const CUSTODY_MODE_LABEL = {
 /** All three profiles plus their field catalogs, in one call. */
 export const getFieldMaps = () => request("/field-map");
 
-/** `labels` = names of the extra columns added on the Mutual Funds mapping. */
+/** `labels` = names of the extra columns added on the mapping screen. */
 export const saveFieldMap = (type, profile, updatedBy, labels = {}) =>
   json(`/field-map/${type}`, "PUT", { profile, updatedBy, labels });
 

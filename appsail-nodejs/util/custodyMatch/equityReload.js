@@ -241,6 +241,29 @@ export const MUTUAL_FUND_BOOKED_COLUMNS = [
   "Column5",
 ];
 
+/*
+ * Equity tab: the five extra columns added on the mapping screen, as
+ * Transaction columns. They follow the Transaction ID in the Equity
+ * consolidated file (tradesToTemplateCsv).
+ */
+export const EXTRA_BOOKED_COLUMNS = MUTUAL_FUND_BOOKED_COLUMNS.slice(2);
+
+/** A blank cell, or the text "null" a booked row may hold, both read as "". */
+const cleanCell = (v) => {
+  const cell = text(v);
+  return cell.toLowerCase() === "null" ? "" : cell;
+};
+
+/**
+ * Adds an equity trade's extra column values (Column1–5). `extras` is compared,
+ * so changing an extra value on re-upload counts as a changed trade, as it
+ * does on the Mutual Funds tab.
+ */
+export const withExtraColumnValues = (trade, values) => {
+  const extraCells = EXTRA_BOOKED_COLUMNS.map((_, i) => cleanCell(values[i]));
+  return { ...trade, extraCells, extras: extraCells.join("|") };
+};
+
 /**
  * A mutual fund trade's amount when the file gives no TOTAL AMOUNT:
  *   Buy  (BY-, SQB): QTY × RATE + Stamp Duty
@@ -326,13 +349,14 @@ export const tradeFromBookedRow = (row, { mutualFund = false } = {}) => {
   const trade = tradeFromCells(cells, { rowId: text(row.ROWID), booked: true });
   return mutualFund
     ? withMutualFundValues(trade, MUTUAL_FUND_BOOKED_COLUMNS.map((column) => row[column]), row.Net_Amount)
-    : trade;
+    : withExtraColumnValues(trade, EXTRA_BOOKED_COLUMNS.map((column) => row[column]));
 };
 
 /**
- * The values that say whether a trade changed. tds, stampDuty, extras and
- * totalAmount are set on mutual fund trades only; on equity trades both sides
- * leave them unset.
+ * The values that say whether a trade changed. tds, stampDuty and totalAmount
+ * are set on mutual fund trades only; on equity trades both sides leave them
+ * unset. extras is set on both tabs' trades when they are read through
+ * withMutualFundValues or withExtraColumnValues.
  */
 const COMPARED_FIELDS = [
   "account",
@@ -805,9 +829,16 @@ const csvField = (v) => {
   return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 };
 
-/** The trades as the 27-column consolidated CSV (template + Transaction ID), which the import reads. */
+/**
+ * The trades as the 32-column consolidated CSV (template, Transaction ID,
+ * Column1–5), which the matcher and the import read. The import maps
+ * Column1–5 by heading (HEADER_MAP in TempTransactionUpload.js).
+ */
 export const tradesToTemplateCsv = (trades) =>
-  [[...FA_HEADERS, FA_TRANSACTION_ID_HEADER], ...trades.map((t) => t.cells)]
+  [
+    [...FA_HEADERS, FA_TRANSACTION_ID_HEADER, ...EXTRA_BOOKED_COLUMNS],
+    ...trades.map((t) => [...t.cells, ...(t.extraCells || EXTRA_BOOKED_COLUMNS.map(() => ""))]),
+  ]
     .map((cells) => cells.map(csvField).join(","))
     .join("\n");
 

@@ -493,7 +493,7 @@ const HEADER_MAP = {
   "Stamp Duty": "STAMPDUTY",
   // Column 27 of the Equity tab's consolidated file (FA_TRANSACTION_ID_HEADER in fieldMap.js).
   "Transaction ID": "Transaction_ID",
-  // The extra columns added on the Mutual Funds mapping screen.
+  // The extra columns added on the Equity and Mutual Funds mapping screens.
   Column1: "Column1",
   Column2: "Column2",
   Column3: "Column3",

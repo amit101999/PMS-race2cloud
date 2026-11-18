@@ -352,15 +352,27 @@ const FA_FIELDS = [
  * are carried for the reconciliation to display — so neither can reject a row.
  */
 /*
- * Extra columns the user adds on the mapping screen with "Add column" (Mutual
- * Funds file only). Each goes to the Transaction column of the same name
- * (Column1 ... Column5). The name the user typed for it is stored with the
- * mapping as `labels` and shown in place of "Extra column N".
+ * Extra columns the user adds on the mapping screen with "Add column". The
+ * name the user typed for each is stored with the mapping as `labels` and shown
+ * in place of "Extra column N".
+ *
+ * Transaction files (Equity and Mutual Funds): each goes to the Transaction
+ * column of the same name (Column1 ... Column5).
+ * Custodian files (Resident and NDPMS): mapped and saved only. Custodian rows
+ * are never booked, so the values are not stored or shown anywhere yet.
  */
 export const EXTRA_COLUMN_FIELDS = ["column1", "column2", "column3", "column4", "column5"];
 
 /** Longest name a user may give an extra column. */
 export const EXTRA_COLUMN_LABEL_MAX = 40;
+
+const EXTRA_COLUMN_ENTRIES = EXTRA_COLUMN_FIELDS.map((field, i) => ({
+  field,
+  label: `Extra column ${i + 1}`,
+  kind: "text",
+  required: false,
+  extra: true,
+}));
 
 const FA_MUTUAL_FUND_FIELDS = [
   // Every mutual fund row carries its own Transaction ID, so it must be mapped here.
@@ -372,13 +384,7 @@ const FA_MUTUAL_FUND_FIELDS = [
   { field: "totalAmount", label: "TOTAL AMOUNT", kind: "number", required: false },
   { field: "tds", label: "TDS", kind: "number", required: false },
   { field: "stampDuty", label: "Stamp Duty", kind: "number", required: false },
-  ...EXTRA_COLUMN_FIELDS.map((field, i) => ({
-    field,
-    label: `Extra column ${i + 1}`,
-    kind: "text",
-    required: false,
-    extra: true,
-  })),
+  ...EXTRA_COLUMN_ENTRIES,
 ];
 
 // OPI / OPO entries come from another system and carry no Transaction ID.
@@ -421,7 +427,8 @@ const FA_MUTUAL_FUND_TDS_FIELDS = MF_TDS_COLUMNS.map(([field, label, kind, requi
 }));
 
 export const FIELD_CATALOG = {
-  [PROFILE_TYPE.FA]: FA_FIELDS,
+  // The OPI/OPO file is built from FA_FIELDS, so it gets no extra columns.
+  [PROFILE_TYPE.FA]: [...FA_FIELDS, ...EXTRA_COLUMN_ENTRIES],
   [PROFILE_TYPE.FA_MUTUAL_FUND]: FA_MUTUAL_FUND_FIELDS,
   [PROFILE_TYPE.FA_OPI_OPO]: FA_OPI_OPO_FIELDS,
   [PROFILE_TYPE.FA_MUTUAL_FUND_TDS]: FA_MUTUAL_FUND_TDS_FIELDS,
@@ -442,6 +449,7 @@ export const FIELD_CATALOG = {
     { field: "ref", label: "Trade / Contract Ref", kind: "text", required: true },
     { field: "exchange", label: "Exchange", kind: "text", required: true },
     { field: "brokerCode", label: "Broker Code", kind: "code", required: true },
+    ...EXTRA_COLUMN_ENTRIES,
   ],
 
   /*
@@ -462,6 +470,7 @@ export const FIELD_CATALOG = {
     { field: "ref", label: "Trade / Contract Ref", kind: "text", required: true },
     { field: "exchange", label: "Exchange", kind: "text", required: true },
     { field: "brokerCode", label: "Broker Code", kind: "code", required: true },
+    ...EXTRA_COLUMN_ENTRIES,
   ],
 
   /*
@@ -1121,7 +1130,9 @@ export const resolveFieldMap = (type, profile, rawHeaders, { strict = false } = 
     if (source.by === SOURCE_BY.NAME) {
       const key = normHeader(source.name);
       resolved = nameToIndex.has(key) ? nameToIndex.get(key) : -1;
-      if (resolved === -1 && (entry.matchKey || strict)) {
+      // An extra column is never read for a custodian file, so its absence
+      // must not reject one even under the strict check.
+      if (resolved === -1 && (entry.matchKey || (strict && !entry.extra))) {
         errors.push({
           code: MAP_ERROR.COLUMN_NOT_IN_FILE,
           field,
@@ -1179,7 +1190,8 @@ export const checkExtraLabels = (type, profile, labels) => {
   const given = labels && typeof labels === "object" ? labels : {};
   const kept = {};
   const errors = [];
-  if (type !== PROFILE_TYPE.FA_MUTUAL_FUND) return { ok: true, labels: kept, errors };
+  const hasExtraColumns = (catalogFor(type) || []).some((entry) => entry.extra);
+  if (!hasExtraColumns) return { ok: true, labels: kept, errors };
 
   for (const field of EXTRA_COLUMN_FIELDS) {
     const source = profile?.[field];
@@ -1303,14 +1315,17 @@ export const FA_TEMPLATE_SLOT = Object.fromEntries(
 );
 
 /**
- * The Equity tab's consolidated file: the 26 template columns, then the
- * Transaction ID as column 27 (heading FA_TRANSACTION_ID_HEADER). Read with
- * this profile, because the plain template has no Transaction ID column.
+ * The Equity tab's consolidated file: the 26 template columns, the Transaction
+ * ID as column 27 (heading FA_TRANSACTION_ID_HEADER), then Column1 ... Column5.
+ * Read with this profile, because the plain template has neither. The extra
+ * columns are found by heading, so a file saved before they existed still
+ * reads (they come back blank).
  */
 export const FA_TRANSACTION_ID_HEADER = "Transaction ID";
 export const FA_CONSOLIDATED_PROFILE = {
   ...DEFAULT_PROFILES[PROFILE_TYPE.FA],
   transactionId: byIndex(FA_HEADERS.length),
+  ...Object.fromEntries(EXTRA_COLUMN_FIELDS.map((field, i) => [field, byName(`Column${i + 1}`)])),
 };
 
 /**

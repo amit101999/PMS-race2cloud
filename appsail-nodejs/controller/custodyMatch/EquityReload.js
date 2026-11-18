@@ -31,7 +31,7 @@
  * Every commit gets a row in Transaction_Commit_History. The rest of the state
  * lives in Stratus (bucket temporary-files):
  *   reload/<date>/state.json         which FA files are pending, with their mode
- *   reload/<date>/consolidated.csv   the date's final list: 26 template columns + Transaction ID
+ *   reload/<date>/consolidated.csv   the date's final list: 26 template columns + Transaction ID + Column1–5
  *   reload/<date>/affected.json      every (client, ISIN) of the old and new trades
  *   reload/<date>/summary.json       the match's badges and the run it belongs to
  *   reload/<date>/progress.json      the Pre-commit step and counts
@@ -108,12 +108,14 @@ import {
   dateWindowView,
   parseWindowDays,
   bookedTradeTab,
+  EXTRA_BOOKED_COLUMNS,
   MUTUAL_FUND_BOOKED_COLUMNS,
   mutualFundTradeProblems,
   tradeFromBookedRow,
   tradeFromCells,
   tradesToMutualFundCsv,
   tradesToTemplateCsv,
+  withExtraColumnValues,
   withMutualFundValues,
 } from "../../util/custodyMatch/equityReload.js";
 import { readDateWindow, saveDateWindow } from "../../util/custodyMatch/changeWindow.js";
@@ -277,15 +279,21 @@ const retireFaFiles = async (kind, catalystApp, bucket, date, files) => {
   await deleteKeys(bucket, files.map((f) => f.fileKey));
 };
 
-/** A parsed FA file as trades. A mutual fund file's trades also carry TDS, Stamp Duty, Column1–5 and TOTAL AMOUNT. */
+/**
+ * A parsed FA file as trades. Every trade carries Column1–5 (the extra columns
+ * added on the mapping screen); a mutual fund file's trades also carry TDS,
+ * Stamp Duty and TOTAL AMOUNT.
+ */
 const tradesOfParsedFile = (parsed, kind = KIND.EQUITY) =>
   parsed.rows.map((row) => {
     // The 26 template cells, then the Transaction ID the mapping found (column 27).
     const trade = tradeFromCells([...faRowTemplateCells(row), row.mapped?.transactionId ?? ""], {
       rowNumber: row.rowNumber,
     });
-    if (!kind.mutualFund) return trade;
     const m = row.mapped || {};
+    if (!kind.mutualFund) {
+      return withExtraColumnValues(trade, [m.column1, m.column2, m.column3, m.column4, m.column5]);
+    }
     return withMutualFundValues(
       trade,
       [m.tds, m.stampDuty, m.column1, m.column2, m.column3, m.column4, m.column5],
@@ -293,7 +301,7 @@ const tradesOfParsedFile = (parsed, kind = KIND.EQUITY) =>
     );
   });
 
-/** The trades as the file the import reads: 27 columns for Equity, 34 for mutual funds. */
+/** The trades as the file the import reads: 32 columns for Equity, 35 for mutual funds. */
 const csvOfTrades = (kind, trades) => (kind.mutualFund ? tradesToMutualFundCsv(trades) : tradesToTemplateCsv(trades));
 
 /** Re-read the tab's pending files, oldest first, as { mode, trades }. */
@@ -322,16 +330,20 @@ const loadPendingTrades = async (kind, bucket, files, date, profile) => {
 
 /*
  * ZCQL allows at most 30 columns in one SELECT, and this list is exactly 30.
- * The Mutual Funds tab's extra columns are therefore read by a second query
- * over the same rows (MUTUAL_FUND_EXTRA_SELECT) and joined by ROWID.
+ * Each tab's extra columns are therefore read by a second query over the same
+ * rows (extraSelectOf) and joined by ROWID.
  */
 const BOOKED_SELECT = [
   "ROWID",
   ...new Set([...BOOKED_COLUMNS.filter(Boolean), "WS_client_id", "Security_Name", "Security_Type"]),
 ].join(", ");
 
-// Net_Amount: the booked amount, which a re-commit writes back as TOTAL AMOUNT.
-const MUTUAL_FUND_EXTRA_SELECT = ["ROWID", ...MUTUAL_FUND_BOOKED_COLUMNS, "Net_Amount"].join(", ");
+// Mutual Funds: Net_Amount is the booked amount, which a re-commit writes back as TOTAL AMOUNT.
+const extraSelectOf = (kind) =>
+  (kind.mutualFund
+    ? ["ROWID", ...MUTUAL_FUND_BOOKED_COLUMNS, "Net_Amount"]
+    : ["ROWID", ...EXTRA_BOOKED_COLUMNS]
+  ).join(", ");
 
 /*
  * Reads on Transaction now and then fail with "Error occurred during query
@@ -363,14 +375,14 @@ const readBookedTrades = async (kind, zcql, date) => {
       ),
       TXN_TABLE,
     );
-    // Mutual Funds: the same rows' extra columns, by ROWID (see BOOKED_SELECT).
+    // The same rows' extra columns, by ROWID (see BOOKED_SELECT).
     const extrasById = new Map();
-    if (kind.mutualFund && batch.length > 0) {
+    if (batch.length > 0) {
       const lastOfBatch = String(batch[batch.length - 1].ROWID);
       const extras = unwrap(
         await selectWithRetry(
           zcql,
-          `SELECT ${MUTUAL_FUND_EXTRA_SELECT} FROM ${TXN_TABLE} WHERE TRANDATE = '${esc(date)}' AND ROWID > ${lastRowId} AND ROWID <= ${lastOfBatch} ORDER BY ROWID ASC LIMIT ${ZCQL_PAGE}`,
+          `SELECT ${extraSelectOf(kind)} FROM ${TXN_TABLE} WHERE TRANDATE = '${esc(date)}' AND ROWID > ${lastRowId} AND ROWID <= ${lastOfBatch} ORDER BY ROWID ASC LIMIT ${ZCQL_PAGE}`,
         ),
         TXN_TABLE,
       );
@@ -378,7 +390,7 @@ const readBookedTrades = async (kind, zcql, date) => {
     }
     for (const row of batch) {
       if (!isOwnBookedRow(kind, row)) continue;
-      const full = kind.mutualFund ? { ...extrasById.get(String(row.ROWID)), ...row } : row;
+      const full = { ...extrasById.get(String(row.ROWID)), ...row };
       trades.push(tradeFromBookedRow(full, { mutualFund: kind.mutualFund }));
     }
     if (batch.length < ZCQL_PAGE) break;
@@ -659,7 +671,7 @@ const currentDateList = async (kind, catalystApp, bucket, date, profile) => {
 
 /**
  * The file's trades already in our books with the same values, saved as a CSV in
- * the upload's 27 columns so the screen can offer it for download. It sits beside
+ * the tab's consolidated columns so the screen can offer it for download. It sits beside
  * the date's FA files, a folder the download route accepts. The upload goes on
  * if it cannot be saved; only the download link is missing then.
  */

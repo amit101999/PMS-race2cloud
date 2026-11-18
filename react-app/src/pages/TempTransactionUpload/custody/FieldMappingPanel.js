@@ -460,7 +460,8 @@ export default function FieldMappingPanel({
     const [uploadError, setUploadError] = useState(null);
     /** field -> message, shown under that row only after a Save attempt finds it empty. */
     const [fieldErrors, setFieldErrors] = useState({});
-    /* Extra columns (Mutual Funds file only): the name the user typed for each
+    /* Extra columns (Equity and Mutual Funds transaction files, Resident and
+       NDPMS custodian files): the name the user typed for each
        slot, and which slots are on screen. A slot appears when Add column is
        clicked and goes when its × is clicked. */
     const [labels, setLabels] = useState({});
@@ -1215,7 +1216,7 @@ export default function FieldMappingPanel({
                                 </tbody>
                             </table>
 
-                            {/* Extra columns: Mutual Funds file only, up to five. */}
+                            {/* Extra columns: shown for file types whose field list has them, up to five. */}
                             {extraSlots.length > 0 && columns.length > 0 ? (
                                 nextFreeSlot ? (
                                     <button
