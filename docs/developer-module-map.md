@@ -369,6 +369,7 @@ Business guide 3.16.
 - **Background functions:** `RebuildHoldingtable` (pool `CorporateActions`). `UpdateBonusTable` recalculates any bonus whose record date is after the split.
 - **Tables:** writes `Split` and `Split_Account`. Reads `Holdings`, `Security_List` and `clientIds`.
 - **Before you change:** a split can trigger a bonus recalculation, so re-test Bonus too.
+- **Temporary bypass:** `/split/apply-bypass` (the **Bypass & Apply Split** button) runs the same apply code as `/split/add` but skips the Receivable and Benefit Collection checks. The switch is set by the route, never by the request body. To remove it, delete the route, the button and the `bypassCustodian` branch in `SplitController.js`.
 
 ### 4.15 Bonus
 Business guide 3.17.
@@ -380,6 +381,7 @@ Business guide 3.17.
 - **Background functions:** `UpdateBonusTable` (pool `CorporateActions`), then `RebuildHoldingtable`.
 - **Tables:** writes `Bonus` and `Bonus_Record`. Reads `Holdings`, `Security_List` and `clientIds`.
 - **Before you change:** `functions/UpdateBonusTable/holdingsSnapshot.js` must give the same holding as `holdingsFromTable.js`. If they differ, the applied bonus will not match the approved preview.
+- **Temporary bypass:** `/bonus/apply-bypass` (the **Bypass & Apply Bonus** button) runs the same apply code as `/bonus/apply` but skips the Receivable and Benefit Collection checks. The switch is set by the route, never by the request body. To remove it, delete the route, the button and the `bypassCustodian` branch in `BonusController.js`.
 
 ### 4.16 Dividend
 Business guide 3.18.

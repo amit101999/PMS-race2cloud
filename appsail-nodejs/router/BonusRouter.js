@@ -3,6 +3,7 @@ import {
   getAllSecuritiesISINs,
   previewStockBonus,
   applyStockBonus,
+  applyStockBonusBypass,
   getBonusApplyStatus,
   getBonusApplyProgress,
   sendBonusReceivable,
@@ -28,6 +29,8 @@ router.get("/history", listDifferenceHistory("bonus"));
 router.get("/history/download", downloadDifferenceFile("bonus"));
 router.get("/export-preview", exportBonusPreviewFile);
 router.post("/apply", applyStockBonus);
+// Temporary: apply without the custodian files (no Receivable / Benefit check).
+router.post("/apply-bypass", applyStockBonusBypass);
 router.get("/apply-status", getBonusApplyStatus);
 router.get("/apply-progress", getBonusApplyProgress);
 

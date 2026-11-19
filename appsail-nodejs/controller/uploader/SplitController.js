@@ -517,7 +517,16 @@ export const sendSplitReceivable = async (req, res) => {
   }
 };
 
-export const addStockSplit = async (req, res) => {
+/**
+ * POST /split/add — the normal Confirm & Apply (custodian check required).
+ * POST /split/apply-bypass — temporary: applies without the custodian files.
+ * The switch comes from the route only, never from the request body, so the
+ * normal route can never skip the check.
+ */
+export const addStockSplit = (req, res) => applyStockSplit(req, res, { bypassCustodian: false });
+export const addStockSplitBypass = (req, res) => applyStockSplit(req, res, { bypassCustodian: true });
+
+const applyStockSplit = async (req, res, { bypassCustodian }) => {
   try {
     const app = req.catalystApp;
     if (!app) {
@@ -583,17 +592,29 @@ export const addStockSplit = async (req, res) => {
       });
     }
 
-    // Stage 2 of the custodian reconciliation: without stage 1 there is nothing
-    // to confirm. The Benefit Collection file is checked before anything is
-    // written, so a bad file leaves the split untouched.
-    if (receivable.length === 0) {
-      return res
-        .status(409)
-        .json({ success: false, code: "NOT_RECEIVABLE", message: NOT_RECEIVABLE_MESSAGE(isin, recordDateISO) });
-    }
-    const receipt = await planSplitReceipt(app, zcql, { isin, recordDateISO, receivable });
-    if (receipt.error) {
-      return res.status(409).json({ success: false, code: receipt.code, message: receipt.error });
+    let receipt;
+    if (bypassCustodian) {
+      // Temporary bypass: no custodian files. Accounts already sent as
+      // Receivable are marked Received with no Received Date, the same as
+      // accounts the Benefit Collection file does not list.
+      console.log(
+        `[SplitController] Custodian check bypassed: ${isin}, record date ${recordDateISO}, ` +
+          `ratio ${ratio1}:${ratio2}, ${receivable.length} Receivable account(s) to mark Received.`,
+      );
+      receipt = { rowIdsByDate: new Map(receivable.length > 0 ? [["", receivable.map((r) => r.rowId)]] : []) };
+    } else {
+      // Stage 2 of the custodian reconciliation: without stage 1 there is nothing
+      // to confirm. The Benefit Collection file is checked before anything is
+      // written, so a bad file leaves the split untouched.
+      if (receivable.length === 0) {
+        return res
+          .status(409)
+          .json({ success: false, code: "NOT_RECEIVABLE", message: NOT_RECEIVABLE_MESSAGE(isin, recordDateISO) });
+      }
+      receipt = await planSplitReceipt(app, zcql, { isin, recordDateISO, receivable });
+      if (receipt.error) {
+        return res.status(409).json({ success: false, code: receipt.code, message: receipt.error });
+      }
     }
 
     // Order: Split row → rebuild/bonus jobs → statuses Received (at the end).

@@ -249,7 +249,18 @@ function SplitPage() {
   /* ===========================
      SUBMIT SPLIT
      =========================== */
-  const handleSubmit = async () => {
+  const handleSubmit = () => submitSplit("add");
+
+  // Temporary: applies the split without the custodian files.
+  const handleBypassSubmit = () => {
+    const ok = window.confirm(
+      "This skips the custodian file checks (Ex-Entitlement and Corporate Benefit Collection) " +
+        "and applies the split to every account in the preview. Apply anyway?",
+    );
+    if (ok) submitSplit("apply-bypass");
+  };
+
+  const submitSplit = async (endpoint) => {
     if (Number(ratio1) === Number(ratio2)) {
       setError("Split ratio cannot be the same");
       return;
@@ -270,7 +281,7 @@ function SplitPage() {
         effectiveDate,
       };
 
-      const res = await fetch(`${BASE_URL}/split/add`, {
+      const res = await fetch(`${BASE_URL}/split/${endpoint}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
@@ -606,6 +617,16 @@ function SplitPage() {
               )}
 
               <div className="bonus-preview-actions">
+                {stage !== "RECEIVED" && (
+                  <button
+                    type="button"
+                    className="cm-primary cm-primary--warn"
+                    disabled={loading}
+                    onClick={handleBypassSubmit}
+                  >
+                    {loading ? "Applying…" : "Bypass & Apply Split"}
+                  </button>
+                )}
                 <button
                   type="button"
                   className="btn-export"

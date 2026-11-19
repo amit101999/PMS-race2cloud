@@ -282,7 +282,18 @@ function BonusPage() {
   /* ===========================
      CONFIRM & APPLY (stage 2 of the custodian reconciliation)
      =========================== */
-  const applyBonus = async () => {
+  const applyBonus = () => submitBonus("apply");
+
+  // Temporary: applies the bonus without the custodian files.
+  const applyBonusBypass = () => {
+    const ok = window.confirm(
+      "This skips the custodian file checks (Ex-Entitlement and Corporate Benefit Collection) " +
+        "and applies the bonus to every account in the preview. Apply anyway?",
+    );
+    if (ok) submitBonus("apply-bypass");
+  };
+
+  const submitBonus = async (endpoint) => {
     if (datesOutOfOrder) {
       setError("Effective Date cannot be before the Record Date.");
       return;
@@ -292,7 +303,7 @@ function BonusPage() {
     setApplyStatus("SUBMITTING");
 
     try {
-      const res = await fetch(`${BASE_URL}/bonus/apply`, {
+      const res = await fetch(`${BASE_URL}/bonus/${endpoint}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -664,6 +675,17 @@ function BonusPage() {
               )}
 
               <div className="bonus-preview-actions">
+                {stage !== "RECEIVED" && (
+                  <button
+                    type="button"
+                    className="cm-primary cm-primary--warn"
+                    disabled={applying}
+                    onClick={applyBonusBypass}
+                  >
+                    {applying ? "Applying…" : "Bypass & Apply Bonus"}
+                  </button>
+                )}
+
                 {/* EXPORT - generates report */}
                 <button
                   type="button"
