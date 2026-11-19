@@ -172,6 +172,11 @@ const PreCommitPanel = ({ runs, onProgressChange, kind = api.KIND.EQUITY }) => {
                     // Past its change window: booked for good, so no Commit. A commit that is
                     // running or stopped still shows, so it can finish (Try again).
                     const dateLocked = Boolean(info?.window?.locked);
+                    // Still marked running, but nothing has moved for a long time (the server
+                    // process stopped, or its background work could not go on). The server
+                    // then allows Try again (canRetry), so it is shown like a stopped commit.
+                    const stalled = p?.status === "RUNNING" && Boolean(p.canRetry);
+                    const stopped = p?.status === "FAILED" || stalled;
 
                     return (
                         <div key={run.runId} className="cm-precommit">
@@ -181,6 +186,8 @@ const PreCommitPanel = ({ runs, onProgressChange, kind = api.KIND.EQUITY }) => {
                                     <StatusBadge tone={STATUS.NEUTRAL}>Loading…</StatusBadge>
                                 ) : dateLocked && p?.status !== "RUNNING" && p?.status !== "FAILED" ? (
                                     <StatusBadge tone={STATUS.NEUTRAL}>Locked</StatusBadge>
+                                ) : stopped ? (
+                                    <StatusBadge tone={STATUS.BAD}>Could not finish</StatusBadge>
                                 ) : p?.status === "RUNNING" ? (
                                     <StatusBadge tone={STATUS.PROCESSING}>Committing</StatusBadge>
                                 ) : p?.status === "FAILED" ? (
@@ -204,7 +211,7 @@ const PreCommitPanel = ({ runs, onProgressChange, kind = api.KIND.EQUITY }) => {
 
                             {info?.loadError ? <p className="cm-blockers">{info.loadError}</p> : null}
 
-                            {p?.status === "RUNNING" ? (
+                            {p?.status === "RUNNING" && !stalled ? (
                                 <p className="cm-verdict-sub">
                                     {(p.firstCommit ? FIRST_COMMIT_STEP_LABEL : STEP_LABEL)[p.step] || p.step}
                                     {p.step === "WAITING" && p.rebuild
@@ -213,10 +220,13 @@ const PreCommitPanel = ({ runs, onProgressChange, kind = api.KIND.EQUITY }) => {
                                 </p>
                             ) : null}
 
-                            {p?.status === "FAILED" ? (
+                            {stopped ? (
                                 <div className="cm-verdict bad">
                                     <p className="cm-verdict-lead">
-                                        Commit for {date} could not finish. {p.error}
+                                        Commit for {date} could not finish.{" "}
+                                        {stalled
+                                            ? "It stopped making progress, so it can be continued from where it stopped."
+                                            : p.error}
                                     </p>
                                     <button
                                         type="button"

@@ -201,6 +201,13 @@ export const retryEquityDate = (date, kind = KIND.EQUITY) => json(`/reload/${dat
 
 export const getCommitHistory = (kind = KIND.EQUITY) => request(withKind("/reload/commit-history", kind));
 
+/* TDS tab: a trade date's TDS files, only kept for now. Each call answers with the date's files. */
+export const getTdsFiles = (date) => request(`/tds/${date}`);
+export const uploadTdsFile = ({ file, date, uploadDate }) => form(`/tds/${date}`, { file, uploadDate });
+export const deleteTdsFile = (date, key) =>
+  request(`/tds/${date}?key=${encodeURIComponent(key)}`, { method: "DELETE" });
+export const getTdsDownloadUrl = (key) => request(`/tds/download?key=${encodeURIComponent(key)}`);
+
 /* OPI/OPO tab: one file (any number of dates) is one Commit. fileId is the file's uploadedAtMs. */
 export const uploadOpiOpoFile = ({ file, uploadDate }) => form("/opi-opo/file", { file, uploadDate });
 export const getOpiOpoFile = (fileId) => request(`/opi-opo/${encodeURIComponent(fileId)}`);
@@ -229,7 +236,7 @@ export const CUSTODY_MODE_LABEL = {
 /** All three profiles plus their field catalogs, in one call. */
 export const getFieldMaps = () => request("/field-map");
 
-/** `labels` = names of the extra columns added on the Mutual Funds mapping. */
+/** `labels` = names of the extra columns added on the mapping screen. */
 export const saveFieldMap = (type, profile, updatedBy, labels = {}) =>
   json(`/field-map/${type}`, "PUT", { profile, updatedBy, labels });
 
@@ -250,6 +257,7 @@ export const PROFILE_TYPE = {
   FA: "FA",
   FA_MUTUAL_FUND: "FA_MUTUAL_FUND",
   FA_OPI_OPO: "FA_OPI_OPO",
+  FA_MUTUAL_FUND_TDS: "FA_MUTUAL_FUND_TDS",
   CUSTODY_RESIDENTIAL: "CUSTODY_RESIDENTIAL",
   CUSTODY_NDPMS: "CUSTODY_NDPMS",
   CUSTODY_MUTUAL_FUND: "CUSTODY_MUTUAL_FUND",
@@ -262,6 +270,7 @@ export const PROFILE_LABEL = {
   FA: "Transaction file (FA)",
   FA_MUTUAL_FUND: "Transaction file (FA) — Mutual Funds",
   FA_OPI_OPO: "Transaction file (FA) — OPI/OPO",
+  FA_MUTUAL_FUND_TDS: "TDS file — Mutual Funds",
   CUSTODY_RESIDENTIAL: "Custodian — Residential",
   CUSTODY_NDPMS: "Custodian — NRE/NRO/NDPMS",
   CUSTODY_MUTUAL_FUND: "Custodian — Mutual Funds",
@@ -276,6 +285,8 @@ export const PROFILE_HELP = {
     "The mutual fund fund-accounting file. Same 26 fields as the regular transaction file — it renames one heading (SYMBOLCODE/ISIN CODE), which is why it is mapped separately. Its rows are matched only against the Mutual Funds custodian files. Dates may be in any common format (2026-08-20, 20-08-2026, 20-Aug-2026) and are stored as YYYY-MM-DD.",
   FA_OPI_OPO:
     "The OPI/OPO file: shares moved in (OPI) or out (OPO) from another system. Same columns as the Equity transaction file, without a Transaction ID. Saved separately, so it never changes the Equity mapping.",
+  FA_MUTUAL_FUND_TDS:
+    "The mutual fund TDS file (TDI / TDO rows per account). Broker acc id, Transaction type, Transaction date and AMT must be mapped. For now the file is only kept; it does not change cash or holdings.",
   CUSTODY_RESIDENTIAL: "The deal allocation file for Resident accounts.",
   CUSTODY_NDPMS: "The deal allocation file for NRE/NRO/NDPMS accounts.",
   CUSTODY_MUTUAL_FUND:

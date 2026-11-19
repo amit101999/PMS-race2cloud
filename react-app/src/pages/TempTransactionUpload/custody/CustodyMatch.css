@@ -893,6 +893,19 @@
     white-space: nowrap;
 }
 
+/* TDS tab: the file name is a button that downloads the file. */
+.up-file-link {
+    background: none;
+    border: none;
+    padding: 0;
+    text-align: left;
+    cursor: pointer;
+}
+
+.up-file-link:hover {
+    text-decoration: underline;
+}
+
 .up-file-meta {
     font-size: 11px;
     color: var(--txo-text-faint);

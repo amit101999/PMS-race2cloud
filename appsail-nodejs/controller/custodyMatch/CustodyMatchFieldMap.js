@@ -201,7 +201,11 @@ const supersedeForType = async (app, type) => {
   }
   // The mutual fund and OPI/OPO files are never matched (their own tabs), so no
   // Equity run was read under their mappings.
-  if (type === PROFILE_TYPE.FA_MUTUAL_FUND || type === PROFILE_TYPE.FA_OPI_OPO) {
+  if (
+    type === PROFILE_TYPE.FA_MUTUAL_FUND ||
+    type === PROFILE_TYPE.FA_OPI_OPO ||
+    type === PROFILE_TYPE.FA_MUTUAL_FUND_TDS
+  ) {
     return { superseded: [], supersedeErrors: [] };
   }
   if (type !== PROFILE_TYPE.CUSTODY_HOLDINGS) return supersedeStoredDates(app);
@@ -449,8 +453,9 @@ export const previewHeaders = async (req, res) => {
         console.warn("previewHeaders: could not detect the transaction file type:", detectErr.message);
       }
     } else if (
-      // The holdings and corporate actions files are not deal-allocation
-      // layouts, so detection has nothing to say about them.
+      // The holdings, corporate actions and mutual fund TDS files are not
+      // deal-allocation layouts, so detection has nothing to say about them.
+      asked !== PROFILE_TYPE.FA_MUTUAL_FUND_TDS &&
       asked !== PROFILE_TYPE.CUSTODY_HOLDINGS &&
       asked !== PROFILE_TYPE.CUSTODY_CORP_ACTION &&
       asked !== PROFILE_TYPE.CUSTODY_CORP_ALLOCATION

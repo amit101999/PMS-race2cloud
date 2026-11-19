@@ -43,6 +43,12 @@ import {
   uploadEquityFaFile,
 } from "../../controller/custodyMatch/EquityReload.js";
 import {
+  deleteTdsFile,
+  downloadTdsFile,
+  listTdsDate,
+  uploadTdsFile,
+} from "../../controller/custodyMatch/TdsUpload.js";
+import {
   commitOpiOpoFile,
   getOpiOpoFile,
   retryOpiOpoFile,
@@ -180,6 +186,13 @@ router.post("/reload/:date/pre-commit", preCommitEquityDate);
 
 // POST /api/custody-match/reload/:date/retry — continue a Pre-commit that stopped
 router.post("/reload/:date/retry", retryEquityDate);
+
+/* TDS tab: a trade date's mutual fund TDS files, only kept for now (TdsUpload.js, bucket tds-files). */
+// GET /api/custody-match/tds/download?key=… — registered before /tds/:date, which would take "download" as a date.
+router.get("/tds/download", downloadTdsFile);
+router.get("/tds/:date", listTdsDate);
+router.post("/tds/:date", uploadTdsFile);
+router.delete("/tds/:date", deleteTdsFile);
 
 // OPI/OPO tab: one file (any number of dates) is one Commit. See OpiOpoUpload.js.
 router.post("/opi-opo/file", uploadOpiOpoFile);

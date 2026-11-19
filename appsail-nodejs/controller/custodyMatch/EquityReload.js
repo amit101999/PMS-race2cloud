@@ -31,7 +31,7 @@
  * Every commit gets a row in Transaction_Commit_History. The rest of the state
  * lives in Stratus (bucket temporary-files):
  *   reload/<date>/state.json         which FA files are pending, with their mode
- *   reload/<date>/consolidated.csv   the date's final list: 26 template columns + Transaction ID
+ *   reload/<date>/consolidated.csv   the date's final list: 26 template columns + Transaction ID + Column1–5
  *   reload/<date>/affected.json      every (client, ISIN) of the old and new trades
  *   reload/<date>/summary.json       the match's badges and the run it belongs to
  *   reload/<date>/progress.json      the Pre-commit step and counts
@@ -52,7 +52,11 @@
  */
 
 import { FA_FILE_TYPE, FILE_SIDE, RUN_STATUS } from "../../util/custodyMatch/constants.js";
-import { FA_CONSOLIDATED_PROFILE, PROFILE_TYPE, resolveFieldMap } from "../../util/custodyMatch/fieldMap.js";
+import {
+  FA_CONSOLIDATED_PROFILE,
+  PROFILE_TYPE,
+  resolveFieldMap,
+} from "../../util/custodyMatch/fieldMap.js";
 import { detectSeparator, firstLineOf, splitHeaderCells } from "../../util/custodyMatch/normalize.js";
 import {
   detectFaFileType,
@@ -104,12 +108,14 @@ import {
   dateWindowView,
   parseWindowDays,
   bookedTradeTab,
+  EXTRA_BOOKED_COLUMNS,
   MUTUAL_FUND_BOOKED_COLUMNS,
   mutualFundTradeProblems,
   tradeFromBookedRow,
   tradeFromCells,
   tradesToMutualFundCsv,
   tradesToTemplateCsv,
+  withExtraColumnValues,
   withMutualFundValues,
 } from "../../util/custodyMatch/equityReload.js";
 import { readDateWindow, saveDateWindow } from "../../util/custodyMatch/changeWindow.js";
@@ -273,19 +279,29 @@ const retireFaFiles = async (kind, catalystApp, bucket, date, files) => {
   await deleteKeys(bucket, files.map((f) => f.fileKey));
 };
 
-/** A parsed FA file as trades. A mutual fund file's trades also carry TDS, Stamp Duty and Column1–5. */
+/**
+ * A parsed FA file as trades. Every trade carries Column1–5 (the extra columns
+ * added on the mapping screen); a mutual fund file's trades also carry TDS,
+ * Stamp Duty and TOTAL AMOUNT.
+ */
 const tradesOfParsedFile = (parsed, kind = KIND.EQUITY) =>
   parsed.rows.map((row) => {
     // The 26 template cells, then the Transaction ID the mapping found (column 27).
     const trade = tradeFromCells([...faRowTemplateCells(row), row.mapped?.transactionId ?? ""], {
       rowNumber: row.rowNumber,
     });
-    if (!kind.mutualFund) return trade;
     const m = row.mapped || {};
-    return withMutualFundValues(trade, [m.tds, m.stampDuty, m.column1, m.column2, m.column3, m.column4, m.column5]);
+    if (!kind.mutualFund) {
+      return withExtraColumnValues(trade, [m.column1, m.column2, m.column3, m.column4, m.column5]);
+    }
+    return withMutualFundValues(
+      trade,
+      [m.tds, m.stampDuty, m.column1, m.column2, m.column3, m.column4, m.column5],
+      m.totalAmount,
+    );
   });
 
-/** The trades as the file the import reads: 27 columns for Equity, 34 for mutual funds. */
+/** The trades as the file the import reads: 32 columns for Equity, 35 for mutual funds. */
 const csvOfTrades = (kind, trades) => (kind.mutualFund ? tradesToMutualFundCsv(trades) : tradesToTemplateCsv(trades));
 
 /** Re-read the tab's pending files, oldest first, as { mode, trades }. */
@@ -312,18 +328,22 @@ const loadPendingTrades = async (kind, bucket, files, date, profile) => {
 
 /* ─────────────────────────────── our books ─────────────────────────────── */
 
-/* The mutual fund columns are read only for the Mutual Funds tab; Equity rows never fill them. */
-const bookedSelect = (kind) =>
-  [
-    "ROWID",
-    ...new Set([
-      ...BOOKED_COLUMNS.filter(Boolean),
-      "WS_client_id",
-      "Security_Name",
-      "Security_Type",
-      ...(kind.mutualFund ? MUTUAL_FUND_BOOKED_COLUMNS : []),
-    ]),
-  ].join(", ");
+/*
+ * ZCQL allows at most 30 columns in one SELECT, and this list is exactly 30.
+ * Each tab's extra columns are therefore read by a second query over the same
+ * rows (extraSelectOf) and joined by ROWID.
+ */
+const BOOKED_SELECT = [
+  "ROWID",
+  ...new Set([...BOOKED_COLUMNS.filter(Boolean), "WS_client_id", "Security_Name", "Security_Type"]),
+].join(", ");
+
+// Mutual Funds: Net_Amount is the booked amount, which a re-commit writes back as TOTAL AMOUNT.
+const extraSelectOf = (kind) =>
+  (kind.mutualFund
+    ? ["ROWID", ...MUTUAL_FUND_BOOKED_COLUMNS, "Net_Amount"]
+    : ["ROWID", ...EXTRA_BOOKED_COLUMNS]
+  ).join(", ");
 
 /*
  * Reads on Transaction now and then fail with "Error occurred during query
@@ -351,12 +371,27 @@ const readBookedTrades = async (kind, zcql, date) => {
     const batch = unwrap(
       await selectWithRetry(
         zcql,
-        `SELECT ${bookedSelect(kind)} FROM ${TXN_TABLE} WHERE TRANDATE = '${esc(date)}' AND ROWID > ${lastRowId} ORDER BY ROWID ASC LIMIT ${ZCQL_PAGE}`,
+        `SELECT ${BOOKED_SELECT} FROM ${TXN_TABLE} WHERE TRANDATE = '${esc(date)}' AND ROWID > ${lastRowId} ORDER BY ROWID ASC LIMIT ${ZCQL_PAGE}`,
       ),
       TXN_TABLE,
     );
+    // The same rows' extra columns, by ROWID (see BOOKED_SELECT).
+    const extrasById = new Map();
+    if (batch.length > 0) {
+      const lastOfBatch = String(batch[batch.length - 1].ROWID);
+      const extras = unwrap(
+        await selectWithRetry(
+          zcql,
+          `SELECT ${extraSelectOf(kind)} FROM ${TXN_TABLE} WHERE TRANDATE = '${esc(date)}' AND ROWID > ${lastRowId} AND ROWID <= ${lastOfBatch} ORDER BY ROWID ASC LIMIT ${ZCQL_PAGE}`,
+        ),
+        TXN_TABLE,
+      );
+      for (const row of extras) extrasById.set(String(row.ROWID), row);
+    }
     for (const row of batch) {
-      if (isOwnBookedRow(kind, row)) trades.push(tradeFromBookedRow(row, { mutualFund: kind.mutualFund }));
+      if (!isOwnBookedRow(kind, row)) continue;
+      const full = { ...extrasById.get(String(row.ROWID)), ...row };
+      trades.push(tradeFromBookedRow(full, { mutualFund: kind.mutualFund }));
     }
     if (batch.length < ZCQL_PAGE) break;
     lastRowId = String(batch[batch.length - 1].ROWID);
@@ -636,7 +671,7 @@ const currentDateList = async (kind, catalystApp, bucket, date, profile) => {
 
 /**
  * The file's trades already in our books with the same values, saved as a CSV in
- * the upload's 27 columns so the screen can offer it for download. It sits beside
+ * the tab's consolidated columns so the screen can offer it for download. It sits beside
  * the date's FA files, a folder the download route accepts. The upload goes on
  * if it cannot be saved; only the download link is missing then.
  */
@@ -654,19 +689,20 @@ const withDuplicatesFile = async (kind, bucket, date, comparison) => {
 };
 
 /**
- * A mutual fund file always has TDS and Stamp Duty columns. Without this check a
- * mapping saved by column number would read an Equity file's missing columns as
- * blank and accept the wrong file. Returns the refusal, or null.
+ * A mutual fund file has at least one of the TOTAL AMOUNT, TDS and Stamp Duty
+ * columns; the 26-column Equity file has none. All three are optional on the
+ * mapping, so without this check an Equity file would be accepted here.
+ * Returns the refusal, or null.
  */
 const notMutualFundFileError = (buffer, profile) => {
   const headerLine = firstLineOf(buffer);
   const headers = splitHeaderCells(headerLine, detectSeparator(headerLine));
   const { index } = resolveFieldMap(PROFILE_TYPE.FA_MUTUAL_FUND, profile, headers);
-  if (index.tds !== undefined && index.stampDuty !== undefined) return null;
+  if (["totalAmount", "tds", "stampDuty"].some((field) => index[field] !== undefined)) return null;
   return {
     code: "NOT_A_MUTUAL_FUND_FILE",
     message:
-      "This file has no TDS or Stamp Duty column, so it is not a mutual fund transaction file. Upload Equity files on the Equity tab.",
+      "This file has no TOTAL AMOUNT, TDS or Stamp Duty column, so it is not a mutual fund transaction file. Upload Equity files on the Equity tab.",
   };
 };
 
@@ -1549,13 +1585,24 @@ export const retryEquityDate = async (req, res) => {
   }
 };
 
+/*
+ * A status read that keeps failing (seen: "invalid oauth token" once the
+ * Commit request's token expired) would otherwise be retried for the whole
+ * BULK_MAX_WAIT_MS. After this many failures in a row the wait gives up; the
+ * caller then counts the rows itself, or stops so Try again can continue with
+ * a fresh token.
+ */
+const BULK_STATUS_MAX_ERRORS = 4;
+
 /** Wait for a bulk write to finish. true = success, false = failed or gave up. Shared with OpiOpoUpload.js. */
 export const waitForBulkWrite = async (bulkWrite, jobId, onTick) => {
   const start = Date.now();
+  let errorsInARow = 0;
   while (Date.now() - start < BULK_MAX_WAIT_MS) {
     await sleep(BULK_POLL_MS);
     try {
       const result = await bulkWrite.getStatus(jobId);
+      errorsInARow = 0;
       const status = result?.status ?? result?.data?.status ?? "";
       if (isBulkSuccessStatus(status)) return true;
       if (isBulkFailedStatus(status)) {
@@ -1563,7 +1610,9 @@ export const waitForBulkWrite = async (bulkWrite, jobId, onTick) => {
         return false;
       }
     } catch (err) {
-      console.warn(`[EquityReload] bulk status ${jobId}:`, err.message);
+      errorsInARow++;
+      console.warn(`[EquityReload] bulk status ${jobId} (${errorsInARow} of ${BULK_STATUS_MAX_ERRORS}):`, err.message);
+      if (errorsInARow >= BULK_STATUS_MAX_ERRORS) return false;
     }
     await onTick();
   }
@@ -1672,11 +1721,13 @@ const runPreCommit = async (kind, catalystApp, date) => {
 
         const ok = await waitForBulkWrite(bulkWrite, jobId, () => saveProgress(bucket, p));
         let actual = (await rowIdsOfDate(kind, zcql, date)).length;
-        if (ok && actual !== p.expectedCount) {
+        if (actual !== p.expectedCount) {
           await sleep(BULK_POLL_MS);
           actual = (await rowIdsOfDate(kind, zcql, date)).length;
         }
-        if (ok && actual === p.expectedCount) {
+        // Every trade is in the table, even when the job's status could not be read.
+        if (actual === p.expectedCount) {
+          if (!ok) console.warn(`[EquityReload] ${date}: load status unknown, but all ${actual} trades are in; going on`);
           p.insert.inserted = actual;
           break;
         }

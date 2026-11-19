@@ -53,6 +53,8 @@ const FILE_BLURB = {
         "The mutual fund fund-accounting file. It carries the same 26 fields as the regular transaction file under one different heading, so it is mapped on its own. Its rows are matched only against the Mutual Funds custodian files.",
     FA_OPI_OPO:
         "The OPI/OPO file: shares moved in or out from another system. Same columns as the Equity transaction file, without a Transaction ID.",
+    FA_MUTUAL_FUND_TDS:
+        "The mutual fund TDS file: one TDI and one TDO row per account. For now the file is only kept for its date; it does not change cash or holdings.",
     CUSTODY_RESIDENTIAL: "The deal allocation file your custodian sends for Resident accounts.",
     CUSTODY_NDPMS: "The deal allocation file your custodian sends for NRE/NRO/NDPMS accounts.",
     CUSTODY_MUTUAL_FUND: "The Mutual Funds transaction file your custodian sends (Subscription / Redemption). Matched only against mutual fund rows in the transaction file.",
@@ -458,7 +460,8 @@ export default function FieldMappingPanel({
     const [uploadError, setUploadError] = useState(null);
     /** field -> message, shown under that row only after a Save attempt finds it empty. */
     const [fieldErrors, setFieldErrors] = useState({});
-    /* Extra columns (Mutual Funds file only): the name the user typed for each
+    /* Extra columns (Equity and Mutual Funds transaction files only): the name
+       the user typed for each
        slot, and which slots are on screen. A slot appears when Add column is
        clicked and goes when its × is clicked. */
     const [labels, setLabels] = useState({});
@@ -935,7 +938,9 @@ export default function FieldMappingPanel({
         preview?.detectedType && requestedType && preview.detectedType !== requestedType;
 
     const fileKindLabel =
-        chosen === "FA" || chosen === "FA_MUTUAL_FUND" || chosen === "FA_OPI_OPO" ? "Fund accounting file" : "Custodian file";
+        chosen === "FA" || chosen === "FA_MUTUAL_FUND" || chosen === "FA_OPI_OPO" || chosen === "FA_MUTUAL_FUND_TDS"
+            ? "Fund accounting file"
+            : "Custodian file";
 
     return (
         <>
@@ -1211,7 +1216,7 @@ export default function FieldMappingPanel({
                                 </tbody>
                             </table>
 
-                            {/* Extra columns: Mutual Funds file only, up to five. */}
+                            {/* Extra columns: shown for file types whose field list has them, up to five. */}
                             {extraSlots.length > 0 && columns.length > 0 ? (
                                 nextFreeSlot ? (
                                     <button
