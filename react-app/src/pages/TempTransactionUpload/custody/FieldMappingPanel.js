@@ -36,18 +36,25 @@ import "./FieldMapping.css";
  * listed at the top rather than carried forward on trust.
  */
 
+/* The Equity reconciliation files. The mutual fund file is mapped from the
+   Mutual Funds tab, which passes types={["FA_MUTUAL_FUND"]}; mutual funds have
+   no custodian file any more. */
 const FILE_CHOICES = [
     "FA",
-    "FA_MUTUAL_FUND",
+    // "FA_MUTUAL_FUND",
     "CUSTODY_RESIDENTIAL",
     "CUSTODY_NDPMS",
-    "CUSTODY_MUTUAL_FUND",
+    // "CUSTODY_MUTUAL_FUND",
 ];
 
 const FILE_BLURB = {
     FA: "The daily transaction file you import. Whatever layout you map here is rewritten into the standard 26-column format before import, so nothing downstream changes.",
     FA_MUTUAL_FUND:
         "The mutual fund fund-accounting file. It carries the same 26 fields as the regular transaction file under one different heading, so it is mapped on its own. Its rows are matched only against the Mutual Funds custodian files.",
+    FA_OPI_OPO:
+        "The OPI/OPO file: shares moved in or out from another system. Same columns as the Equity transaction file, without a Transaction ID.",
+    FA_MUTUAL_FUND_TDS:
+        "The mutual fund TDS file: one TDI and one TDO row per account. For now the file is only kept for its date; it does not change cash or holdings.",
     CUSTODY_RESIDENTIAL: "The deal allocation file your custodian sends for Resident accounts.",
     CUSTODY_NDPMS: "The deal allocation file your custodian sends for NRE/NRO/NDPMS accounts.",
     CUSTODY_MUTUAL_FUND: "The Mutual Funds transaction file your custodian sends (Subscription / Redemption). Matched only against mutual fund rows in the transaction file.",
@@ -58,6 +65,9 @@ const FILE_BLURB = {
 };
 
 const NONE = "NONE";
+
+/* Longest name for an extra column; the server allows the same (EXTRA_COLUMN_LABEL_MAX). */
+const EXTRA_LABEL_MAX = 40;
 
 /**
  * The dropdown value for "not present in this file".
@@ -240,7 +250,17 @@ const autofillByName = (draft, entries, columns) => {
 
 /* ------------------------------------------------------------------ one row */
 
-function MappingRow({ entry, source, columns, takenBy, onChange, registerRef, fieldError, showHints }) {
+function MappingRow({
+    entry,
+    source,
+    columns,
+    takenBy,
+    onChange,
+    registerRef,
+    fieldError,
+    showHints,
+    labelEditor = null,
+}) {
     const transforms = entry.allowTransforms || [NONE];
     const transform = transformOf(source);
     const value = valueForSource(source, columns);
@@ -294,6 +314,10 @@ function MappingRow({ entry, source, columns, takenBy, onChange, registerRef, fi
     return (
         <tr className="fm-row">
             <td className="fm-cell-field">
+                {/* An extra column is named by the user, so its label is a text box. */}
+                {labelEditor ? (
+                    labelEditor
+                ) : (
                 <div className="fm-fieldname">
                     {entry.label}
                     {showHints ? (
@@ -306,7 +330,8 @@ function MappingRow({ entry, source, columns, takenBy, onChange, registerRef, fi
                         )
                     ) : null}
                 </div>
-                {showHints ? (
+                )}
+                {showHints && !labelEditor ? (
                     <div className="fm-builtin">Expects {KIND_BLURB[entry.kind] || entry.kind}</div>
                 ) : null}
             </td>
@@ -435,6 +460,12 @@ export default function FieldMappingPanel({
     const [uploadError, setUploadError] = useState(null);
     /** field -> message, shown under that row only after a Save attempt finds it empty. */
     const [fieldErrors, setFieldErrors] = useState({});
+    /* Extra columns (Equity and Mutual Funds transaction files only): the name
+       the user typed for each
+       slot, and which slots are on screen. A slot appears when Add column is
+       clicked and goes when its × is clicked. */
+    const [labels, setLabels] = useState({});
+    const [extraShown, setExtraShown] = useState([]);
 
     const uploadMode = Boolean(file && onUpload);
 
@@ -456,6 +487,8 @@ export default function FieldMappingPanel({
         setNotice("");
         setConflict(null);
         setFieldErrors({});
+        setLabels({});
+        setExtraShown([]);
     };
 
     /**
@@ -505,6 +538,15 @@ export default function FieldMappingPanel({
 
             setDraft(next);
             setCleared(dropped);
+
+            // Saved extra columns come back on screen with their names.
+            const savedLabels = map && !map.isDefault ? map.labels || {} : {};
+            setLabels(savedLabels);
+            setExtraShown(
+                (map?.fields || [])
+                    .filter((e) => e.extra && (next[e.field] || savedLabels[e.field]))
+                    .map((e) => e.field),
+            );
         },
         [autofill],
     );
@@ -554,6 +596,59 @@ export default function FieldMappingPanel({
     // Memoised: a fresh [] each render would re-run every memo below it.
     const columns = useMemo(() => preview?.columns || [], [preview]);
     const entries = useMemo(() => active?.fields || [], [active]);
+    /* Extra columns not added yet stay off screen. */
+    const extraSlots = useMemo(() => entries.filter((e) => e.extra).map((e) => e.field), [entries]);
+    const visibleEntries = useMemo(
+        () => entries.filter((e) => !e.extra || extraShown.includes(e.field)),
+        [entries, extraShown],
+    );
+    const nextFreeSlot = extraSlots.find((f) => !extraShown.includes(f)) || null;
+
+    const addExtraColumn = () => {
+        if (!nextFreeSlot) return;
+        setNotice("");
+        setExtraShown((prev) => [...prev, nextFreeSlot]);
+    };
+
+    const removeExtraColumn = (field) => {
+        setNotice("");
+        setExtraShown((prev) => prev.filter((f) => f !== field));
+        setLabels((prev) => {
+            const next = { ...prev };
+            delete next[field];
+            return next;
+        });
+        setFieldErrors((prev) => {
+            const next = { ...prev };
+            delete next[field];
+            return next;
+        });
+        setDraft((prev) => {
+            const next = { ...prev };
+            delete next[field];
+            return next;
+        });
+    };
+
+    const setLabel = (field, name) => {
+        setNotice("");
+        setFieldErrors((prev) => {
+            if (!prev[field]) return prev;
+            const next = { ...prev };
+            delete next[field];
+            return next;
+        });
+        setLabels((prev) => ({ ...prev, [field]: name }));
+    };
+
+    /* The names sent with Save: only for slots on screen that point at a column. */
+    const labelsToSave = () => {
+        const out = {};
+        for (const field of extraShown) {
+            if (draft[field] && String(labels[field] || "").trim()) out[field] = labels[field].trim();
+        }
+        return out;
+    };
 
     /** Switching file type starts again from whatever is saved for that type. */
     const choose = (type) => {
@@ -630,8 +725,16 @@ export default function FieldMappingPanel({
 
         const keys = new Set([...Object.keys(active.profile || {}), ...Object.keys(draft)]);
         for (const k of keys) if (!sameSource(active.profile?.[k], draft[k])) return true;
+
+        // A renamed, added or removed extra column is a change too.
+        const savedLabels = active.labels || {};
+        for (const field of extraSlots) {
+            const now = extraShown.includes(field) ? String(labels[field] || "").trim() : "";
+            if (now !== String(savedLabels[field] || "")) return true;
+            if (extraShown.includes(field) && !draft[field]) return true;
+        }
         return false;
-    }, [active, draft]);
+    }, [active, draft, labels, extraShown, extraSlots]);
 
     /*
      * Upload is reachable only through a saved mapping.
@@ -670,6 +773,22 @@ export default function FieldMappingPanel({
      * fixing that one and clicking Save again reaches the next, if any.
      */
     const validateBeforeSave = () => {
+        const stopAt = (field, message) => {
+            const node = fieldNodes.current[field];
+            if (node) {
+                node.scrollIntoView({ behavior: "smooth", block: "center" });
+                node.focus();
+            }
+            setFieldErrors({ [field]: message });
+            return false;
+        };
+        // An added extra column needs both a name and a column, or it is removed.
+        for (const field of extraShown) {
+            if (!String(labels[field] || "").trim()) {
+                return stopAt(field, "Type a name for this column, or remove it.");
+            }
+            if (!draft[field]) return stopAt(field, "Pick the column from your file, or remove this row.");
+        }
         for (const entry of entries) {
             const value = valueForSource(draft[entry.field], columns);
             // Optional fields (holdings files have some) may stay unanswered.
@@ -727,13 +846,14 @@ export default function FieldMappingPanel({
         setUploadError(null);
         setNotice("");
         try {
-            const res = await saveFieldMap(chosen, draft, "");
+            const res = await saveFieldMap(chosen, draft, "", labelsToSave());
 
             // `dirty` is measured against this, so replacing it with what the
             // server actually stored is what lets Upload take over the button.
             if (res.map) {
                 setMaps((prev) => prev.map((m) => (m.type === chosen ? res.map : m)));
                 setDraft({ ...res.map.profile });
+                setLabels(res.map.labels || {});
             }
             setCleared([]);
             setNotice(res.message || "Mapping saved.");
@@ -778,6 +898,8 @@ export default function FieldMappingPanel({
             }
             setDraft({});
             setCleared([]);
+            setLabels({});
+            setExtraShown([]);
             setNotice(res.message || "Mapping cleared.");
 
             // Clearing supersedes stored runs just as saving does.
@@ -816,7 +938,9 @@ export default function FieldMappingPanel({
         preview?.detectedType && requestedType && preview.detectedType !== requestedType;
 
     const fileKindLabel =
-        chosen === "FA" || chosen === "FA_MUTUAL_FUND" ? "Fund accounting file" : "Custodian file";
+        chosen === "FA" || chosen === "FA_MUTUAL_FUND" || chosen === "FA_OPI_OPO" || chosen === "FA_MUTUAL_FUND_TDS"
+            ? "Fund accounting file"
+            : "Custodian file";
 
     return (
         <>
@@ -1024,7 +1148,7 @@ export default function FieldMappingPanel({
 
                             <table className={showHints ? "data-table" : "data-table fm-table--plain"}>
                                 <tbody>
-                                    {entries.map((entry) => (
+                                    {visibleEntries.map((entry) => (
                                         <React.Fragment key={entry.field}>
                                             <MappingRow
                                                 entry={entry}
@@ -1035,6 +1159,32 @@ export default function FieldMappingPanel({
                                                 registerRef={registerFieldRef}
                                                 fieldError={fieldErrors[entry.field]}
                                                 showHints={showHints}
+                                                labelEditor={
+                                                    entry.extra ? (
+                                                        <div className="fm-extra-name">
+                                                            <input
+                                                                type="text"
+                                                                className="fm-extra-input"
+                                                                value={labels[entry.field] || ""}
+                                                                maxLength={EXTRA_LABEL_MAX}
+                                                                placeholder="Column name"
+                                                                aria-label={`Name of ${entry.label}`}
+                                                                onChange={(e) =>
+                                                                    setLabel(entry.field, e.target.value)
+                                                                }
+                                                            />
+                                                            <button
+                                                                type="button"
+                                                                className="fm-extra-remove"
+                                                                onClick={() => removeExtraColumn(entry.field)}
+                                                                aria-label={`Remove ${labels[entry.field] || entry.label}`}
+                                                                title="Remove this column"
+                                                            >
+                                                                &times;
+                                                            </button>
+                                                        </div>
+                                                    ) : null
+                                                }
                                             />
                                             {/* NDPMS files have no date column, so Transaction
                                                 Date is not mapped: every row takes the date
@@ -1065,6 +1215,23 @@ export default function FieldMappingPanel({
                                     ))}
                                 </tbody>
                             </table>
+
+                            {/* Extra columns: shown for file types whose field list has them, up to five. */}
+                            {extraSlots.length > 0 && columns.length > 0 ? (
+                                nextFreeSlot ? (
+                                    <button
+                                        type="button"
+                                        className="fm-ghost fm-add-column"
+                                        onClick={addExtraColumn}
+                                    >
+                                        + Add column
+                                    </button>
+                                ) : (
+                                    <p className="fm-muted">
+                                        All {extraSlots.length} extra columns are in use.
+                                    </p>
+                                )
+                            ) : null}
                         </>
                     ) : null}
                 </div>

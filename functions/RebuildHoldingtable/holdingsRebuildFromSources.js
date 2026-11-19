@@ -73,6 +73,19 @@ const getEffectiveDate = (r) => {
     : tradeDate || setDate;
 };
 
+/* ===== MUTUAL FUND BUY: settlement-dated =====
+   A mutual fund buy (Security_Type 'm', BY- / SQB) adds units on its settlement
+   date, not its trade date. The Holdings table has no mutual fund marker, so the
+   date is fixed here, as the row is read: TRANDATE takes the SETDATE value in
+   memory. Every date rule after this point, and the Holdings row written, then
+   use the settlement date. The Transaction table keeps the real trade date.
+   Same rule in functions/CalculateHoldingWorkers and RebuildHoldingtable. */
+const settleMutualFundBuy = (r) => {
+  const isMutualFund = String(r.Security_Type ?? "").trim().toLowerCase() === "m";
+  const isMfBuy = isMutualFund && /^BY-|SQB/i.test(String(r.Tran_Type || ""));
+  return isMfBuy && r.SETDATE ? { ...r, TRANDATE: r.SETDATE } : r;
+};
+
 const nextDayCutoff = (asOnDate) => {
   if (!asOnDate || !/^\d{4}-\d{2}-\d{2}$/.test(asOnDate)) return null;
   const nextDay = new Date(asOnDate);
@@ -92,7 +105,7 @@ async function fetchAccountTransactions(zcql, accountCode, asOnDate) {
   while (true) {
     try {
       const batch = await zcql.executeZCQLQuery(`
-        SELECT SETDATE, TRANDATE, Tran_Type, Security_Name, Security_code, QTY, NETRATE, Net_Amount, ISIN, ROWID
+        SELECT SETDATE, TRANDATE, Tran_Type, Security_Name, Security_code, QTY, NETRATE, Net_Amount, ISIN, ROWID, Security_Type
         FROM Transaction
         WHERE WS_Account_code = '${esc(accountCode)}'
         ${dateClause}
@@ -104,7 +117,7 @@ async function fetchAccountTransactions(zcql, accountCode, asOnDate) {
         const r = row.Transaction || row;
         if (r.ROWID && seen.has(r.ROWID)) continue;
         if (r.ROWID) seen.add(r.ROWID);
-        rows.push(r);
+        rows.push(settleMutualFundBuy(r));
       }
       if (batch.length < BATCH) break;
       offset += BATCH;

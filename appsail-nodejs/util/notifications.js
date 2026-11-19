@@ -59,10 +59,10 @@ const HCFA_KEY = /^(HCFA_\d{4}-\d{2}-\d{2})@\d+$/;
 
 const RUN_WORDING = {
   CM: {
-    clean: "Matching finished — no differences found.",
-    exceptions: (n) => `Matching finished — ${n} exception(s) to review.`,
-    failed: "Matching failed. Open the run to retry.",
-    superseded: "Files changed after this match — run it again.",
+    clean: "No differences found.",
+    exceptions: (n) => `${n} difference(s) to review.`,
+    failed: "Matching failed. Press Retry.",
+    superseded: "Files changed. Run the match again.",
   },
   HC: {
     clean: "Comparison finished — custodian and FA holdings agree.",

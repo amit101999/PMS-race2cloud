@@ -230,7 +230,7 @@ export const parseContractNoDate = (v) => {
  * Unrecognised tokens return null and become a row error. Never guessed.
  *
  * @param {string} raw
- * @param {"FA"|"CUSTODY"} side SQB / OPI are FA-only codes.
+ * @param {"FA"|"CUSTODY"} side SQB / OPI / OPO are FA-only codes.
  */
 export const normTranType = (raw, side = SIDE.FA) => {
   const t = text(raw).toUpperCase();
@@ -238,6 +238,8 @@ export const normTranType = (raw, side = SIDE.FA) => {
 
   if (t.startsWith("BY-")) return TRAN_TYPE.BUY;
   if (side === SIDE.FA && (t === "SQB" || t === "OPI")) return TRAN_TYPE.BUY;
+  // OPO (shares out to another system) is the OPI/OPO tab's sell; the holdings jobs treat it as one.
+  if (side === SIDE.FA && t === "OPO") return TRAN_TYPE.SELL;
   if (t === "BUY" || t === "B" || t === "BY+") return TRAN_TYPE.BUY;
   if (t === "SELL" || t === "SL+" || t === "SL" || t === "S") return TRAN_TYPE.SELL;
 

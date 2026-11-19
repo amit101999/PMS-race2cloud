@@ -16,12 +16,16 @@
  */
 
 import {
+  CUSTODY_FILE_TYPE,
   FA_FILE_TYPE,
   FA_FILE_TYPE_LABEL,
   FILE_SIDE,
   PREDEFINED_SCHEMES,
   ROW_ERROR,
+  RUN_STATUS,
 } from "../../util/custodyMatch/constants.js";
+import { CUSTODY_MODE, closedDateMessage, compareCustodyRows } from "../../util/custodyMatch/equityReload.js";
+import { readDateWindow } from "../../util/custodyMatch/changeWindow.js";
 import { PROFILE_TYPE } from "../../util/custodyMatch/fieldMap.js";
 import { detectFaFileType, parseFaFile, validateFaHeader } from "../../util/custodyMatch/parseFA.js";
 import { parseCustodyFile } from "../../util/custodyMatch/parseCustody.js";
@@ -39,10 +43,12 @@ import {
   deleteDaySide,
   deleteKeys,
   getBucket,
+  getBuffer,
   listDay,
   listCustodyHistory,
   listKnownSchemes,
   loadFieldMapProfiles,
+  objectExists,
   parseCustodyHistoryKey,
   putBuffer,
   saveToCustodyHistory,
@@ -51,12 +57,14 @@ import {
 import {
   deleteFileRows,
   listFiles,
+  listRunsForDate,
   recordFile,
   supersedeRunsForDate,
 } from "../../util/custodyMatch/runStore.js";
 import { insertNotification } from "../../util/notifications.js";
 
 /** Row errors are for reading, not for scrolling. Send the first page and say how many more. */
+const ZCQL_PAGE = 300;
 const MAX_REPORTED_ROW_ERRORS = 50;
 const MAX_REPORTED_WARNINGS = 20;
 
@@ -72,7 +80,7 @@ const noApp = (res) =>
   });
 
 /** Trim the error list and report the remainder rather than shipping 4,000 rows. */
-const summariseIssues = (rowErrors = [], warnings = []) => ({
+export const summariseIssues = (rowErrors = [], warnings = []) => ({
   rowErrors: rowErrors.slice(0, MAX_REPORTED_ROW_ERRORS),
   rowErrorCount: rowErrors.length,
   moreRowErrors: Math.max(rowErrors.length - MAX_REPORTED_ROW_ERRORS, 0),
@@ -84,7 +92,7 @@ const summariseIssues = (rowErrors = [], warnings = []) => ({
  * The date the user picked for this file. Required: a file is filed under the
  * day its rows are for, so there is no sensible default to fall back on.
  */
-const readUploadDate = (requested) => {
+export const readUploadDate = (requested) => {
   const given = String(requested || "").trim();
   if (!given) {
     return { error: "Choose the date this file is for before uploading it." };
@@ -102,7 +110,7 @@ const indiaToday = () => new Date(Date.now() + 330 * 60 * 1000).toISOString().sl
  * The upload date the user picked at the top of the screen. Files are recorded
  * under it and Match offers them by it. Required, and not later than today.
  */
-const readUploadedOn = (requested) => {
+export const readUploadedOn = (requested) => {
   const given = String(requested || "").trim();
   if (!given) {
     return { error: "Choose the upload date at the top of the screen before uploading." };
@@ -211,14 +219,14 @@ const wrongDateErrors = (rows, businessDate, fileName) =>
     }));
 
 /** Parser errors and wrong-date errors together, in file order. */
-const allRowErrors = (parsed, businessDate, fileName) =>
+export const allRowErrors = (parsed, businessDate, fileName) =>
   [...parsed.rowErrors, ...wrongDateErrors(parsed.rows, businessDate, fileName)].sort(
     (a, b) => a.row - b.row,
   );
 
-const getUploadedFile = (req) => req.files?.file || null;
+export const getUploadedFile = (req) => req.files?.file || null;
 
-const isCsv = (name) => String(name || "").toLowerCase().endsWith(".csv");
+export const isCsv = (name) => String(name || "").toLowerCase().endsWith(".csv");
 
 /**
  * GET /api/custody-match/files?uploadDate=yyyy-mm-dd[&date=yyyy-mm-dd]
@@ -315,6 +323,8 @@ export const listMatchDates = async (req, res) => {
 
     const byPair = new Map();
     for (const f of await listFiles(catalystApp)) {
+      // OPI/OPO files are filed under their upload date and never matched.
+      if (f.fileType === FA_FILE_TYPE.OPI_OPO) continue;
       const uploadDate = String(f.uploadedOn);
       const date = String(f.forDate);
       const pairKey = `${uploadDate}|${date}`;
@@ -377,8 +387,25 @@ export const uploadFaFile = async (req, res) => {
         message: `fileType must be one of ${FA_FILE_TYPES.join(", ")}; received "${req.body?.fileType || ""}".`,
       });
     }
+    // Mutual fund files are not reconciled any more: they are uploaded and
+    // committed on the Mutual Funds tab (EquityReload.js with kind MUTUAL_FUND).
+    if (faFileType === FA_FILE_TYPE.MUTUAL_FUND) {
+      return fail(res, 400, {
+        code: "USE_MUTUAL_FUNDS_TAB",
+        message: "Mutual fund transaction files are uploaded on the Mutual Funds tab.",
+      });
+    }
+    if (faFileType === FA_FILE_TYPE.OPI_OPO) {
+      return fail(res, 400, {
+        code: "USE_OPI_OPO_TAB",
+        message: "OPI/OPO transaction files are uploaded on the OPI/OPO tab.",
+      });
+    }
+    const profileType = PROFILE_TYPE.FA;
+    /* Before the Mutual Funds tab:
     const profileType =
       faFileType === FA_FILE_TYPE.MUTUAL_FUND ? PROFILE_TYPE.FA_MUTUAL_FUND : PROFILE_TYPE.FA;
+    */
 
     // The saved mapping decides which column is which. Unsaved -> the built-in
     // 26-column template, i.e. exactly the behaviour before mapping existed.
@@ -399,7 +426,7 @@ export const uploadFaFile = async (req, res) => {
         code: "FA_FILE_TYPE_MISMATCH",
         message:
           profileType === PROFILE_TYPE.FA
-            ? "Wrong file type — Equity selected, but this file has TDS / Stamp Duty amounts, so it is a Mutual Funds transaction file."
+            ? "Wrong file type — this file has TDS / Stamp Duty amounts, so it is a Mutual Funds transaction file. Upload it on the Mutual Funds tab."
             : "Wrong file type — Mutual Funds selected, but TDS and Stamp Duty are empty in every row, so it is an Equity transaction file.",
         fileName: file.name,
       });
@@ -552,6 +579,14 @@ export const uploadCustodyFile = async (req, res) => {
         message: `fileType must be one of ${CUSTODY_FILE_TYPES.join(", ")}; received "${req.body?.fileType || ""}".`,
       });
     }
+    // Mutual funds are not reconciled any more, so no custodian file is needed for them.
+    if (fileType === CUSTODY_FILE_TYPE.MUTUAL_FUND) {
+      return fail(res, 400, {
+        code: "USE_MUTUAL_FUNDS_TAB",
+        message:
+          "Mutual funds are not matched against a custodian file any more. Upload the mutual fund transaction file on the Mutual Funds tab.",
+      });
+    }
 
     // Layout is detected from the columns, then cross-checked against the slot
     // the user dropped it into — a file in the wrong slot would mislabel the
@@ -618,14 +653,81 @@ export const uploadCustodyFile = async (req, res) => {
     /*
      * One file per scheme and type, per file date AND upload date. The same
      * file date under another upload date is a separate file and is left alone.
+     *
+     * Equity tab (EquityReload.js sets req.equityReload): a date can hold several
+     * files of a scheme, whatever upload date they came under, and the new file's
+     * lines decide what happens (compareCustodyRows).
      */
-    const sameSlot = (await listFiles(catalystApp, { forDate: businessDate, uploadedOn })).filter(
+    const reload = req.equityReload || null;
+    const slotFilter = reload ? { forDate: businessDate } : { forDate: businessDate, uploadedOn };
+    const sameSlot = (await listFiles(catalystApp, slotFilter)).filter(
       (r) =>
         r.side === FILE_SIDE.CUSTODY && r.scheme === storedScheme && r.fileType === fileType,
     );
     const wantsReplace = String(req.body?.replace || "").toLowerCase() === "true";
+    const bucket = getBucket(catalystApp);
 
-    if (sameSlot.length > 0 && !wantsReplace) {
+    let reloadComparison = null;
+    let replacesStoredFiles = !reload && sameSlot.length > 0;
+    if (reload) {
+      const storedRows = [];
+      for (const stored of sameSlot) {
+        const storedFile = await parseCustodyFile(await getBuffer(bucket, stored.fileKey), {
+          scheme,
+          fileType,
+          fileName: stored.originalFileName,
+          businessDate,
+          profiles,
+        });
+        if (storedFile.fileError) {
+          return fail(res, 409, {
+            code: "STORED_FILE_UNREADABLE",
+            message: `The stored file ${stored.originalFileName} no longer reads against the saved field mapping, so this file cannot be compared with it. Remove the stored file and upload it again.`,
+          });
+        }
+        storedRows.push(...storedFile.rows);
+      }
+
+      reloadComparison = compareCustodyRows(parsed.rows, storedRows);
+      const answer = {
+        success: true,
+        stored: false,
+        mode: reloadComparison.mode,
+        businessDate,
+        fileName: file.name,
+        scheme,
+        fileType,
+        counts: reloadComparison.counts,
+        blankNumbers: reloadComparison.blankNumbers,
+        lookAlikes: reloadComparison.lookAlikes,
+        existing: sameSlot.map((r) => r.originalFileName),
+      };
+
+      if (reloadComparison.mode === CUSTODY_MODE.SKIP) {
+        return res.status(200).json({
+          ...answer,
+          message: `Every line of ${file.name} is already uploaded for ${scheme} on ${businessDate}, so nothing was stored.`,
+        });
+      }
+      if (reloadComparison.mode === CUSTODY_MODE.ASK) {
+        if (!wantsReplace) {
+          return res.status(200).json({
+            ...answer,
+            message: "This file overlaps the stored custodian lines. Replace the stored file(s), or cancel.",
+          });
+        }
+        replacesStoredFiles = true;
+        const runs = await listRunsForDate(catalystApp, businessDate, ZCQL_PAGE);
+        if (runs.some((r) => r.status === RUN_STATUS.QUEUED || r.status === RUN_STATUS.RUNNING)) {
+          return fail(res, 409, {
+            code: "MATCH_RUNNING",
+            message: `A match of ${businessDate} is running. Replace the file when it finishes.`,
+          });
+        }
+      }
+    }
+
+    if (!reload && sameSlot.length > 0 && !wantsReplace) {
       return fail(res, 409, {
         code: "FILE_ALREADY_EXISTS",
         message: `A ${fileType} file for ${scheme} for ${businessDate} is already uploaded under ${uploadedOn}.`,
@@ -643,7 +745,6 @@ export const uploadCustodyFile = async (req, res) => {
       });
     }
 
-    const bucket = getBucket(catalystApp);
     const uploadedAtMs = Date.now();
     const key = buildCustodyKey({
       businessDate,
@@ -665,7 +766,7 @@ export const uploadCustodyFile = async (req, res) => {
         uploadedOn,
         originalFileName: file.name,
       },
-      replacing: sameSlot,
+      replacing: replacesStoredFiles ? sameSlot : [],
     });
 
     /*
@@ -692,11 +793,34 @@ export const uploadCustodyFile = async (req, res) => {
       console.error("[CustodyMatchUpload] could not save upload history copy:", historyErr);
     }
 
-    const superseded = await supersedeRunsForDate(catalystApp, businessDate, uploadedOn);
+    // The Equity tab matches a date against all its custodian files, so every
+    // run of the date is out of date, not only this upload date's.
+    const superseded = await supersedeRunsForDate(catalystApp, businessDate, reload ? null : uploadedOn);
+
+    // The file is in by now, and the runs above can no longer be pre-committed,
+    // so a failed clean-up is reported rather than failing the upload.
+    let cleanupError = "";
+    if (reload && replacesStoredFiles) {
+      try {
+        await reload.clearMatchResults(businessDate);
+      } catch (cleanupErr) {
+        console.error("[CustodyMatchUpload] could not clear the match results:", cleanupErr);
+        cleanupError = `The file was replaced, but the old match results of ${businessDate} could not all be removed: ${cleanupErr.message}`;
+      }
+    }
+
     const after = await uploadDayFiles(catalystApp, businessDate, uploadedOn);
 
     return res.status(200).json({
       success: true,
+      ...(reload
+        ? {
+            stored: true,
+            mode: replacesStoredFiles ? CUSTODY_MODE.REPLACE : reloadComparison.mode,
+            counts: reloadComparison.counts,
+            cleanupError,
+          }
+        : null),
       message: `File stored for ${scheme} for ${businessDate}.`,
       businessDate,
       key,
@@ -710,7 +834,7 @@ export const uploadCustodyFile = async (req, res) => {
       sizeBytes: file.data.length,
       stats: parsed.stats,
       ...summariseIssues([], parsed.warnings),
-      replacedSlot: sameSlot.length > 0,
+      replacedSlot: replacesStoredFiles,
       supersededRuns: superseded.runIds,
       files: after.custody.files,
       uploadHistory,
@@ -792,7 +916,7 @@ const confirmRemoval = async (catalystApp, { key, businessDate, jobName, title, 
           jobName,
           title,
           status: "completed",
-          message: `${fileName} has been removed from storage.`,
+          message: `${fileName} removed.`,
         });
         return;
       }
@@ -806,7 +930,7 @@ const confirmRemoval = async (catalystApp, { key, businessDate, jobName, title, 
     jobName,
     title,
     status: "completed",
-    message: `${fileName} was deleted. Storage is still catching up, so it may show for a little longer after a refresh.`,
+    message: `${fileName} removed. It may still appear for a short while.`,
   });
 };
 
@@ -829,8 +953,26 @@ export const deleteUploadedFile = async (req, res) => {
       });
     }
 
+    // A trade date past its change window is locked, removal included. A mutual
+    // fund file follows the Mutual Funds tab's window, an OPI/OPO file has none,
+    // and every other file follows Equity's.
+    const mutualFund = parsed.fileType === FA_FILE_TYPE.MUTUAL_FUND;
+    const opiOpo = parsed.fileType === FA_FILE_TYPE.OPI_OPO;
+    const closed = opiOpo
+      ? ""
+      : closedDateMessage(parsed.businessDate, await readDateWindow(catalystApp, parsed.businessDate, { mutualFund }));
+    if (closed) return fail(res, 409, { code: "DATE_CLOSED", message: closed });
+    // An OPI/OPO file stays once its Commit has started (OpiOpoUpload.js keeps
+    // opi-opo/<fileId>/progress.json from then on), so it can never be uploaded again.
+    if (opiOpo && (await objectExists(getBucket(catalystApp), `opi-opo/${parsed.uploadedAtMs}/progress.json`))) {
+      return fail(res, 409, {
+        code: "ALREADY_COMMITTED",
+        message: "This OPI/OPO file is committed (or being committed), so it cannot be removed.",
+      });
+    }
+
     const fileName = parsed.originalFileName || key.split("/").pop();
-    const notice = { jobName: `RM-${Date.now()}`, title: `File removal — ${fileName}` };
+    const notice = { jobName: `RM-${Date.now()}`, title: "File removal" };
     const zcql = catalystApp.zcql();
 
     const bucket = getBucket(catalystApp);
@@ -854,7 +996,8 @@ export const deleteUploadedFile = async (req, res) => {
     );
     await deleteFileRows(catalystApp, rows);
     const uploadedOn = rows[0] ? String(rows[0].uploadedOn) : null;
-    const superseded = uploadedOn
+    // Matching never reads a mutual fund or OPI/OPO file, so removing one leaves the date's match as it is.
+    const superseded = uploadedOn && !mutualFund && !opiOpo
       ? await supersedeRunsForDate(catalystApp, parsed.businessDate, uploadedOn)
       : { runIds: [] };
     const after = await uploadDayFiles(catalystApp, parsed.businessDate, uploadedOn);
@@ -864,7 +1007,7 @@ export const deleteUploadedFile = async (req, res) => {
       await insertNotification(zcql, {
         ...notice,
         status: "in_progress",
-        message: "Deleting from storage. This usually takes 1–3 minutes.",
+        message: `Removing ${fileName}.`,
       });
       void confirmRemoval(catalystApp, {
         key,

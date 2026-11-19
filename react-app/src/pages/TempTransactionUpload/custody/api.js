@@ -158,13 +158,87 @@ export const retryRun = (runId) => json(`/run/${runId}/retry`, "POST");
 
 export const proceedToImport = (runIds) => json("/runs/proceed", "POST", { runIds });
 
+/* ── Equity and Mutual Funds tabs: upload, match and Pre-commit a date ── */
+
+/*
+ * The two tabs share these routes. kind says which tab a call is for; the
+ * server keeps each tab's files, window, Commit and history apart. The Mutual
+ * Funds tab has no custodian file and no match.
+ */
+export const KIND = { EQUITY: "EQUITY", MUTUAL_FUND: "MUTUAL_FUND", OPI_OPO: "OPI_OPO" };
+
+const kindQuery = (kind) => (kind && kind !== KIND.EQUITY ? `kind=${encodeURIComponent(kind)}` : "");
+const withKind = (path, kind) => {
+  const q = kindQuery(kind);
+  if (!q) return path;
+  return `${path}${path.includes("?") ? "&" : "?"}${q}`;
+};
+
+/* choice ("ADD" | "REPLACE") is sent only after the server answered mode "ASK". */
+export const uploadEquityFaFile = ({ file, businessDate, uploadDate, choice = "", kind = KIND.EQUITY }) =>
+  form("/reload/fa-file", { file, businessDate, uploadDate, choice, kind });
+
+export const uploadEquityCustodyFile = ({ file, scheme, fileType, businessDate, uploadDate, replace = false }) =>
+  form("/reload/custody-file", {
+    file,
+    scheme,
+    fileType,
+    businessDate,
+    uploadDate,
+    replace: replace ? "true" : "",
+  });
+
+export const startEquityRun = (businessDate, uploadDate, startedBy) =>
+  json("/reload/run", "POST", { businessDate, uploadDate, startedBy });
+
+/** Pending files, the commit summary and the Pre-commit progress of one date on a tab. */
+export const getEquityDate = (date, kind = KIND.EQUITY) => request(withKind(`/reload/${date}`, kind));
+
+export const preCommitEquityDate = (date, { runId = "", confirmBigRemoval = false, kind = KIND.EQUITY }) =>
+  json(`/reload/${date}/pre-commit`, "POST", { runId, confirmBigRemoval: confirmBigRemoval ? "true" : "", kind });
+
+export const retryEquityDate = (date, kind = KIND.EQUITY) => json(`/reload/${date}/retry`, "POST", { kind });
+
+export const getCommitHistory = (kind = KIND.EQUITY) => request(withKind("/reload/commit-history", kind));
+
+/* TDS tab: a trade date's TDS files, only kept for now. Each call answers with the date's files. */
+export const getTdsFiles = (date) => request(`/tds/${date}`);
+export const uploadTdsFile = ({ file, date, uploadDate }) => form(`/tds/${date}`, { file, uploadDate });
+export const deleteTdsFile = (date, key) =>
+  request(`/tds/${date}?key=${encodeURIComponent(key)}`, { method: "DELETE" });
+export const getTdsDownloadUrl = (key) => request(`/tds/download?key=${encodeURIComponent(key)}`);
+
+/* OPI/OPO tab: one file (any number of dates) is one Commit. fileId is the file's uploadedAtMs. */
+export const uploadOpiOpoFile = ({ file, uploadDate }) => form("/opi-opo/file", { file, uploadDate });
+export const getOpiOpoFile = (fileId) => request(`/opi-opo/${encodeURIComponent(fileId)}`);
+export const commitOpiOpoFile = (fileId, { startedBy = "" } = {}) =>
+  json(`/opi-opo/${encodeURIComponent(fileId)}/commit`, "POST", { startedBy });
+export const retryOpiOpoFile = (fileId) => json(`/opi-opo/${encodeURIComponent(fileId)}/retry`, "POST", {});
+
+export const getConsolidatedFiles = (kind = KIND.EQUITY) => request(withKind("/reload/consolidated-files", kind));
+
+export const MODE_LABEL = {
+  FIRST: "First upload",
+  ADD: "Added as extra file",
+  REPLACE: "Replaces the date's trades",
+  ASK: "Your choice needed",
+};
+
+export const CUSTODY_MODE_LABEL = {
+  FIRST: "First custodian file",
+  ADD: "Added as extra file",
+  REPLACE: "Replaced the earlier file(s)",
+  SKIP: "Already uploaded",
+};
+
 /* ---------------------------------------------------------------- field mapping */
 
 /** All three profiles plus their field catalogs, in one call. */
 export const getFieldMaps = () => request("/field-map");
 
-export const saveFieldMap = (type, profile, updatedBy) =>
-  json(`/field-map/${type}`, "PUT", { profile, updatedBy });
+/** `labels` = names of the extra columns added on the mapping screen. */
+export const saveFieldMap = (type, profile, updatedBy, labels = {}) =>
+  json(`/field-map/${type}`, "PUT", { profile, updatedBy, labels });
 
 /** Deletes the saved mapping for one file type, so every field is mapped again. */
 export const deleteFieldMap = (type) => request(`/field-map/${type}`, { method: "DELETE" });
@@ -182,6 +256,8 @@ export const previewHeaders = (file, type) => form("/field-map/preview", { file,
 export const PROFILE_TYPE = {
   FA: "FA",
   FA_MUTUAL_FUND: "FA_MUTUAL_FUND",
+  FA_OPI_OPO: "FA_OPI_OPO",
+  FA_MUTUAL_FUND_TDS: "FA_MUTUAL_FUND_TDS",
   CUSTODY_RESIDENTIAL: "CUSTODY_RESIDENTIAL",
   CUSTODY_NDPMS: "CUSTODY_NDPMS",
   CUSTODY_MUTUAL_FUND: "CUSTODY_MUTUAL_FUND",
@@ -193,6 +269,8 @@ export const PROFILE_TYPE = {
 export const PROFILE_LABEL = {
   FA: "Transaction file (FA)",
   FA_MUTUAL_FUND: "Transaction file (FA) — Mutual Funds",
+  FA_OPI_OPO: "Transaction file (FA) — OPI/OPO",
+  FA_MUTUAL_FUND_TDS: "TDS file — Mutual Funds",
   CUSTODY_RESIDENTIAL: "Custodian — Residential",
   CUSTODY_NDPMS: "Custodian — NRE/NRO/NDPMS",
   CUSTODY_MUTUAL_FUND: "Custodian — Mutual Funds",
@@ -205,6 +283,10 @@ export const PROFILE_HELP = {
   FA: "The daily transaction file. Whatever layout you map here is rewritten into the standard 26-column format before it is imported, so the import is unaffected.",
   FA_MUTUAL_FUND:
     "The mutual fund fund-accounting file. Same 26 fields as the regular transaction file — it renames one heading (SYMBOLCODE/ISIN CODE), which is why it is mapped separately. Its rows are matched only against the Mutual Funds custodian files. Dates may be in any common format (2026-08-20, 20-08-2026, 20-Aug-2026) and are stored as YYYY-MM-DD.",
+  FA_OPI_OPO:
+    "The OPI/OPO file: shares moved in (OPI) or out (OPO) from another system. Same columns as the Equity transaction file, without a Transaction ID. Saved separately, so it never changes the Equity mapping.",
+  FA_MUTUAL_FUND_TDS:
+    "The mutual fund TDS file (TDI / TDO rows per account). Broker acc id, Transaction type, Transaction date and AMT must be mapped. For now the file is only kept; it does not change cash or holdings.",
   CUSTODY_RESIDENTIAL: "The deal allocation file for Resident accounts.",
   CUSTODY_NDPMS: "The deal allocation file for NRE/NRO/NDPMS accounts.",
   CUSTODY_MUTUAL_FUND:
@@ -221,11 +303,14 @@ export const PROFILE_HELP = {
 export const FA_FILE_TYPE = {
   REGULAR: "REGULAR",
   MUTUAL_FUND: "MUTUAL_FUND",
+  /* The OPI/OPO tab's file: an Equity file whose rows are all OPI or OPO. */
+  OPI_OPO: "OPI_OPO",
 };
 
 export const FA_FILE_TYPE_LABEL = {
   REGULAR: "Equity",
   MUTUAL_FUND: "Mutual Funds",
+  OPI_OPO: "Equity",
 };
 
 export const SOURCE_BY = { NAME: "name", INDEX: "index", ABSENT: "absent" };
@@ -321,6 +406,26 @@ export const todayIso = () => {
   const p = (n) => String(n).padStart(2, "0");
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 };
+
+/*
+ * Equity tab: each trade date has its own change window (T+N), chosen on the Fund
+ * Accounting card until the date's first commit fixes it. The server works out
+ * whether a date is open or locked (util/custodyMatch/equityReload.js) and sends
+ * the text to show, so the screen holds no copy of the rule.
+ */
+export const WINDOW_PRESETS = [1, 2, 3, 150];
+export const DEFAULT_WINDOW_DAYS = 150;
+export const MAX_WINDOW_DAYS = 150;
+
+/** { [date]: { days, fixed, lastDay, locked, message } } for the given trade dates on a tab. */
+export const getDateWindows = async (dates, kind = KIND.EQUITY) => {
+  const unique = [...new Set(dates.filter(Boolean))].sort();
+  if (unique.length === 0) return {};
+  const res = await request(withKind(`/reload/windows?dates=${encodeURIComponent(unique.join(","))}`, kind));
+  return res.windows || {};
+};
+
+export const saveDateWindow = (date, days, kind = KIND.EQUITY) => json(`/reload/${date}/window`, "PUT", { days, kind });
 
 export function formatBytes(bytes) {
   if (bytes == null || Number.isNaN(Number(bytes))) return "—";

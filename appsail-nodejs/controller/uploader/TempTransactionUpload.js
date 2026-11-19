@@ -3,9 +3,10 @@ import { PassThrough, Readable } from "stream";
 
 import { stratusSignedUrlToString } from "../../util/stratusSignedUrl.js";
 import { releaseImportMarker } from "../../util/custodyMatch/runStore.js";
+import { MUTUAL_FUND_TOTAL_AMOUNT_HEADER, mutualFundAmount } from "../../util/custodyMatch/equityReload.js";
 
-const BUCKET_NAME = "client-transaction-files";
-const TABLE_NAME = "Transaction";
+export const BUCKET_NAME = "client-transaction-files";
+export const TABLE_NAME = "Transaction";
 
 /** AppSail public base URL — used as the bulk-write callback target. */
 const APPSAIL_BASE_URL =
@@ -36,7 +37,7 @@ function escSql(s) {
   return String(s ?? "").replace(/'/g, "''");
 }
 
-async function ensureJobsRow(zcql, jobName, status) {
+export async function ensureJobsRow(zcql, jobName, status) {
   try {
     await zcql.executeZCQLQuery(`
       INSERT INTO Jobs (jobName, status) VALUES ('${escSql(jobName)}', '${escSql(status)}')
@@ -55,7 +56,7 @@ async function ensureJobsRow(zcql, jobName, status) {
   }
 }
 
-async function updateJobsStatus(zcql, jobName, status) {
+export async function updateJobsStatus(zcql, jobName, status) {
   try {
     await zcql.executeZCQLQuery(`
       UPDATE Jobs SET status = '${escSql(status)}' WHERE jobName = '${escSql(jobName)}'
@@ -97,12 +98,12 @@ function normalizeBulkStatus(raw) {
     .replace(/-/g, "_");
 }
 
-function isBulkSuccessStatus(status) {
+export function isBulkSuccessStatus(status) {
   const s = normalizeBulkStatus(status);
   return s === "COMPLETED" || s === "SUCCESS" || s === "SUCCESSFUL";
 }
 
-function isBulkFailedStatus(status) {
+export function isBulkFailedStatus(status) {
   return normalizeBulkStatus(status) === "FAILED";
 }
 
@@ -182,7 +183,7 @@ const IMPORT_JOB_DEAD_AFTER_MS = 3 * 60 * 60 * 1000;
 /* Dead rows older than this are old history, not worth a warning. */
 const IMPORT_JOB_WARN_WINDOW_MS = 24 * 60 * 60 * 1000;
 
-const timeOfDay = (ms) =>
+export const timeOfDay = (ms) =>
   new Date(ms).toLocaleTimeString("en-IN", {
     timeZone: "Asia/Kolkata",
     hour: "2-digit",
@@ -204,7 +205,7 @@ const IMPORT_JOB_LABEL = {
  * @returns {Promise<{running: {jobName:string, what:string, startedAtMs:number}[],
  *                    dead: {jobName:string, what:string, startedAtMs:number}[]}>}
  */
-async function findImportsStillProcessing(catalystApp) {
+export async function findImportsStillProcessing(catalystApp) {
   const rows = await catalystApp.zcql().executeZCQLQuery(`
     SELECT jobName FROM Jobs
     WHERE (status = 'RUNNING' OR status = '${LOAD_TIMED_OUT}')
@@ -490,6 +491,14 @@ const HEADER_MAP = {
   CashSetdate: "PAYMENTDATE",
   TDS: "TDSAMOUNT",
   "Stamp Duty": "STAMPDUTY",
+  // Column 27 of the Equity tab's consolidated file (FA_TRANSACTION_ID_HEADER in fieldMap.js).
+  "Transaction ID": "Transaction_ID",
+  // The extra columns added on the Equity and Mutual Funds mapping screens.
+  Column1: "Column1",
+  Column2: "Column2",
+  Column3: "Column3",
+  Column4: "Column4",
+  Column5: "Column5",
 };
 
 /**
@@ -498,6 +507,10 @@ const HEADER_MAP = {
  * so a 26-column upload is validated and imported exactly as before.
  */
 const OPTIONAL_TRAILING_HEADERS = ["TDS", "Stamp Duty"];
+
+/** How a mutual fund row is marked in Transaction. The inception data already uses these values. */
+const MUTUAL_FUND_SECURITY_TYPE = "m";
+const MUTUAL_FUND_SECURITY_TYPE_DESCRIPTION = "Mutual Funds";
 
 /**
  * @param {string} raw Header cell from row 1 (trimmed).
@@ -660,6 +673,24 @@ function deriveNetRateAndAmount({ tranType, qty, rate, brokeragePerShare }) {
 }
 
 /**
+ * Mutual fund rows:
+ *   Net_Amount = TOTAL AMOUNT when the cell is filled, exactly as given;
+ *                otherwise worked out by mutualFundAmount
+ *                (buy: QTY × RATE + Stamp Duty, sell: QTY × RATE − STT)
+ *   NETRATE    = Net_Amount ÷ QTY
+ * TDS is stored but does not change the amount. Net_Amount is the final money
+ * moved, so the cash jobs use it as it is for these rows (no second ± STT).
+ * Returns "" for both when there is no amount or no quantity.
+ */
+function deriveMutualFundAmount({ tranType, qty, rate, stampDuty, stt, totalAmount }) {
+  const q = Math.abs(Number(qty) || 0);
+  const given = String(totalAmount ?? "").trim();
+  const amount = given !== "" ? Number(given) : mutualFundAmount({ tranType, qty, rate, stampDuty, stt });
+  if (!q || amount === null || !Number.isFinite(amount)) return { netRate: "", netAmount: "" };
+  return { netRate: String(round4(amount / q)), netAmount: given !== "" ? given : String(amount) };
+}
+
+/**
  * Splits CSV text into rows of cells, honouring double quotes: a quoted cell may
  * hold the separator, a line break, or a doubled "" for a literal quote. Cutting
  * each line at every comma instead shifts every column after a value such as
@@ -721,7 +752,7 @@ function csvCell(value) {
  * NETRATE and Net_Amount are appended to every row, always derived from
  * RATE / BROKERAGEPERSHARE / QTY / TRANSTYPE (see deriveNetRateAndAmount).
  */
-function normalizeCsvForBulkUpload(fileBuffer) {
+export function normalizeCsvForBulkUpload(fileBuffer, { mutualFund = false } = {}) {
   const text = stripBom(fileBuffer.toString("utf8"));
   const separator = detectSeparator(getFirstLineText(fileBuffer));
   const rows = parseCsvRows(text, separator).map((cells) =>
@@ -745,8 +776,13 @@ function normalizeCsvForBulkUpload(fileBuffer) {
   const qtyIdx = srcIdx("QUANTITY");
   const rateIdx = srcIdx("RATE");
   const brokIdx = srcIdx("BROKERAGEPERSHARE");
+  const stampIdx = srcIdx("Stamp Duty");
+  const sttIdx = srcIdx("TRANEXPENSE");
+  // Mutual funds only; it has no Transaction column of its own (not in HEADER_MAP).
+  const totalAmountIdx = srcIdx(MUTUAL_FUND_TOTAL_AMOUNT_HEADER);
 
   const newHeaders = [...headerMappings.flatMap((m) => m.targets), "NETRATE", "Net_Amount"];
+  if (mutualFund) newHeaders.push("Security_Type", "Security_Type_Description");
   const outSep = ",";
   const newLines = [newHeaders.join(outSep)];
 
@@ -756,12 +792,21 @@ function normalizeCsvForBulkUpload(fileBuffer) {
     if (cells.length === 1 && cells[0] === "") continue;
     const cellAt = (i) => (i >= 0 && i < cells.length ? cells[i] : "");
 
-    const derived = deriveNetRateAndAmount({
-      tranType: cellAt(typeIdx),
-      qty: cellAt(qtyIdx),
-      rate: cellAt(rateIdx),
-      brokeragePerShare: cellAt(brokIdx),
-    });
+    const derived = mutualFund
+      ? deriveMutualFundAmount({
+          tranType: cellAt(typeIdx),
+          qty: cellAt(qtyIdx),
+          rate: cellAt(rateIdx),
+          stampDuty: cellAt(stampIdx),
+          stt: cellAt(sttIdx),
+          totalAmount: cellAt(totalAmountIdx),
+        })
+      : deriveNetRateAndAmount({
+          tranType: cellAt(typeIdx),
+          qty: cellAt(qtyIdx),
+          rate: cellAt(rateIdx),
+          brokeragePerShare: cellAt(brokIdx),
+        });
 
     const outCells = [];
     for (const m of headerMappings) {
@@ -770,6 +815,9 @@ function normalizeCsvForBulkUpload(fileBuffer) {
       for (let t = 0; t < m.targets.length; t++) outCells.push(csvCell(raw));
     }
     outCells.push(derived.netRate, derived.netAmount);
+    if (mutualFund) {
+      outCells.push(MUTUAL_FUND_SECURITY_TYPE, MUTUAL_FUND_SECURITY_TYPE_DESCRIPTION);
+    }
     newLines.push(outCells.join(outSep));
   }
 

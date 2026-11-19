@@ -10,6 +10,11 @@ const STATUS_META = {
   timeout: { label: "Still running", cls: "job-status--timeout" },
 };
 
+/* How long a pop-up message stays, matching the slide-in, hold and slide-out in the CSS. */
+const TOAST_MS = 3000;
+/* A burst of updates (a tab woken after a while) shows only the newest few. */
+const MAX_TOASTS = 3;
+
 function relativeTime(ts) {
   const diffSec = Math.max(0, Math.round((Date.now() - ts) / 1000));
   if (diffSec < 5) return "just now";
@@ -24,26 +29,47 @@ function relativeTime(ts) {
  * Fixed top-right notification bell + dropdown, backed by JobNotificationContext.
  * Mount once (in App.js, inside the provider) so it's visible on every page.
  * Reusable as-is by any feature that calls useJobNotifications().trackJob(...).
+ *
+ * A new notification, or one whose status changes, also slides in from the right
+ * as a short message under the bell and goes after TOAST_MS. It stays in the list.
  */
 export default function NotificationTray() {
-  const { jobs, dismissJob, clearAll } = useJobNotifications();
+  const { jobs, loaded, dismissJob, clearAll } = useJobNotifications();
   const [open, setOpen] = useState(false);
-  const [flash, setFlash] = useState(false);
+  const [toasts, setToasts] = useState([]);
   const rootRef = useRef(null);
-  const prevSignatureRef = useRef("");
+  // Status of each notification already seen; null until the server's first list
+  // arrives, so the notifications already there when the page opens do not pop up.
+  const seenRef = useRef(null);
+  const timersRef = useRef([]);
 
-  // Briefly flash the bell whenever the job list changes (new job, status
-  // change) — a nudge, not a disappearing toast: nothing here auto-dismisses.
   useEffect(() => {
-    const signature = jobs.map((j) => `${j.id}:${j.status}`).join("|");
-    const changed = prevSignatureRef.current !== "" && signature !== prevSignatureRef.current;
-    prevSignatureRef.current = signature;
+    if (!loaded) return;
+    const seen = seenRef.current;
+    const newestOf = (list) => Math.max(0, ...list.map((j) => Number(j.updatedAt) || 0));
+    seenRef.current = {
+      statuses: new Map(jobs.map((j) => [j.rowId || j.id, j.status])),
+      newest: Math.max(seen?.newest || 0, newestOf(jobs)),
+    };
+    if (seen === null) return;
 
-    if (!changed) return;
-    setFlash(true);
-    const t = setTimeout(() => setFlash(false), 1200);
-    return () => clearTimeout(t);
-  }, [jobs]);
+    // Updated since the last list: an older notification that moves into the
+    // list after a delete or Clear all is not news.
+    const arrived = jobs
+      .filter((j) => seen.statuses.get(j.rowId || j.id) !== j.status && (Number(j.updatedAt) || 0) > seen.newest)
+      .slice(0, MAX_TOASTS);
+    if (arrived.length === 0) return;
+
+    const shown = arrived.map((j) => ({ ...j, toastKey: `${j.rowId || j.id}:${j.status}:${Date.now()}` }));
+    setToasts((prev) => [...shown, ...prev].slice(0, MAX_TOASTS));
+    for (const toast of shown) {
+      timersRef.current.push(
+        setTimeout(() => setToasts((prev) => prev.filter((t) => t.toastKey !== toast.toastKey)), TOAST_MS),
+      );
+    }
+  }, [jobs, loaded]);
+
+  useEffect(() => () => timersRef.current.forEach(clearTimeout), []);
 
   useEffect(() => {
     function onClickOutside(e) {
@@ -64,7 +90,7 @@ export default function NotificationTray() {
   const badgeTone = attentionCount > 0 ? "attention" : activeCount > 0 ? "progress" : "done";
 
   return (
-    <div className={`job-tray ${flash ? "job-tray--flash" : ""}`} ref={rootRef}>
+    <div className="job-tray" ref={rootRef}>
       <button
         type="button"
         className="job-tray-bell"
@@ -77,6 +103,22 @@ export default function NotificationTray() {
           <span className={`job-tray-badge job-tray-badge--${badgeTone}`}>{badgeCount}</span>
         )}
       </button>
+
+      {!open && toasts.length > 0 && (
+        <div className="job-toasts" aria-live="polite">
+          {toasts.map((toast) => (
+            <div key={toast.toastKey} className="job-toast" role="status">
+              <span className="job-toast-icon">
+                <BellIcon />
+              </span>
+              <div className="job-toast-text">
+                <div className="job-toast-label">{toast.label}</div>
+                {toast.message && <div className="job-toast-message">{toast.message}</div>}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
 
       {open && (
         <div className="job-tray-panel" role="dialog" aria-label="Notifications">

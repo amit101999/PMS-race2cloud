@@ -675,6 +675,11 @@
 
 /* Holding Comparison: both headings hold only a title, so the two boxes start
    level, and the shorter box stretches so their bottoms line up too. */
+/* Mutual Funds tab: only the Fund Accounting card, so it takes the full width. */
+.cm-split--single {
+    grid-template-columns: 1fr;
+}
+
 .cm-split--even {
     align-items: stretch;
 }
@@ -752,17 +757,19 @@
     min-height: 108px;
     border: 1.5px dashed var(--txo-border-strong);
     border-radius: var(--txo-radius-md);
-    background: var(--txo-surface-sunken);
+    /* The sidebar menu colour (#8b1538) made transparent, so the box is a light tint of it. */
+    background: rgba(139, 21, 56, 0.04);
     transition: border-color 0.15s ease, background-color 0.15s ease;
 }
 
 .up-zone:hover {
     border-color: var(--txo-text-faint);
+    background: rgba(139, 21, 56, 0.07);
 }
 
 .up-zone.is-drag {
     border-color: var(--txo-primary);
-    background: var(--txo-primary-tint);
+    background: rgba(139, 21, 56, 0.1);
 }
 
 .up-zone-input {
@@ -884,6 +891,19 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+}
+
+/* TDS tab: the file name is a button that downloads the file. */
+.up-file-link {
+    background: none;
+    border: none;
+    padding: 0;
+    text-align: left;
+    cursor: pointer;
+}
+
+.up-file-link:hover {
+    text-decoration: underline;
 }
 
 .up-file-meta {
@@ -1124,10 +1144,6 @@
     color: var(--txo-text-muted);
 }
 
-.cm-last-upload {
-    margin: 8px 0 0;
-}
-
 /* ── structured upload/run errors (UploadErrorDetails) ────────────────── */
 
 .cm-error-block {
@@ -1220,4 +1236,165 @@
     color: var(--txo-info);
     font-size: 13px;
     line-height: 1.55;
+}
+
+/* ─────────────── Transaction Upload tabs (same look as the Analytics tabs) ─────────────── */
+
+/*
+ * Segmented tabs on a full-width white bar, like the cards below it.
+ * The active tab is a soft tint of the menu maroon with maroon text; the
+ * others are grey and pick up a light grey fill on hover.
+ */
+.txn-tabs {
+    display: flex;
+    gap: 8px;
+    margin: 4px 0 16px;
+    padding: 6px;
+    flex-wrap: wrap;
+    border: 1px solid #e6e8ec;
+    border-radius: 12px;
+    background: #ffffff;
+    box-shadow: 0 1px 2px rgba(17, 24, 39, 0.04);
+}
+
+/* The tab buttons, with an optional upload date at the right end of the bar. */
+.txn-tabs {
+    align-items: center;
+}
+
+.txn-tabs-list {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.txn-tabs-date {
+    margin-left: auto;
+    padding-right: 6px;
+}
+
+.txn-tab {
+    padding: 9px 22px;
+    border: 1px solid transparent;
+    border-radius: 8px;
+    background: transparent;
+    color: #6b7280;
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+    cursor: pointer;
+    transition: color 0.15s ease, background-color 0.15s ease, border-color 0.15s ease;
+}
+
+.txn-tab:hover {
+    background: #f4f5f7;
+    color: #374151;
+}
+
+.txn-tab.active {
+    background: rgba(139, 21, 56, 0.08);
+    border-color: rgba(139, 21, 56, 0.16);
+    color: #8b1538;
+}
+
+.txn-tab:focus-visible {
+    outline: 2px solid #c2185b;
+    outline-offset: 2px;
+}
+
+/* ─────────────── Equity tab: badges, upload result, Replace / Add choice ─────────────── */
+
+.cm-reload-badges {
+    margin: 8px 0;
+}
+
+.cm-reload-badge-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+}
+
+.cm-reload-samples {
+    margin-top: 8px;
+    max-height: 220px;
+    overflow-y: auto;
+    font-size: 12px;
+    color: var(--txo-text-muted);
+}
+
+.cm-reload-samples p {
+    margin: 2px 0;
+}
+
+.cm-reload-result {
+    margin-top: 10px;
+    padding: 10px 12px;
+    border-radius: var(--txo-radius-sm);
+    background: var(--txo-info-bg);
+    color: var(--txo-text);
+    font-size: 13px;
+}
+
+/* A locked trade date: icon beside one short line. */
+.cm-locked-note {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.cm-locked-note svg {
+    flex: none;
+    color: var(--txo-text-muted, #6b7280);
+}
+
+.cm-locked-note p {
+    margin: 0;
+    font-weight: 500;
+}
+
+.cm-ask-option {
+    margin: 10px 0;
+    padding: 10px 12px;
+    border: 1px solid var(--txo-border);
+    border-radius: var(--txo-radius-sm);
+}
+
+.cm-ask-option h4 {
+    margin: 0 0 4px;
+}
+
+.cm-precommit + .cm-precommit {
+    margin-top: 14px;
+    padding-top: 14px;
+    border-top: 1px solid var(--txo-border);
+}
+
+.cm-tab-empty {
+    padding: 24px;
+    color: var(--txo-text-muted);
+}
+
+/* Equity tab: a trade date's change window (T+N) on the Fund Accounting card. */
+.up-select.up-select--window {
+    min-width: 110px;
+}
+
+.up-window-custom {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 13.5px;
+    color: var(--txo-text);
+}
+
+.up-select.up-window-days {
+    min-width: 0;
+    width: 76px;
+}
+
+.up-window-note {
+    margin: 10px 0 0;
+    font-size: 12.5px;
+    color: var(--txo-text-muted);
 }

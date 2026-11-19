@@ -61,7 +61,7 @@ export const CUSTODY_FILE_TYPES = [
 ];
 
 /** Transaction files a day may hold — at most one of each. */
-export const FA_FILE_TYPES = [FA_FILE_TYPE.REGULAR, FA_FILE_TYPE.MUTUAL_FUND];
+export const FA_FILE_TYPES = [FA_FILE_TYPE.REGULAR, FA_FILE_TYPE.MUTUAL_FUND, FA_FILE_TYPE.OPI_OPO];
 
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -672,6 +672,27 @@ export const deleteFaRawOfType = async (
   );
 
   return { businessDate: date, fileType: type, ...result, count: result.deleted.length };
+};
+
+/**
+ * Everything the matches of a date wrote: the difference reports and each run's
+ * working files. The uploaded raw FA and custodian files are left alone. The date
+ * in the pattern keeps a custodian file of a scheme named "final" out of it.
+ */
+export const deleteMatchFilesForDate = async (bucket, businessDate) => {
+  const date = assertBusinessDate(businessDate);
+  const [faObjects, custodyObjects] = await Promise.all([
+    listAllObjects(bucket, faDayPrefix(date)),
+    listAllObjects(bucket, custodyDayPrefix(date)),
+  ]);
+  const doomed = [
+    ...faObjects.filter((o) => /^((difference|final|fa-meta)-\d{4}-|run-)/.test(lastSegment(o.key))),
+    ...custodyObjects.filter((o) => /^final-\d{4}-/.test(lastSegment(o.key))),
+  ];
+  return deleteKeys(
+    bucket,
+    doomed.map((o) => o.key),
+  );
 };
 
 /** Both sides. Used by the cleanup cron and by a full restart of a day. */

@@ -119,6 +119,15 @@ export const splitMutualFunds = (faRows, custodyRows) => {
   const mutualFunds = { name: "MUTUAL_FUND", faRows: [], custodyRows: [] };
   const others = { name: "OTHER", faRows: [], custodyRows: [] };
 
+  /*
+   * Mutual funds are no longer reconciled. They are uploaded and committed on
+   * the Mutual Funds tab (EquityReload.js with kind MUTUAL_FUND), so
+   * every row reaching the match is an equity row. The old split is kept
+   * below, commented out.
+   */
+  others.faRows.push(...faRows);
+  others.custodyRows.push(...custodyRows);
+  /*
   for (const row of faRows) {
     if (isMutualFundFaRow(row)) {
       mutualFunds.faRows.push(row);
@@ -133,6 +142,7 @@ export const splitMutualFunds = (faRows, custodyRows) => {
       others.custodyRows.push(row);
     }
   }
+  */
 
   return [mutualFunds, others];
 };

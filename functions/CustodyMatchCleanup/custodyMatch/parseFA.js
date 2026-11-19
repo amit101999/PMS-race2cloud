@@ -39,7 +39,9 @@ import {
   text,
 } from "./normalize.js";
 import {
+  EXTRA_COLUMN_FIELDS,
   FA_TEMPLATE_SLOT,
+  FA_TRANSACTION_ID_HEADER,
   PROFILE_TYPE,
   TRANSFORM,
   columnNamesFor,
@@ -317,7 +319,7 @@ export const parseFaFile = (
           fail(
             rowNumber,
             ROW_ERROR.UNKNOWN_TRAN_TYPE,
-            `"${rawType}" is not a recognised transaction type. Expected BY-*, BY+, SQB, OPI, BUY or B for a buy; SELL, SL+, SL or S for a sell.`,
+            `"${rawType}" is not a recognised transaction type. Expected BY-*, BY+, SQB, OPI, BUY or B for a buy; SELL, SL+, SL, S or OPO for a sell.`,
             colName.tranType,
             rawType,
           );
@@ -357,8 +359,12 @@ export const parseFaFile = (
 
         // The settlement dates are required too. Placeholders such as 0, null
         // or NA are not dates, so they fail like any other unreadable value.
+        // OPI / OPO move shares, not cash, so their cash settlement date may be
+        // blank; the import already stores a blank one as empty.
+        const movesNoCash = ["OPI", "OPO"].includes(String(rawType || "").trim().toUpperCase());
         for (const field of ["settlementDate", "cashSetdate"]) {
           if (!(field in at)) continue;
+          if (field === "cashSetdate" && movesNoCash && !get(field)) continue;
           if (!readDate(field)) rejected = true;
         }
         /*
@@ -557,6 +563,9 @@ export const detectFaFileType = (buffer, { profiles = null } = {}) => {
   });
 };
 
+/** Import headings of the extra columns, the same as their Transaction column names. */
+export const EXTRA_COLUMN_HEADERS = EXTRA_COLUMN_FIELDS.map((_, i) => `Column${i + 1}`);
+
 /** RFC4180 field: quote when the value contains a comma, quote or newline. */
 const csvField = (v) => {
   const str = v === null || v === undefined ? "" : String(v);
@@ -579,9 +588,17 @@ const csvField = (v) => {
  * @param {boolean} [opts.withDeductions] append the TDS and Stamp Duty columns.
  *        Only the import file asks for them, and only when the mutual fund file
  *        is part of it; the file the matcher re-reads stays at 26 columns.
+ * @param {boolean} [opts.withTransactionId] append the Transaction ID column (Mutual Funds commit).
+ * @param {boolean} [opts.withExtraColumns] append Column1 ... Column5, the extra
+ *        columns added on the mapping screen. Only the Mutual Funds commit asks for them.
  */
-export const faRowsToConsolidatedCsv = (rows, { withDeductions = false } = {}) => {
-  const headers = withDeductions ? [...FA_HEADERS, ...FA_DEDUCTION_HEADERS] : FA_HEADERS;
+export const faRowsToConsolidatedCsv = (
+  rows,
+  { withDeductions = false, withTransactionId = false, withExtraColumns = false } = {},
+) => {
+  const headers = withDeductions ? [...FA_HEADERS, ...FA_DEDUCTION_HEADERS] : [...FA_HEADERS];
+  if (withTransactionId) headers.push(FA_TRANSACTION_ID_HEADER);
+  if (withExtraColumns) headers.push(...EXTRA_COLUMN_HEADERS);
   const lines = [headers.map(csvField).join(",")];
 
   for (const row of rows) {
@@ -589,6 +606,11 @@ export const faRowsToConsolidatedCsv = (rows, { withDeductions = false } = {}) =
     if (withDeductions) {
       // Regular-file rows have no such columns and go in blank.
       cells.push(row.mapped?.tds ?? "", row.mapped?.stampDuty ?? "");
+    }
+    if (withTransactionId) cells.push(row.mapped?.transactionId ?? "");
+    if (withExtraColumns) {
+      // An extra column the user did not add goes in blank.
+      cells.push(...EXTRA_COLUMN_FIELDS.map((field) => row.mapped?.[field] ?? ""));
     }
     lines.push(cells.map(csvField).join(","));
   }
