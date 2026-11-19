@@ -356,10 +356,8 @@ const FA_FIELDS = [
  * name the user typed for each is stored with the mapping as `labels` and shown
  * in place of "Extra column N".
  *
- * Transaction files (Equity and Mutual Funds): each goes to the Transaction
- * column of the same name (Column1 ... Column5).
- * Custodian files (Resident and NDPMS): mapped and saved only. Custodian rows
- * are never booked, so the values are not stored or shown anywhere yet.
+ * Transaction files only (Equity and Mutual Funds): each goes to the
+ * Transaction column of the same name (Column1 ... Column5).
  */
 export const EXTRA_COLUMN_FIELDS = ["column1", "column2", "column3", "column4", "column5"];
 
@@ -449,7 +447,6 @@ export const FIELD_CATALOG = {
     { field: "ref", label: "Trade / Contract Ref", kind: "text", required: true },
     { field: "exchange", label: "Exchange", kind: "text", required: true },
     { field: "brokerCode", label: "Broker Code", kind: "code", required: true },
-    ...EXTRA_COLUMN_ENTRIES,
   ],
 
   /*
@@ -470,7 +467,6 @@ export const FIELD_CATALOG = {
     { field: "ref", label: "Trade / Contract Ref", kind: "text", required: true },
     { field: "exchange", label: "Exchange", kind: "text", required: true },
     { field: "brokerCode", label: "Broker Code", kind: "code", required: true },
-    ...EXTRA_COLUMN_ENTRIES,
   ],
 
   /*
@@ -1130,8 +1126,9 @@ export const resolveFieldMap = (type, profile, rawHeaders, { strict = false } = 
     if (source.by === SOURCE_BY.NAME) {
       const key = normHeader(source.name);
       resolved = nameToIndex.has(key) ? nameToIndex.get(key) : -1;
-      // An extra column is never read for a custodian file, so its absence
-      // must not reject one even under the strict check.
+      // An extra column (Column1–5) is optional data: a file without it still
+      // reads, with blank values. This also keeps an Equity consolidated file
+      // saved before Column1–5 existed readable.
       if (resolved === -1 && (entry.matchKey || (strict && !entry.extra))) {
         errors.push({
           code: MAP_ERROR.COLUMN_NOT_IN_FILE,
@@ -1240,12 +1237,15 @@ export const toStoredProfile = (
  * Net Rate and Net Amount on the transaction files: the import always derives
  * them (RATE ± brokerage, × quantity).
  * Transaction Date on NDPMS: every row takes the date picked for the file.
+ * Extra columns on the Resident and NDPMS custodian files: offered for a short
+ * while (November 2026) but never stored, so they were removed.
  */
 const RETIRED_FIELDS = {
   [PROFILE_TYPE.FA]: ["netRate", "netAmount"],
   [PROFILE_TYPE.FA_MUTUAL_FUND]: ["netRate", "netAmount"],
   [PROFILE_TYPE.FA_OPI_OPO]: ["netRate", "netAmount", "transactionId"],
-  [PROFILE_TYPE.CUSTODY_NDPMS]: ["tranDate"],
+  [PROFILE_TYPE.CUSTODY_RESIDENTIAL]: [...EXTRA_COLUMN_FIELDS],
+  [PROFILE_TYPE.CUSTODY_NDPMS]: ["tranDate", ...EXTRA_COLUMN_FIELDS],
 };
 
 const withoutRetiredFields = (type, profile) => {

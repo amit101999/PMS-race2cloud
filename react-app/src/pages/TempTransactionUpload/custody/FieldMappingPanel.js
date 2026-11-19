@@ -460,8 +460,8 @@ export default function FieldMappingPanel({
     const [uploadError, setUploadError] = useState(null);
     /** field -> message, shown under that row only after a Save attempt finds it empty. */
     const [fieldErrors, setFieldErrors] = useState({});
-    /* Extra columns (Equity and Mutual Funds transaction files, Resident and
-       NDPMS custodian files): the name the user typed for each
+    /* Extra columns (Equity and Mutual Funds transaction files only): the name
+       the user typed for each
        slot, and which slots are on screen. A slot appears when Add column is
        clicked and goes when its × is clicked. */
     const [labels, setLabels] = useState({});
