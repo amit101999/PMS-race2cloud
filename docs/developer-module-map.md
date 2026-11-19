@@ -161,7 +161,8 @@ List of client accounts: virtual code → actual code. Business guide 3.1.
 - **Tables:** reads `clientIds`. New rows are written by the functions above.
 - **Before you change:**
   - `clientIds` drives every virtual → actual code conversion, so a column change affects custody matching, all corporate action checks, Analytics and Reports.
-  - `/api/client/list` and `/details` return only `CLIENT_COLUMNS` in `clientController.js` (11 columns plus `ROWID`). PAN, Aadhaar, bank and nominee columns must never be sent. To show another column, add it to `CLIENT_COLUMNS` and to `COLUMNS` in `ClientPage.js`.
+  - `/api/client/list` and `/details` return every `clientIds` column except `SYSTEM_COLUMNS` (`CREATORID`, `CREATEDTIME`, `MODIFIEDTIME`) in `clientController.js`, PAN, Aadhaar, bank and nominee columns included (operators need them). `/list` also returns `columns`, the column names the page can offer. A column added to the table appears in the page's **+ Add column** list on its own.
+  - `ClientPage.js` shows `DEFAULT_COLUMNS` until the user picks columns; `WS_Account_code` and `Actual_Code` are locked. The choice is kept in browser `localStorage` (`clientMaster.columns`). **Export** builds the CSV in the browser from the loaded rows.
 
 ### 4.2 Security Master
 List of every share and fund. Business guide 3.2.

@@ -134,3 +134,130 @@
   color: #6b7280;
   font-weight: 400;
 }
+
+/* Clients table header: row count */
+.client-header-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+/* .cm-secondary carries a top margin for stacked forms; these sit in a row. */
+.client-page .client-filter-card .cm-secondary,
+.client-page .client-column-actions .cm-secondary {
+  margin-top: 0;
+}
+
+/* "View Columns" sits at the right of the filter box, level with the search. */
+.client-view-columns-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+  padding: 10px 14px;
+}
+
+.client-view-columns-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Points down when the column panel is closed, up when it is open. */
+.client-view-columns-arrow {
+  font-size: 14px;
+  line-height: 1;
+  transition: transform 0.15s ease;
+}
+
+.client-view-columns-arrow.open {
+  transform: rotate(180deg);
+}
+
+/* Under the table: page buttons on the left, Export on the right */
+.client-table-footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+/* Column picker: chips for the columns on screen, then "+ Add column" */
+.client-column-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-bottom: 16px;
+  padding: 12px 14px;
+  background: var(--txo-surface-sunken, #f9fafb);
+  border: 1px solid var(--txo-border, #e5e7eb);
+  border-radius: 8px;
+}
+
+.client-column-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.client-column-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px 4px 10px;
+  background: var(--txo-surface, #ffffff);
+  border: 1px solid var(--txo-border-strong, #d1d5db);
+  border-radius: 999px;
+  font-size: 13px;
+  color: var(--txo-text, #111827);
+}
+
+.client-column-chip.locked {
+  padding-right: 10px;
+  background: var(--txo-primary-tint, #faf7f8);
+  border-color: var(--txo-primary, #8b1538);
+}
+
+.client-column-lock {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--txo-primary, #8b1538);
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+.client-column-remove {
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--txo-text-muted, #6b7280);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.client-column-remove:hover {
+  background: var(--txo-error-bg, #fef2f2);
+  color: var(--txo-error, #b91c1c);
+}
+
+.client-column-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+
+.client-column-add {
+  min-width: 220px;
+  padding: 6px 10px;
+  border: 1px solid var(--txo-border-strong, #d1d5db);
+  border-radius: 6px;
+  background: var(--txo-surface, #ffffff);
+  font-size: 13px;
+}
