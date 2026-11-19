@@ -20,7 +20,6 @@ function DashboardPage() {
       <ChartsRow />
       <FiltersBar />
       <RecentTradesSection />
-      //{" "}
     </MainLayout>
   );
 }

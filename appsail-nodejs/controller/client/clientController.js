@@ -2,28 +2,25 @@ const esc = (s) => String(s ?? "").replace(/'/g, "''");
 const CLIENT_LIST_BATCH = 270;
 
 /*
- * Only these clientIds columns leave the API. The table also holds PAN, Aadhaar,
- * bank and nominee details, which the Client page must not receive at all.
+ * Catalyst's own bookkeeping columns. Every other clientIds column goes to the
+ * Client page, including PAN, Aadhaar, bank and nominee details: the operators
+ * need them, and the page lets each user choose which columns to show.
+ * ROWID is still selected for row keys; it is just not offered as a column.
  */
-const CLIENT_COLUMNS = [
-  "ROWID",
-  "WS_Account_code",
-  "Actual_Code",
-  "Client_name",
-  "Status",
-  "Group_Name",
-  "Scheme_Code",
-  "Fund_Strategy_Code",
-  "Account_Type",
-  "Client_Status",
-  "DP_Client_Id",
-  "Inception_Date",
-].join(", ");
+const SYSTEM_COLUMNS = ["CREATORID", "CREATEDTIME", "MODIFIEDTIME"];
+
+/** A clientIds row without the Catalyst system columns. */
+const withoutSystemColumns = (row) => {
+  const kept = { ...row };
+  for (const column of SYSTEM_COLUMNS) delete kept[column];
+  return kept;
+};
 
 /**
  * GET /api/client/list
- * Every client from the `clientIds` table (deduped by account code), with the
- * CLIENT_COLUMNS only.
+ * Every client from the `clientIds` table (deduped by account code), with
+ * every column except the system ones. `columns` lists those column names in
+ * table order, so the page can offer them even when they are blank.
  */
 export const getClientList = async (req, res) => {
   try {
@@ -34,7 +31,7 @@ export const getClientList = async (req, res) => {
 
     while (true) {
       const batch = await zcql.executeZCQLQuery(
-        `SELECT ${CLIENT_COLUMNS} FROM clientIds ORDER BY WS_Account_code ASC, ROWID ASC LIMIT ${CLIENT_LIST_BATCH} OFFSET ${offset}`,
+        `SELECT * FROM clientIds ORDER BY WS_Account_code ASC, ROWID ASC LIMIT ${CLIENT_LIST_BATCH} OFFSET ${offset}`,
       );
       if (!batch?.length) break;
 
@@ -43,14 +40,24 @@ export const getClientList = async (req, res) => {
         const code = String(row.WS_Account_code ?? "").trim();
         if (code && seen.has(code)) continue;
         if (code) seen.add(code);
-        rows.push(row);
+        rows.push(withoutSystemColumns(row));
       }
 
       if (batch.length < CLIENT_LIST_BATCH) break;
       offset += CLIENT_LIST_BATCH;
     }
 
-    return res.json({ data: rows, count: rows.length });
+    // Collected across all rows, in first-seen order, so a column that is
+    // blank on the first client is still offered.
+    const columnSet = new Set();
+    for (const row of rows) {
+      for (const column of Object.keys(row)) {
+        if (column !== "ROWID") columnSet.add(column);
+      }
+    }
+    const columns = [...columnSet];
+
+    return res.json({ data: rows, columns, count: rows.length });
   } catch (error) {
     console.error("Client list fetch error:", error);
     res.status(500).json({
@@ -62,7 +69,7 @@ export const getClientList = async (req, res) => {
 
 /**
  * Client master details for one account code from the `clientIds` table, with
- * the CLIENT_COLUMNS only.
+ * every column except the system ones.
  */
 export const getClientDetails = async (req, res) => {
   try {
@@ -74,10 +81,10 @@ export const getClientDetails = async (req, res) => {
     }
 
     const rows = await zcql.executeZCQLQuery(
-      `SELECT ${CLIENT_COLUMNS} FROM clientIds WHERE WS_Account_code = '${esc(accountCode)}'`,
+      `SELECT * FROM clientIds WHERE WS_Account_code = '${esc(accountCode)}'`,
     );
 
-    const records = (rows || []).map((r) => r.clientIds || r);
+    const records = (rows || []).map((r) => withoutSystemColumns(r.clientIds || r));
 
     if (records.length === 0) {
       return res.status(404).json({
