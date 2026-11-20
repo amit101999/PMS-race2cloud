@@ -266,8 +266,9 @@ export const withExtraColumnValues = (trade, values) => {
 
 /**
  * A mutual fund trade's amount when the file gives no TOTAL AMOUNT:
- *   Buy  (BY-, SQB): QTY × RATE + Stamp Duty
- *   Sell (SL+):      QTY × RATE − STT (TRANEXPENSE)
+ *   Buy  (BY-, SQB), and units moved in (OPI): QTY × RATE + Stamp Duty
+ *   Sell (SL+), and units moved out (OPO):     QTY × RATE − STT (TRANEXPENSE)
+ * The holdings jobs take an OPI's cost from this amount (NETRATE = amount ÷ QTY).
  * A blank Stamp Duty or STT counts as 0. Rounded to 4 decimals. Returns null
  * when RATE or QTY is missing. The import (normalizeCsvForBulkUpload in
  * TempTransactionUpload.js) uses this same function.
@@ -277,7 +278,7 @@ export const mutualFundAmount = ({ tranType, qty, rate, stampDuty, stt }) => {
   const q = Math.abs(Number(qty) || 0);
   if (!r || !q) return null;
   const gross = q * r;
-  const isBuy = /^(BY-|SQB)/i.test(text(tranType));
+  const isBuy = /^(BY-|SQB|OPI)/i.test(text(tranType));
   const amount = isBuy ? gross + (Math.abs(Number(stampDuty)) || 0) : gross - (Math.abs(Number(stt)) || 0);
   return Math.round((amount + Number.EPSILON) * 1e4) / 1e4;
 };
@@ -397,7 +398,8 @@ export const fingerprint = (t) =>
  * whole file, because the system cannot tell a new trade from a changed one
  * without the ID, nor which of two different rows with one ID is right.
  * OPI/OPO files carry no ID: that tab commits a whole file once and never has
- * to tell a changed row from a new one (OpiOpoUpload.js).
+ * to tell a changed row from a new one (OpiOpoUpload.js). Its Mutual Funds
+ * sub-tab passes both flags: every row is a mutual fund, and every row OPI or OPO.
  */
 export const fileProblems = (trades, { mutualFund = false, opiOpo = false } = {}) => {
   const problems = [];
@@ -414,20 +416,22 @@ export const fileProblems = (trades, { mutualFund = false, opiOpo = false } = {}
       });
       continue;
     }
-    // The Mutual Funds tab takes every row of its file as a mutual fund, whatever the exchange.
-    // The OPI/OPO tab takes mutual fund units moved in or out as well.
-    if (!mutualFund && !opiOpo && isMutualFundTrade(t.isin, t.exchange)) {
+    // The Mutual Funds tab (and OPI/OPO's Mutual Funds sub-tab) takes every row of its file
+    // as a mutual fund, whatever the exchange.
+    if (!mutualFund && isMutualFundTrade(t.isin, t.exchange)) {
       problems.push({
         row: t.rowNumber,
         code: "MUTUAL_FUND_ROW",
-        message: `${t.isin} on exchange DIR is a mutual fund trade. Upload it in the Mutual Funds tab.`,
+        message: opiOpo
+          ? `${t.isin} on exchange DIR is a mutual fund. Upload it in the Mutual Funds sub-tab of OPI/OPO.`
+          : `${t.isin} on exchange DIR is a mutual fund trade. Upload it in the Mutual Funds tab.`,
         column: "SYMBOLCODE",
         value: t.isin,
       });
       continue;
     }
     // OPI/OPO rows go only through the OPI/OPO tab, and that tab takes nothing else.
-    if (!mutualFund && opiOpo !== isOpiOpoType(t.tranType)) {
+    if ((opiOpo || !mutualFund) && opiOpo !== isOpiOpoType(t.tranType)) {
       problems.push({
         row: t.rowNumber,
         code: opiOpo ? "NOT_OPI_OPO_ROW" : "OPI_OPO_ROW",
@@ -843,12 +847,19 @@ export const tradesToTemplateCsv = (trades) =>
     .join("\n");
 
 /**
- * OPI/OPO tab: the 26 template columns only. Its rows have no Transaction ID, so
- * the column is left out and the import never writes a blank ID into the unique
+ * OPI/OPO tab: the 26 template columns, then TDS and Stamp Duty for the Mutual
+ * Funds sub-tab (withDeductions). Its rows have no Transaction ID, so the column
+ * is left out and the import never writes a blank ID into the unique
  * Transaction_ID column.
  */
-export const tradesToOpiOpoCsv = (trades) =>
-  [FA_HEADERS, ...trades.map((t) => t.cells.slice(0, FA_HEADERS.length))]
+export const tradesToOpiOpoCsv = (trades, { withDeductions = false } = {}) =>
+  [
+    withDeductions ? [...FA_HEADERS, "TDS", "Stamp Duty"] : FA_HEADERS,
+    ...trades.map((t) => {
+      const cells = t.cells.slice(0, FA_HEADERS.length);
+      return withDeductions ? [...cells, t.mfCells?.[0] ?? "", t.mfCells?.[1] ?? ""] : cells;
+    }),
+  ]
     .map((cells) => cells.map(csvField).join(","))
     .join("\n");
 

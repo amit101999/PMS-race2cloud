@@ -46,6 +46,11 @@ export const PROFILE_TYPE = {
    */
   FA_OPI_OPO: "FA_OPI_OPO",
   /*
+   * The OPI/OPO tab's Mutual Funds sub-tab file: the OPI/OPO layout plus TDS and
+   * Stamp Duty on the end. Its own mapping, like every other file.
+   */
+  FA_OPI_OPO_MF: "FA_OPI_OPO_MF",
+  /*
    * The TDS tab's mutual fund TDS file. For now it is only mapped and stored; no
    * row of it is read into our books (TdsUpload.js).
    */
@@ -77,7 +82,10 @@ export const PROFILE_TYPES = Object.values(PROFILE_TYPE);
 
 /** The transaction-file (fund accounting) profiles, as opposed to the custodian ones. */
 export const isFaProfileType = (type) =>
-  type === PROFILE_TYPE.FA || type === PROFILE_TYPE.FA_MUTUAL_FUND || type === PROFILE_TYPE.FA_OPI_OPO;
+  type === PROFILE_TYPE.FA ||
+  type === PROFILE_TYPE.FA_MUTUAL_FUND ||
+  type === PROFILE_TYPE.FA_OPI_OPO ||
+  type === PROFILE_TYPE.FA_OPI_OPO_MF;
 
 /** Stored blobs carry this so a later shape change can migrate rather than misread. */
 export const PROFILE_VERSION = 1;
@@ -388,6 +396,13 @@ const FA_MUTUAL_FUND_FIELDS = [
 // OPI / OPO entries come from another system and carry no Transaction ID.
 const FA_OPI_OPO_FIELDS = FA_FIELDS.filter((entry) => entry.field !== "transactionId");
 
+// Mutual Funds OPI / OPO: the same, then TDS and Stamp Duty. Stamp Duty is part of an OPI's cost.
+const FA_OPI_OPO_MF_FIELDS = [
+  ...FA_OPI_OPO_FIELDS,
+  { field: "tds", label: "TDS", kind: "number", required: false },
+  { field: "stampDuty", label: "Stamp Duty", kind: "number", required: false },
+];
+
 /*
  * The Mutual Funds TDS file, one row per TDI / TDO entry. Only the columns that
  * say whose tax it is, which entry, which day and how much are required. Types
@@ -429,6 +444,7 @@ export const FIELD_CATALOG = {
   [PROFILE_TYPE.FA]: [...FA_FIELDS, ...EXTRA_COLUMN_ENTRIES],
   [PROFILE_TYPE.FA_MUTUAL_FUND]: FA_MUTUAL_FUND_FIELDS,
   [PROFILE_TYPE.FA_OPI_OPO]: FA_OPI_OPO_FIELDS,
+  [PROFILE_TYPE.FA_OPI_OPO_MF]: FA_OPI_OPO_MF_FIELDS,
   [PROFILE_TYPE.FA_MUTUAL_FUND_TDS]: FA_MUTUAL_FUND_TDS_FIELDS,
 
   [PROFILE_TYPE.CUSTODY_RESIDENTIAL]: [
@@ -604,6 +620,12 @@ export const DEFAULT_PROFILES = {
 
   // The 26 template positions, then this file's own two on the end.
   [PROFILE_TYPE.FA_MUTUAL_FUND]: {
+    ...FA_DEFAULT_PROFILE,
+    tds: byIndex(26),
+    stampDuty: byIndex(27),
+  },
+  // The same layout as the Mutual Funds file.
+  [PROFILE_TYPE.FA_OPI_OPO_MF]: {
     ...FA_DEFAULT_PROFILE,
     tds: byIndex(26),
     stampDuty: byIndex(27),

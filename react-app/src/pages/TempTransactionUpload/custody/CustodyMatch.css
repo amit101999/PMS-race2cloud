@@ -1302,6 +1302,14 @@
     outline-offset: 2px;
 }
 
+/* OPI/OPO tab: its Equity / Mutual Funds sub-tabs, the same buttons without the bar's frame. */
+.txn-subtabs {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin: 0 0 16px;
+}
+
 /* ─────────────── Equity tab: badges, upload result, Replace / Add choice ─────────────── */
 
 .cm-reload-badges {

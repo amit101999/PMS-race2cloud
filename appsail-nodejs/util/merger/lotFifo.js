@@ -67,8 +67,6 @@ export function runLotFifo(
   let holdings = 0;
   let lotCounter = 0;
   const buyQueue = [];
-  // Multiple lot-level Merger rows belonging to the same event are additive.
-  let lastMergerEventKey = null;
 
   const normalizeDate = (rawDate) => {
     if (!rawDate) return null;
@@ -324,17 +322,9 @@ export function runLotFifo(
       const totalAmount = Number(t.totalAmount) || 0;
       if (!price && totalAmount && qty) price = totalAmount / qty;
 
-      const eventKey = `${t.trandate || ""}|${t.oldIsin || ""}`;
-      if (eventKey !== lastMergerEventKey) {
-        // First lot of a new merger event — retire pre-merger holdings.
-        for (const lot of buyQueue) {
-          lot.isActive = false;
-          lot.qty = 0;
-        }
-        buyQueue.length = 0;
-        holdings = 0;
-        lastMergerEventKey = eventKey;
-      }
+      // A merger ADDS the received shares to whatever this account already
+      // holds in the surviving security (e.g. 50 OPI + 660 merger = 710).
+      // With no prior holding this simply starts from the merger quantity.
 
       const lotId = ++lotCounter;
       buyQueue.push({

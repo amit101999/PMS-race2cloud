@@ -206,8 +206,8 @@ const KIND = {
   },
 };
 
-/** Asset_Kind of the OPI/OPO tab's rows in Transaction_Commit_History (written by OpiOpoUpload.js). */
-const OPI_OPO_ASSET_KIND = "OPI_OPO";
+/** Asset_Kind of the OPI/OPO sub-tabs' rows in Transaction_Commit_History (written by OpiOpoUpload.js). */
+const OPI_OPO_ASSET_KINDS = ["OPI_OPO", "OPI_OPO_MF"];
 
 /** The tab a request is for, or null when it names an unknown one. */
 const kindOfRequest = (req) => {
@@ -1154,7 +1154,7 @@ export const listConsolidatedFiles = async (req, res) => {
 /* ──────────────────────────── commit history ───────────────────────────── */
 
 /**
- * GET /api/custody-match/reload/commit-history[?kind=MUTUAL_FUND|OPI_OPO]
+ * GET /api/custody-match/reload/commit-history[?kind=MUTUAL_FUND|OPI_OPO|OPI_OPO_MF]
  *
  * Only Mutual Funds and OPI/OPO commits fill Asset_Kind; a row without it is
  * Equity's, so Equity rows read the same whether or not the column exists yet.
@@ -1165,8 +1165,8 @@ export const listCommitHistory = async (req, res) => {
     if (!catalystApp) return noApp(res);
     // The OPI/OPO tab (OpiOpoUpload.js) writes its commits to the same table.
     const assetKind = String(req.query?.kind || KIND.EQUITY.key).trim().toUpperCase();
-    if (![KIND.EQUITY.key, KIND.MUTUAL_FUND.key, OPI_OPO_ASSET_KIND].includes(assetKind)) {
-      return fail(res, 400, { code: "BAD_KIND", message: "kind must be EQUITY, MUTUAL_FUND or OPI_OPO." });
+    if (![KIND.EQUITY.key, KIND.MUTUAL_FUND.key, ...OPI_OPO_ASSET_KINDS].includes(assetKind)) {
+      return fail(res, 400, { code: "BAD_KIND", message: "kind must be EQUITY, MUTUAL_FUND, OPI_OPO or OPI_OPO_MF." });
     }
 
     const rows = unwrap(

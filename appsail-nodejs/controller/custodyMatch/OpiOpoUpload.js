@@ -11,17 +11,23 @@
  * Unlike the Equity and Mutual Funds tabs (EquityReload.js), which work one
  * trade date at a time, this tab works one file at a time: a file may hold many
  * trade and settlement dates, and one Commit adds all of its rows. Rows carry no
- * Transaction ID. Upload only reads the file and saves it, with no database
- * look-up, so it stays quick. Commit is refused when any of the file's rows is
- * already in our books (same account, ISIN, OPI/OPO, trade date, settlement
- * date, quantity and rate: `fingerprint`), so the same entries can never be
- * booked twice. A Commit only adds rows; it never removes any.
+ * Transaction ID. Upload only reads the file and saves it, refusing a file
+ * already uploaded (same content), with no Transaction look-up, so it stays
+ * quick. Commit is refused when any of the file's rows is already in our books
+ * (same account, ISIN, OPI/OPO, trade date, settlement date, quantity and rate:
+ * `fingerprint`, across both sub-tabs), so the same entries can never be booked
+ * twice. A Commit only adds rows; it never removes any.
+ *
+ * Two sub-tabs, told apart by `assetKind` (SUB_TAB below):
+ *   EQUITY       the Equity layout; mutual fund rows (INF on DIR) are refused
+ *   MUTUAL_FUND  the same plus TDS and Stamp Duty; every row is booked as a
+ *                mutual fund, and an OPI's cost is QTY × RATE + Stamp Duty
  *
  * fileId is the upload time in ms, which is also part of the raw file's key
- * (FA/<upload date>/raw-OPI_OPO-<first>-<last>-<fileId>-<name>). The rest lives
- * in Stratus temporary-files opi-opo/<fileId>/:
- *   file.json      summary: rows, dates, affected clients and pairs, fingerprints, committed
- *   rows.csv       the rows as the 26 template columns, which the import reads
+ * (FA/<upload date>/raw-<OPI_OPO|OPI_OPO_MF>-<first>-<last>-<fileId>-<name>).
+ * The rest lives in Stratus temporary-files opi-opo/<fileId>/:
+ *   file.json      summary: sub-tab, rows, dates, affected clients and pairs, fingerprints, fileHash, committed
+ *   rows.csv       the rows as the 26 template columns (+ TDS, Stamp Duty for mutual funds), which the import reads
  *   progress.json  the Commit's step and counts
  * The Commit's lock is the Jobs row RELOAD_OPI_<fileId>; its holdings jobs are
  * RELOAD_OPI_<fileId>_H_<n>. OPI / OPO move shares, not cash, so the cash
@@ -29,11 +35,12 @@
  * be removed from its card (deleteUploadedFile in CustodyMatchUpload.js).
  */
 
-import { FA_FILE_TYPE, FILE_SIDE } from "../../util/custodyMatch/constants.js";
+import { createHash } from "crypto";
+import { FA_FILE_TYPE, FILE_SIDE, OPI_OPO_FILE_TYPES } from "../../util/custodyMatch/constants.js";
 import { PROFILE_TYPE } from "../../util/custodyMatch/fieldMap.js";
 import {
-  detectFaFileType,
   faRowTemplateCells,
+  hasDeductionColumns,
   parseFaFile,
   validateFaHeader,
 } from "../../util/custodyMatch/parseFA.js";
@@ -44,11 +51,13 @@ import {
   getBuffer,
   getJson,
   loadFieldMapProfiles,
+  objectExists,
+  parseFaRawKey,
   putBuffer,
   putJson,
   putText,
 } from "../../util/custodyMatch/storage.js";
-import { escapeZcql as esc, listFiles, recordFile } from "../../util/custodyMatch/runStore.js";
+import { deleteFileRows, escapeZcql as esc, listFiles, recordFile } from "../../util/custodyMatch/runStore.js";
 import {
   affectedOf,
   bookedTradeTab,
@@ -57,6 +66,7 @@ import {
   tradeFromBookedRow,
   tradeFromCells,
   tradesToOpiOpoCsv,
+  withMutualFundValues,
 } from "../../util/custodyMatch/equityReload.js";
 import { getUploadedFile, isCsv, readUploadedOn, summariseIssues } from "./CustodyMatchUpload.js";
 import { busyElsewhere, readJobStatuses, submitRebuildJobs, waitForBulkWrite } from "./EquityReload.js";
@@ -71,7 +81,30 @@ import { insertNotification } from "../../util/notifications.js";
 
 const FOLDER = "opi-opo";
 const LOCK_PREFIX = "RELOAD_OPI_";
-const ASSET_KIND = "OPI_OPO";
+
+/*
+ * The two sub-tabs. assetKind is the Asset_Kind of their Commit history rows;
+ * a file saved before the sub-tabs existed has no subTab and is Equity's.
+ */
+const SUB_TAB = {
+  EQUITY: {
+    key: "EQUITY",
+    label: "Equity",
+    profileType: PROFILE_TYPE.FA_OPI_OPO,
+    fileType: FA_FILE_TYPE.OPI_OPO,
+    assetKind: "OPI_OPO",
+    mutualFund: false,
+  },
+  MUTUAL_FUND: {
+    key: "MUTUAL_FUND",
+    label: "Mutual Funds",
+    profileType: PROFILE_TYPE.FA_OPI_OPO_MF,
+    fileType: FA_FILE_TYPE.OPI_OPO_MF,
+    assetKind: "OPI_OPO_MF",
+    mutualFund: true,
+  },
+};
+const subTabOf = (info) => SUB_TAB[info.subTab] || SUB_TAB.EQUITY;
 const HISTORY_TABLE = "Transaction_Commit_History";
 const FILE_ID_PATTERN = /^\d{10,16}$/;
 const ZCQL_PAGE = 300;
@@ -150,15 +183,81 @@ const bookedOpiOpoRows = async (zcql, dates) => {
   return found;
 };
 
-/* ─────────────────────────────────── upload ─────────────────────────────── */
+/* ──────────────────────────── same file uploaded again ──────────────────── */
+
+const sha256 = (buffer) => createHash("sha256").update(buffer).digest("hex");
 
 /**
- * POST /api/custody-match/opi-opo/file   form-data: file, uploadDate
+ * The OPI/OPO files already uploaded (on any upload date) whose content is
+ * exactly this file's, as { row, fileId, fileName, uploadDate, committed }.
+ * A file uploaded before fileHash was saved is hashed from its stored copy.
+ */
+const sameContentFiles = async (catalystApp, bucket, fileHash) => {
+  const rows = (await listFiles(catalystApp)).filter((r) => OPI_OPO_FILE_TYPES.includes(r.fileType));
+  const found = [];
+  for (const row of rows) {
+    const fileId = String(parseFaRawKey(row.fileKey)?.uploadedAtMs || "");
+    if (!fileId) continue;
+    const info = await readJsonOr(bucket, stateKey(fileId, "file.json"), null);
+    if (!info) continue;
+    const storedHash = info.fileHash || sha256(await getBuffer(bucket, row.fileKey));
+    if (storedHash !== fileHash) continue;
+    // Once a Commit has started the file can no longer be removed, so it counts as committed.
+    const committed = Boolean(info.committed) || (await objectExists(bucket, stateKey(fileId, "progress.json")));
+    found.push({ row, fileId, fileName: info.fileName, uploadDate: info.uploadDate, committed });
+  }
+  return found;
+};
+
+/** Removes uncommitted copies; the file row goes first, so Commit refuses them from then on. */
+const removeCopies = async (catalystApp, bucket, copies) => {
+  await deleteFileRows(catalystApp, copies.map((c) => c.row));
+  const keys = copies.flatMap((c) => [c.row.fileKey, stateKey(c.fileId, "rows.csv"), stateKey(c.fileId, "file.json")]);
+  const result = await deleteKeys(bucket, keys);
+  if (result.failed.length > 0) {
+    // The rows are gone, so the screen no longer lists these copies; only storage is left over.
+    console.warn("[OpiOpoUpload] could not delete replaced copies:", result.failed);
+  }
+};
+
+/* ─────────────────────────────────── upload ─────────────────────────────── */
+
+/** Mutual Funds sub-tab: TDS, Stamp Duty and TRANEXPENSE, when filled, must be numbers of zero or more. */
+const deductionProblems = (trades) => {
+  const problems = [];
+  for (const t of trades) {
+    for (const [field, label] of [
+      ["tds", "TDS"],
+      ["stampDuty", "Stamp Duty"],
+      ["stt", "TRANEXPENSE"],
+    ]) {
+      if (t[field] === "" || t[field] === undefined) continue;
+      const value = Number(t[field]);
+      if (!Number.isFinite(value) || value < 0) {
+        problems.push({
+          row: t.rowNumber,
+          code: "BAD_NUMBER",
+          message: `${label} must be a number of zero or more; found "${t[field]}".`,
+          column: label,
+          value: t[field],
+        });
+      }
+    }
+  }
+  return problems;
+};
+
+/**
+ * POST /api/custody-match/opi-opo/file   form-data: file, uploadDate, assetKind (EQUITY | MUTUAL_FUND), replace
  *
  * Reads the file and keeps it for Commit. Nothing is booked here and the
- * database is not read, so this is quick. Every row must be OPI or OPO with
- * readable dates; there is no file date, because one file may hold many trade
- * and settlement dates. Rows already in our books are found at Commit.
+ * Transaction table is not read, so this is quick. Every row must be OPI or OPO
+ * with readable dates; there is no file date, because one file may hold many
+ * trade and settlement dates. Rows already in our books are found at Commit.
+ *
+ * Exactly the same file as an earlier upload is refused: with DUPLICATE_FILE
+ * while that copy is not committed (sent again with replace=true, the copy is
+ * removed and this one kept), and with ALREADY_COMMITTED once it is.
  */
 export const uploadOpiOpoFile = async (req, res) => {
   try {
@@ -173,16 +272,27 @@ export const uploadOpiOpoFile = async (req, res) => {
     const uploadDay = readUploadedOn(req.body?.uploadDate);
     if (uploadDay.error) return fail(res, 400, { code: "BAD_UPLOAD_DATE", message: uploadDay.error });
     const { uploadedOn } = uploadDay;
+    const subTab = SUB_TAB[String(req.body?.assetKind || SUB_TAB.EQUITY.key).trim().toUpperCase()];
+    if (!subTab) return fail(res, 400, { code: "BAD_KIND", message: "assetKind must be EQUITY or MUTUAL_FUND." });
 
-    const type = PROFILE_TYPE.FA_OPI_OPO;
+    const type = subTab.profileType;
     const profiles = await loadFieldMapProfiles(catalystApp);
     const profile = profiles[type];
     const headerError = validateFaHeader(file.data, { profile, type });
     if (headerError) return fail(res, 400, { ...headerError, fileName: file.name });
-    if ((await detectFaFileType(file.data, { profiles })) !== PROFILE_TYPE.FA) {
+    /*
+     * Each sub-tab takes only its own layout: the mutual fund file is the one with
+     * TDS and Stamp Duty columns, read through the Mutual Funds sub-tab's mapping
+     * (its rows may leave both blank). The mapping window detects it the same way.
+     */
+    const mfType = SUB_TAB.MUTUAL_FUND.profileType;
+    const mutualFundLayout = hasDeductionColumns(file.data, { type: mfType, profile: profiles[mfType] });
+    if (subTab.mutualFund !== mutualFundLayout) {
       return fail(res, 400, {
         code: "FA_FILE_TYPE_MISMATCH",
-        message: "This file has TDS / Stamp Duty amounts, so it is a Mutual Funds transaction file, not an OPI/OPO file.",
+        message: subTab.mutualFund
+          ? "This file has no TDS / Stamp Duty columns, so it is an Equity OPI/OPO file. Upload it in the Equity sub-tab."
+          : "This file has TDS / Stamp Duty columns, so it is a Mutual Funds OPI/OPO file. Upload it in the Mutual Funds sub-tab.",
         fileName: file.name,
       });
     }
@@ -192,10 +302,14 @@ export const uploadOpiOpoFile = async (req, res) => {
     if (parsed.fileError) return fail(res, 400, { ...parsed.fileError, fileName: file.name });
 
     // The 26 template cells; there is no Transaction ID (column 27 stays blank).
-    const trades = parsed.rows.map((row) => tradeFromCells([...faRowTemplateCells(row), ""], { rowNumber: row.rowNumber }));
+    const trades = parsed.rows.map((row) => {
+      const trade = tradeFromCells([...faRowTemplateCells(row), ""], { rowNumber: row.rowNumber });
+      return subTab.mutualFund ? withMutualFundValues(trade, [row.mapped?.tds, row.mapped?.stampDuty]) : trade;
+    });
     const rowErrors = [
       ...parsed.rowErrors.map((e) => ({ ...e, fileName: file.name })),
-      ...fileProblems(trades, { opiOpo: true }).map((p) => ({ ...p, fileName: file.name })),
+      ...fileProblems(trades, { opiOpo: true, mutualFund: subTab.mutualFund }).map((p) => ({ ...p, fileName: file.name })),
+      ...(subTab.mutualFund ? deductionProblems(trades) : []).map((p) => ({ ...p, fileName: file.name })),
     ].sort((a, b) => a.row - b.row);
     if (rowErrors.length > 0) {
       return fail(res, 400, {
@@ -211,13 +325,38 @@ export const uploadOpiOpoFile = async (req, res) => {
     }
 
     const bucket = getBucket(catalystApp);
+
+    // The same file uploaded again would give a second Commit block for the same entries.
+    const fileHash = sha256(file.data);
+    const copies = await sameContentFiles(catalystApp, bucket, fileHash);
+    const committedCopy = copies.find((c) => c.committed);
+    if (committedCopy) {
+      return fail(res, 409, {
+        code: "ALREADY_COMMITTED",
+        message: `This file was already uploaded as ${committedCopy.fileName} on ${displayDate(committedCopy.uploadDate)} and committed, so its entries are already in our books. It cannot be uploaded again.`,
+        fileName: file.name,
+      });
+    }
+    if (copies.length > 0) {
+      if (String(req.body?.replace || "").toLowerCase() !== "true") {
+        const first = copies[0];
+        return fail(res, 409, {
+          code: "DUPLICATE_FILE",
+          message: `This file is already uploaded as ${first.fileName} on ${displayDate(first.uploadDate)} and is not committed yet. Do you want to replace it?`,
+          fileName: file.name,
+          existing: copies.map((c) => ({ fileId: c.fileId, fileName: c.fileName, uploadDate: c.uploadDate })),
+        });
+      }
+      await removeCopies(catalystApp, bucket, copies);
+    }
+
     const dates = [...new Set(trades.map((t) => t.tranDate))].sort();
 
     const uploadedAtMs = Date.now();
     const fileId = String(uploadedAtMs);
     const key = buildFaRawKey({
       businessDate: uploadedOn,
-      fileType: FA_FILE_TYPE.OPI_OPO,
+      fileType: subTab.fileType,
       coveredFrom: dates[0],
       coveredTo: dates[dates.length - 1],
       originalFileName: file.name,
@@ -226,6 +365,7 @@ export const uploadOpiOpoFile = async (req, res) => {
     const affected = affectedOf([], trades);
     const info = {
       fileId,
+      subTab: subTab.key,
       fileKey: key,
       fileName: file.name,
       uploadDate: uploadedOn,
@@ -236,18 +376,20 @@ export const uploadOpiOpoFile = async (req, res) => {
       dates,
       affected,
       fingerprints: trades.map(fingerprint),
+      fileHash,
       committed: false,
     };
 
     // The state first and the file row last: a card only lists a file once its row exists.
     await putBuffer(bucket, key, file.data, "text/csv");
-    await putText(bucket, stateKey(fileId, "rows.csv"), tradesToOpiOpoCsv(trades), "text/csv");
+    const rowsCsv = tradesToOpiOpoCsv(trades, { withDeductions: subTab.mutualFund });
+    await putText(bucket, stateKey(fileId, "rows.csv"), rowsCsv, "text/csv");
     await putJson(bucket, stateKey(fileId, "file.json"), info);
     try {
       await recordFile(catalystApp, {
         fileKey: key,
         side: FILE_SIDE.FA,
-        fileType: FA_FILE_TYPE.OPI_OPO,
+        fileType: subTab.fileType,
         forDate: uploadedOn,
         uploadedOn,
         originalFileName: file.name,
@@ -287,6 +429,7 @@ const fileView = (info) => ({
   lastDate: info.dates[info.dates.length - 1],
   dateCount: info.dates.length,
   clients: info.affected.clients.length,
+  subTab: subTabOf(info).key,
   committed: Boolean(info.committed),
 });
 
@@ -485,7 +628,7 @@ export const commitOpiOpoFile = async (req, res) => {
       clients: info.affected.clients.length,
       fileNames: info.fileName,
       startedAtMs,
-      Asset_Kind: ASSET_KIND,
+      Asset_Kind: subTabOf(info).assetKind,
     });
     const fresh = {
       fileId,
@@ -584,7 +727,10 @@ const runCommit = async (catalystApp, fileId) => {
         const importStartedAtMs = Date.now();
         // "transactions/" is the prefix the masters job accepts.
         const objectKey = `transactions/TxnReload-OPI-${fileId}-${importStartedAtMs}.csv`;
-        const rewritten = normalizeCsvForBulkUpload(await getBuffer(bucket, stateKey(fileId, "rows.csv")));
+        // Mutual funds: Security_Type 'm', TDS and Stamp Duty kept, and the amount (an OPI's cost) includes Stamp Duty.
+        const rewritten = normalizeCsvForBulkUpload(await getBuffer(bucket, stateKey(fileId, "rows.csv")), {
+          mutualFund: subTabOf(info).mutualFund,
+        });
         await txnBucket.putObject(objectKey, rewritten, { overwrite: true, contentType: "text/csv" });
         const job = await bulkWrite.createJob({ bucket_name: TXN_BUCKET, object_key: objectKey }, { operation: "insert" });
         const jobId = job?.job_id || job?.id;
@@ -605,7 +751,7 @@ const runCommit = async (catalystApp, fileId) => {
       }
 
       // A copy for Commit history's download link.
-      const copyKey = `transactions-original/TxnUpload-${p.insert.importStartedAtMs}-OpiOpo-${info.dates[0]}.csv`;
+      const copyKey = `transactions-original/TxnUpload-${p.insert.importStartedAtMs}-${subTabOf(info).mutualFund ? "OpiOpoMf" : "OpiOpo"}-${info.dates[0]}.csv`;
       await txnBucket
         .putObject(copyKey, await getBuffer(bucket, stateKey(fileId, "rows.csv")), { overwrite: true, contentType: "text/csv" })
         .then(() => updateCommitHistory(catalystApp, p, { fileKey: copyKey }))

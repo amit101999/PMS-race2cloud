@@ -61,7 +61,12 @@ export const CUSTODY_FILE_TYPES = [
 ];
 
 /** Transaction files a day may hold — at most one of each. */
-export const FA_FILE_TYPES = [FA_FILE_TYPE.REGULAR, FA_FILE_TYPE.MUTUAL_FUND, FA_FILE_TYPE.OPI_OPO];
+export const FA_FILE_TYPES = [
+  FA_FILE_TYPE.REGULAR,
+  FA_FILE_TYPE.MUTUAL_FUND,
+  FA_FILE_TYPE.OPI_OPO,
+  FA_FILE_TYPE.OPI_OPO_MF,
+];
 
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 
