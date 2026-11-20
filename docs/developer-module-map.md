@@ -96,6 +96,7 @@ There is no import link between these copies. If you fix one and not the others,
 |---|---|
 | `appsail-nodejs/util/analytics/holdingsFromTable.js` | `functions/ExportAllCustomerHoldingData/holdingsFromTable.js`, `functions/FAHoldingsGenerator/holdingsFromTable.js`, `functions/UpdateBonusTable/holdingsSnapshot.js`, `functions/UpdateDividendData/holdingsSnapshot.js`, `functions/ExportDividendAccounts/holdingsSnapshot.js` |
 | `holdingsEffectiveDate` in `holdingsFromTable.js` | Same rule in `controller/BonusController.js`, `controller/uploader/SplitController.js`, `controller/uploader/DemergerController.js`, `functions/DemergerFn/demergerApplyCore.js` |
+| `deriveHoldingsRowActiveFlags` in `holdingsFromTable.js` (Active / Inactive tag in the Analytics drill-down, worked out as on the chosen date) | Lot rules of `functions/RebuildHoldingtable/holdingsRebuildFromSources.js`. Repeats the sort of `recomputeHoldingsSnapshot`. No Catalyst copy. |
 | FIFO engine `appsail-nodejs/util/analytics/transactionHistory/fifo.js` | `functions/RebuildHoldingtable/holdingsRebuildFromSources.js`, `functions/CalculateHoldingPerAccount/index.js`, `functions/CalculateHoldingsPerAccount/index.js`, `functions/HoldingUpdateManually/index.js` |
 | `appsail-nodejs/util/merger/lotFifo.js`, `mergerEngine.js` (preview) | `functions/MegerFn/fifo.js`, `functions/MegerFn/index.js` (apply) |
 | `appsail-nodejs/controller/uploader/DemergerController.js` (preview) | `functions/DemergerFn/demergerApplyCore.js` (apply) |

@@ -1,6 +1,7 @@
 import {
   fetchHoldingsRowsForAccountIsin,
   mapHoldingsRowToStockHistoryDto,
+  deriveHoldingsRowActiveFlags,
   isHoldingsBuyType,
   isHoldingsSellType,
 } from "../util/analytics/holdingsFromTable.js";
@@ -49,7 +50,10 @@ export const getStockTransactionHistory = async (req, res) => {
       }
     }
 
-    const result = rows.map((h) => mapHoldingsRowToStockHistoryDto(h, isin));
+    // Active / Inactive is worked out from the rows up to the as-on date, not read
+    // from the saved STATUS, which describes today's position.
+    const activeByRow = deriveHoldingsRowActiveFlags(rows);
+    const result = rows.map((h) => mapHoldingsRowToStockHistoryDto(h, isin, activeByRow));
     return res.json({ rows: result, totalBuyQty, totalSellQty });
   } catch (err) {
     return res.status(500).json({ error: err.message });

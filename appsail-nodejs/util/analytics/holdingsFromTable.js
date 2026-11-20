@@ -538,8 +538,105 @@ export function recomputeHoldingsSnapshot(rows) {
   };
 }
 
-/** Map Holdings row → TransactionPage / fifo timeline element shape (append-only fields safe for JSON). */
-export function mapHoldingsRowToStockHistoryDto(h, isinFromQuery) {
+/**
+ * Works out which lot rows are still open (Active) after replaying `rows`.
+ *
+ * WHY THIS EXISTS
+ * Holdings.STATUS is saved by the rebuild and describes the position TODAY. For an
+ * as-on-date view the rows are cut at that date but STATUS is not, so a buy that was
+ * later split or sold still showed "Inactive" on a date when it was still held.
+ * Replaying the rows we were given (all of them are on or before the as-on date)
+ * gives the state on that date, using the same lot rules as the rebuild:
+ *   - a buy / bonus / split / merger row opens a lot;
+ *   - a sell uses the oldest lots first; a lot used up completely closes;
+ *   - the first row of a SPLIT / DEMERGER event closes every lot still open.
+ *
+ * Only the rows this function decides appear in the returned Map (row object →
+ * true / false). Other rows (e.g. DIV) are left out so the caller keeps their saved
+ * STATUS. Same ordering as `recomputeHoldingsSnapshot` — that function is
+ * hand-copied into Catalyst functions, so its sort is repeated here rather than
+ * shared; keep the two in step.
+ */
+export function deriveHoldingsRowActiveFlags(rows) {
+  const ordered = rows
+    .map((r, i) => ({ r, i }))
+    .sort((a, b) => {
+      const da = holdingsEffectiveDate(a.r) || "";
+      const db = holdingsEffectiveDate(b.r) || "";
+      if (da !== db) return da < db ? -1 : 1;
+      const pa = holdingsTypePriority(a.r.TYPE);
+      const pb = holdingsTypePriority(b.r.TYPE);
+      if (pa !== pb) return pa - pb;
+      return a.i - b.i;
+    })
+    .map((x) => x.r);
+
+  const activeByRow = new Map();
+  let lots = []; // FIFO queue of { row, qty } — only lots that are still open
+  let lastReplaceEventKey = null;
+
+  const closeAllLots = () => {
+    for (const lot of lots) activeByRow.set(lot.row, false);
+    lots = [];
+  };
+  const openLot = (h, qty) => {
+    if (qty <= QTY_EPS) return;
+    lots.push({ row: h, qty });
+    activeByRow.set(h, true);
+  };
+
+  for (const h of ordered) {
+    const typ = String(h.TYPE || "").trim().toUpperCase();
+    const qty = Math.abs(Number(h.QUANTITY) || 0);
+
+    if (typ === "DIV" || typ === "DIV+") continue;
+
+    if (isHoldingsSellType(typ)) {
+      // The rebuild always saves sell rows as inactive.
+      activeByRow.set(h, false);
+      let remaining = qty;
+      while (remaining > QTY_EPS && lots.length) {
+        const lot = lots[0];
+        const used = Math.min(lot.qty, remaining);
+        lot.qty = roundQty(lot.qty - used);
+        remaining = roundQty(remaining - used);
+        if (lot.qty <= QTY_EPS) {
+          activeByRow.set(lot.row, false);
+          lots.shift();
+        }
+      }
+      continue;
+    }
+
+    // Closing row of a merged-away security: ends the position.
+    if (typ === "MERGER" && (Number(h.HOLDING) || 0) <= QTY_EPS) {
+      closeAllLots();
+      continue;
+    }
+
+    if (typ === "SPLIT" || typ === "DEMERGER") {
+      const eventKey = `${typ}|${holdingsEffectiveDate(h)}`;
+      if (eventKey !== lastReplaceEventKey) {
+        closeAllLots();
+        lastReplaceEventKey = eventKey;
+      }
+      openLot(h, qty);
+      continue;
+    }
+
+    // BY- / SQB / OPI / BONUS / MERGER add a lot.
+    openLot(h, qty);
+  }
+
+  return activeByRow;
+}
+
+/**
+ * Map Holdings row → TransactionPage / fifo timeline element shape (append-only fields safe for JSON).
+ * `activeByRow` (optional, from `deriveHoldingsRowActiveFlags`) overrides the saved
+ * STATUS for the rows it covers.
+ */
+export function mapHoldingsRowToStockHistoryDto(h, isinFromQuery, activeByRow = null) {
   const plRaw = h.P_L;
   const plNum = plRaw === null || plRaw === undefined || plRaw === "" ? null : Number(plRaw);
 
@@ -547,6 +644,7 @@ export function mapHoldingsRowToStockHistoryDto(h, isinFromQuery) {
   const st = h.STATUS;
   if (typeof st === "boolean") isActive = st;
   else if (String(st).toLowerCase() === "false") isActive = false;
+  if (activeByRow && activeByRow.has(h)) isActive = activeByRow.get(h);
 
   const txD = String(h.TRANSACTION_DATE || "").slice(0, 10);
   const setD = String(h.SETTLEMENT_DATE || "").slice(0, 10);
