@@ -66,10 +66,6 @@ export const runFifoEngine = (
   const buyQueue = [];
   const output = [];
 
-  // Tracks the most recently processed merger event (date + oldIsin) so that
-  // multiple lot-level Merger rows belonging to the same event accumulate
-  // additively instead of each one wiping the queue.
-  let lastMergerEventKey = null;
 
   /* ---------------- DATE NORMALIZATION ---------------- */
   const normalizeDate = (rawDate) => {
@@ -470,21 +466,9 @@ export const runFifoEngine = (
       if (!totalAmount && price && qty) totalAmount = qty * price;
 
       const mergerDate = normalizeDate(e.data.trandate);
-      const eventKey = `${mergerDate}|${e.data.oldIsin || ""}`;
-
-      if (eventKey !== lastMergerEventKey) {
-        const activeLots = buyQueue.filter((l) => l.isActive);
-        for (const oldLot of activeLots) {
-          oldLot.isActive = false;
-          const oldRow = output.find(
-            (r) => r.lotId === oldLot.lotId && r.isActive,
-          );
-          if (oldRow) oldRow.isActive = false;
-        }
-        buyQueue.length = 0;
-        holdings = 0;
-        lastMergerEventKey = eventKey;
-      }
+      // A merger ADDS the received shares to whatever this account already
+      // holds in the surviving security (e.g. 50 OPI + 660 merger = 710).
+      // With no prior holding this simply starts from the merger quantity.
 
       const lotId = ++lotCounter;
 

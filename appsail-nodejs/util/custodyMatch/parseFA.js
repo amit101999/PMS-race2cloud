@@ -563,6 +563,23 @@ export const detectFaFileType = (buffer, { profiles = null } = {}) => {
   });
 };
 
+/**
+ * Does this file carry the TDS and Stamp Duty columns, as the given mutual fund
+ * mapping places them? Unlike detectFaFileType this looks at the columns, not
+ * their values: a mutual fund OPI/OPO file may leave both blank on every row.
+ *
+ * @param {Buffer} buffer
+ * @param {object} opts
+ * @param {string} opts.type     the mutual fund profile type the file is read with
+ * @param {object} [opts.profile] its saved mapping; null uses the built-in one
+ */
+export const hasDeductionColumns = (buffer, { type, profile = null }) => {
+  const headerLine = firstLineOf(buffer);
+  const rawHeaders = splitHeaderCells(headerLine, detectSeparator(headerLine));
+  const { index } = resolveFieldMap(type, profile, rawHeaders);
+  return index.tds !== undefined && index.stampDuty !== undefined;
+};
+
 /** Import headings of the extra columns, the same as their Transaction column names. */
 export const EXTRA_COLUMN_HEADERS = EXTRA_COLUMN_FIELDS.map((_, i) => `Column${i + 1}`);
 

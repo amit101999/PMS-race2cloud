@@ -165,7 +165,8 @@ export const proceedToImport = (runIds) => json("/runs/proceed", "POST", { runId
  * server keeps each tab's files, window, Commit and history apart. The Mutual
  * Funds tab has no custodian file and no match.
  */
-export const KIND = { EQUITY: "EQUITY", MUTUAL_FUND: "MUTUAL_FUND", OPI_OPO: "OPI_OPO" };
+/* OPI_OPO and OPI_OPO_MF are the OPI/OPO tab's Equity and Mutual Funds sub-tabs. */
+export const KIND = { EQUITY: "EQUITY", MUTUAL_FUND: "MUTUAL_FUND", OPI_OPO: "OPI_OPO", OPI_OPO_MF: "OPI_OPO_MF" };
 
 const kindQuery = (kind) => (kind && kind !== KIND.EQUITY ? `kind=${encodeURIComponent(kind)}` : "");
 const withKind = (path, kind) => {
@@ -209,7 +210,10 @@ export const deleteTdsFile = (date, key) =>
 export const getTdsDownloadUrl = (key) => request(`/tds/download?key=${encodeURIComponent(key)}`);
 
 /* OPI/OPO tab: one file (any number of dates) is one Commit. fileId is the file's uploadedAtMs. */
-export const uploadOpiOpoFile = ({ file, uploadDate }) => form("/opi-opo/file", { file, uploadDate });
+/* assetKind: the sub-tab, EQUITY or MUTUAL_FUND. */
+/* replace: the operator chose to replace an earlier upload of the same file (DUPLICATE_FILE). */
+export const uploadOpiOpoFile = ({ file, uploadDate, assetKind, replace = false }) =>
+  form("/opi-opo/file", { file, uploadDate, assetKind, replace: replace ? "true" : "" });
 export const getOpiOpoFile = (fileId) => request(`/opi-opo/${encodeURIComponent(fileId)}`);
 export const commitOpiOpoFile = (fileId, { startedBy = "" } = {}) =>
   json(`/opi-opo/${encodeURIComponent(fileId)}/commit`, "POST", { startedBy });
@@ -257,6 +261,7 @@ export const PROFILE_TYPE = {
   FA: "FA",
   FA_MUTUAL_FUND: "FA_MUTUAL_FUND",
   FA_OPI_OPO: "FA_OPI_OPO",
+  FA_OPI_OPO_MF: "FA_OPI_OPO_MF",
   FA_MUTUAL_FUND_TDS: "FA_MUTUAL_FUND_TDS",
   CUSTODY_RESIDENTIAL: "CUSTODY_RESIDENTIAL",
   CUSTODY_NDPMS: "CUSTODY_NDPMS",
@@ -269,7 +274,8 @@ export const PROFILE_TYPE = {
 export const PROFILE_LABEL = {
   FA: "Transaction file (FA)",
   FA_MUTUAL_FUND: "Transaction file (FA) — Mutual Funds",
-  FA_OPI_OPO: "Transaction file (FA) — OPI/OPO",
+  FA_OPI_OPO: "Transaction file (FA) — OPI/OPO Equity",
+  FA_OPI_OPO_MF: "Transaction file (FA) — OPI/OPO Mutual Funds",
   FA_MUTUAL_FUND_TDS: "TDS file — Mutual Funds",
   CUSTODY_RESIDENTIAL: "Custodian — Residential",
   CUSTODY_NDPMS: "Custodian — NRE/NRO/NDPMS",
@@ -284,7 +290,9 @@ export const PROFILE_HELP = {
   FA_MUTUAL_FUND:
     "The mutual fund fund-accounting file. Same 26 fields as the regular transaction file — it renames one heading (SYMBOLCODE/ISIN CODE), which is why it is mapped separately. Its rows are matched only against the Mutual Funds custodian files. Dates may be in any common format (2026-08-20, 20-08-2026, 20-Aug-2026) and are stored as YYYY-MM-DD.",
   FA_OPI_OPO:
-    "The OPI/OPO file: shares moved in (OPI) or out (OPO) from another system. Same columns as the Equity transaction file, without a Transaction ID. Saved separately, so it never changes the Equity mapping.",
+    "The OPI/OPO Equity file: shares moved in (OPI) or out (OPO) from another system. Same columns as the Equity transaction file, without a Transaction ID. Saved separately, so it never changes the Equity mapping.",
+  FA_OPI_OPO_MF:
+    "The OPI/OPO Mutual Funds file: units moved in (OPI) or out (OPO) from another system. The OPI/OPO Equity columns plus TDS and Stamp Duty. Saved separately, so it never changes any other mapping.",
   FA_MUTUAL_FUND_TDS:
     "The mutual fund TDS file (TDI / TDO rows per account). Broker acc id, Transaction type, Transaction date and AMT must be mapped. For now the file is only kept; it does not change cash or holdings.",
   CUSTODY_RESIDENTIAL: "The deal allocation file for Resident accounts.",
@@ -303,14 +311,16 @@ export const PROFILE_HELP = {
 export const FA_FILE_TYPE = {
   REGULAR: "REGULAR",
   MUTUAL_FUND: "MUTUAL_FUND",
-  /* The OPI/OPO tab's file: an Equity file whose rows are all OPI or OPO. */
+  /* The OPI/OPO tab's files: Equity sub-tab (no TDS / Stamp Duty) and Mutual Funds sub-tab. */
   OPI_OPO: "OPI_OPO",
+  OPI_OPO_MF: "OPI_OPO_MF",
 };
 
 export const FA_FILE_TYPE_LABEL = {
   REGULAR: "Equity",
   MUTUAL_FUND: "Mutual Funds",
   OPI_OPO: "Equity",
+  OPI_OPO_MF: "Mutual Funds",
 };
 
 export const SOURCE_BY = { NAME: "name", INDEX: "index", ABSENT: "absent" };

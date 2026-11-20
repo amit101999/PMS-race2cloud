@@ -208,7 +208,6 @@ const TransactionTab = ({ accountCode, asOnDate }) => {
                 onClick={() => {
                   setSecSearch("");
                   setSelectedIsin("");
-                  setSecOptions([]);
                   setShowSecDropdown(false);
                 }}
               >

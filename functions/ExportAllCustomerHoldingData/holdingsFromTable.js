@@ -357,7 +357,7 @@ function recomputeHoldingsSnapshot(rows) {
     .map((x) => x.r);
 
   let lots = []; // FIFO queue of { qty, price }
-  // First row of a SPLIT / MERGER / DEMERGER event closes the prior position;
+  // First row of a SPLIT / DEMERGER event closes the prior position;
   // the rest of that same event accumulate onto it. See the replace branch below.
   let lastReplaceEventKey = null;
 
@@ -380,10 +380,24 @@ function recomputeHoldingsSnapshot(rows) {
     }
 
     /*
-     * MERGER / DEMERGER RESTATE the position — they do not add to it. The first
+     * MERGER ADDS to the position, matching the rebuild job: the surviving
+     * security's rows add the received shares on top of whatever the account
+     * already held (e.g. 50 OPI + 660 merger = 710). They fall through to the
+     * "everything else adds" step below.
+     * The merged-away security has one closing row with a stored HOLDING of 0
+     * (QUANTITY is what left the account). That row ends its position, so it
+     * clears the lots instead of adding the quantity back.
+     */
+    if (typ === "MERGER" && (Number(h.HOLDING) || 0) <= QTY_EPS) {
+      lots = [];
+      continue;
+    }
+
+    /*
+     * DEMERGER RESTATES the position — it does not add to it. The first
      * row of an event clears the prior lots and the rest accumulate onto the
      * empty queue, matching the rebuild job (`buyQueue.length = 0; holdings = 0;`
-     * in holdingsRebuildFromSources.js). Treating them as additive double-counted
+     * in the DEMERGER branch of holdingsRebuildFromSources.js). Treating them as additive double-counted
      * every demerged security: the old-ISIN row carries the UNCHANGED quantity
      * (only its cost is reduced), so it stacked on the lots it should replace.
      *
@@ -399,27 +413,12 @@ function recomputeHoldingsSnapshot(rows) {
      * row's running WAP blended the costs, so a split followed by a sell showed
      * a different WAP / holding value here than the stored ledger.
      */
-    if (typ === "SPLIT" || isHoldingsReplaceType(typ)) {
+    if (typ === "SPLIT" || typ === "DEMERGER") {
       const eventKey = `${typ}|${holdingsEffectiveDate(h)}`;
       if (eventKey !== lastReplaceEventKey) {
         lots = [];
         lastReplaceEventKey = eventKey;
       }
-      /*
-       * A merger writes TWO kinds of row and they look identical here: the
-       * surviving ISIN gets one row per lot RECEIVED, and the merged-away ISIN
-       * gets one row for the quantity that LEFT the account. Both are
-       * TYPE='MERGER' with a positive QUANTITY, so restating the position to
-       * QUANTITY revives the dead security at its full pre-merger size — it
-       * then shows up next to the surviving one for the same quantity (a
-       * double count), and counts as eligible for bonus / split / dividend.
-       * The stored HOLDING is what tells them apart: 0 on the closing row, the
-       * running balance on a receiving one. The event has already cleared the
-       * lots above, so a closing row simply adds nothing back.
-       * DEMERGER is unaffected: its old-ISIN row keeps the unchanged quantity
-       * and a non-zero HOLDING (only the cost is reduced).
-       */
-      if ((Number(h.HOLDING) || 0) <= QTY_EPS) continue;
       if (qty > QTY_EPS) {
         let price = Number(h.PRICE) || 0;
         const total = Number(h.TOTAL_AMOUNT) || 0;
@@ -429,7 +428,7 @@ function recomputeHoldingsSnapshot(rows) {
       continue;
     }
 
-    // Everything else adds: BY-/SQB/OPI, BONUS.
+    // Everything else adds: BY-/SQB/OPI, BONUS, MERGER.
     if (qty > QTY_EPS) {
       let price = Number(h.PRICE) || 0;
       const total = Number(h.TOTAL_AMOUNT) || 0;

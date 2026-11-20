@@ -33,12 +33,14 @@ const PROFILE_FOR_FA_FILE_TYPE = {
     [api.FA_FILE_TYPE.MUTUAL_FUND]: api.PROFILE_TYPE.FA_MUTUAL_FUND,
     // OPI/OPO files have the Equity columns without a Transaction ID, so they have their own mapping.
     [api.FA_FILE_TYPE.OPI_OPO]: api.PROFILE_TYPE.FA_OPI_OPO,
+    [api.FA_FILE_TYPE.OPI_OPO_MF]: api.PROFILE_TYPE.FA_OPI_OPO_MF,
 };
 
 const FA_FILE_TYPE_FOR_PROFILE = {
     [api.PROFILE_TYPE.FA]: api.FA_FILE_TYPE.REGULAR,
     [api.PROFILE_TYPE.FA_MUTUAL_FUND]: api.FA_FILE_TYPE.MUTUAL_FUND,
     [api.PROFILE_TYPE.FA_OPI_OPO]: api.FA_FILE_TYPE.OPI_OPO,
+    [api.PROFILE_TYPE.FA_OPI_OPO_MF]: api.FA_FILE_TYPE.OPI_OPO_MF,
 };
 
 /** How often the screen asks the job how it is getting on. */
@@ -422,14 +424,15 @@ const CustodyMatchPanel = ({
     preCommitTick = 0,
     /* With reloadMode: the tab. MUTUAL_FUND is the Mutual Funds tab, which shows only the
        Fund Accounting card (no custodian file, no match) and takes mutual fund files only.
-       OPI_OPO is the OPI/OPO tab: the same single card, Equity-layout files whose rows are
-       all OPI or OPO, and no change window. */
+       OPI_OPO / OPI_OPO_MF are the OPI/OPO tab's Equity and Mutual Funds sub-tabs: the same
+       single card, files whose rows are all OPI or OPO, and no change window. */
     kind = api.KIND.EQUITY,
     /* Mutual Funds and OPI/OPO tabs: told the tab's files listed on the card, so the page can offer their dates for Commit. */
     onFaFilesChange,
 }) => {
     const isMf = reloadMode && kind === api.KIND.MUTUAL_FUND;
-    const isOpiOpo = reloadMode && kind === api.KIND.OPI_OPO;
+    const isOpiOpoMf = reloadMode && kind === api.KIND.OPI_OPO_MF;
+    const isOpiOpo = (reloadMode && kind === api.KIND.OPI_OPO) || isOpiOpoMf;
     /* Mutual Funds and OPI/OPO: no custodian file and no match, only the Fund Accounting card. */
     const faOnly = isMf || isOpiOpo;
     /* Schemes already used, from the stored custodian keys. Each entry knows its
@@ -505,6 +508,7 @@ const CustodyMatchPanel = ({
     /** Which transaction file the next pick is. Stays put between uploads, as the custodian type does. */
     const [faFileType, setFaFileType] = useState(() => {
         if (isMf) return api.FA_FILE_TYPE.MUTUAL_FUND;
+        if (isOpiOpoMf) return api.FA_FILE_TYPE.OPI_OPO_MF;
         if (isOpiOpo) return api.FA_FILE_TYPE.OPI_OPO;
         return api.FA_FILE_TYPE.REGULAR;
     });
@@ -994,7 +998,8 @@ const CustodyMatchPanel = ({
         setFaResult(null);
         try {
             if (isOpiOpo) {
-                const res = await api.uploadOpiOpoFile({ file, uploadDate });
+                const assetKind = isOpiOpoMf ? "MUTUAL_FUND" : "EQUITY";
+                const res = await api.uploadOpiOpoFile({ file, uploadDate, assetKind, replace });
                 setFaWarnings(res.warnings || []);
                 reportJob({
                     id: `txn-fa-upload-${Date.now()}`,
@@ -1976,7 +1981,7 @@ const CustodyMatchPanel = ({
                 requestedType={pending?.profileType || null}
                 // The Mutual Funds tab maps mutual fund files only, the OPI/OPO tab OPI/OPO files only.
                 {...(isMf ? { types: [api.PROFILE_TYPE.FA_MUTUAL_FUND] } : {})}
-                {...(isOpiOpo ? { types: [api.PROFILE_TYPE.FA_OPI_OPO] } : {})}
+                {...(isOpiOpo ? { types: [isOpiOpoMf ? api.PROFILE_TYPE.FA_OPI_OPO_MF : api.PROFILE_TYPE.FA_OPI_OPO] } : {})}
                 pickedDate={faOnly ? faDate : custodyDate}
                 onUpload={uploadPending}
                 onClose={() => setPending(null)}

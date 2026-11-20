@@ -177,22 +177,29 @@ export const CUSTODY_TYPE_TO_FORMAT = {
  * file under one different heading, so one mapping cannot describe both. A day
  * holds at most one file of each type.
  *
- * OPI_OPO is the OPI/OPO tab's file: shares moved in (OPI) or out (OPO) from
- * another system. It uses the regular file's layout and mapping; it has its own
- * type so each tab lists, replaces and commits only its own files. It is never
+ * OPI_OPO and OPI_OPO_MF are the OPI/OPO tab's files: shares or units moved in
+ * (OPI) or out (OPO) from another system. OPI_OPO is the Equity sub-tab's file
+ * (the regular layout without a Transaction ID); OPI_OPO_MF is the Mutual Funds
+ * sub-tab's file (the same plus TDS and Stamp Duty). Each has its own type so
+ * each tab lists, replaces and commits only its own files. Neither is ever
  * matched against the custodian files.
  */
 export const FA_FILE_TYPE = {
   REGULAR: "REGULAR",
   MUTUAL_FUND: "MUTUAL_FUND",
   OPI_OPO: "OPI_OPO",
+  OPI_OPO_MF: "OPI_OPO_MF",
 };
+
+/** The OPI/OPO tab's file types, one per sub-tab. */
+export const OPI_OPO_FILE_TYPES = [FA_FILE_TYPE.OPI_OPO, FA_FILE_TYPE.OPI_OPO_MF];
 
 /** How each transaction file is named in a message to the user. */
 export const FA_FILE_TYPE_LABEL = {
   [FA_FILE_TYPE.REGULAR]: "transaction",
   [FA_FILE_TYPE.MUTUAL_FUND]: "mutual fund transaction",
   [FA_FILE_TYPE.OPI_OPO]: "OPI/OPO transaction",
+  [FA_FILE_TYPE.OPI_OPO_MF]: "mutual fund OPI/OPO transaction",
 };
 
 /**

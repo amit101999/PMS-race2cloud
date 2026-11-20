@@ -20,6 +20,7 @@ import {
   FA_FILE_TYPE,
   FA_FILE_TYPE_LABEL,
   FILE_SIDE,
+  OPI_OPO_FILE_TYPES,
   PREDEFINED_SCHEMES,
   ROW_ERROR,
   RUN_STATUS,
@@ -324,7 +325,7 @@ export const listMatchDates = async (req, res) => {
     const byPair = new Map();
     for (const f of await listFiles(catalystApp)) {
       // OPI/OPO files are filed under their upload date and never matched.
-      if (f.fileType === FA_FILE_TYPE.OPI_OPO) continue;
+      if (OPI_OPO_FILE_TYPES.includes(f.fileType)) continue;
       const uploadDate = String(f.uploadedOn);
       const date = String(f.forDate);
       const pairKey = `${uploadDate}|${date}`;
@@ -395,7 +396,7 @@ export const uploadFaFile = async (req, res) => {
         message: "Mutual fund transaction files are uploaded on the Mutual Funds tab.",
       });
     }
-    if (faFileType === FA_FILE_TYPE.OPI_OPO) {
+    if (OPI_OPO_FILE_TYPES.includes(faFileType)) {
       return fail(res, 400, {
         code: "USE_OPI_OPO_TAB",
         message: "OPI/OPO transaction files are uploaded on the OPI/OPO tab.",
@@ -957,7 +958,7 @@ export const deleteUploadedFile = async (req, res) => {
     // fund file follows the Mutual Funds tab's window, an OPI/OPO file has none,
     // and every other file follows Equity's.
     const mutualFund = parsed.fileType === FA_FILE_TYPE.MUTUAL_FUND;
-    const opiOpo = parsed.fileType === FA_FILE_TYPE.OPI_OPO;
+    const opiOpo = OPI_OPO_FILE_TYPES.includes(parsed.fileType);
     const closed = opiOpo
       ? ""
       : closedDateMessage(parsed.businessDate, await readDateWindow(catalystApp, parsed.businessDate, { mutualFund }));

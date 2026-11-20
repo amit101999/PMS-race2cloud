@@ -16,7 +16,7 @@ import { Readable } from "stream";
 
 import { FA_HEADERS } from "../../util/custodyMatch/constants.js";
 import { detectCustodyFormat } from "../../util/custodyMatch/parseCustody.js";
-import { detectFaFileType } from "../../util/custodyMatch/parseFA.js";
+import { detectFaFileType, hasDeductionColumns } from "../../util/custodyMatch/parseFA.js";
 import {
   FIELD_CATALOG,
   FORMAT_TO_PROFILE_TYPE,
@@ -204,6 +204,7 @@ const supersedeForType = async (app, type) => {
   if (
     type === PROFILE_TYPE.FA_MUTUAL_FUND ||
     type === PROFILE_TYPE.FA_OPI_OPO ||
+    type === PROFILE_TYPE.FA_OPI_OPO_MF ||
     type === PROFILE_TYPE.FA_MUTUAL_FUND_TDS
   ) {
     return { superseded: [], supersedeErrors: [] };
@@ -446,9 +447,16 @@ export const previewHeaders = async (req, res) => {
       // amounts, the same check the upload repeats.
       try {
         const profiles = req.catalystApp ? await loadFieldMapProfiles(req.catalystApp) : null;
-        detectedType = await detectFaFileType(file.data, { profiles });
-        // An OPI/OPO file has the Equity layout, so it reads as an Equity file here.
-        if (asked === PROFILE_TYPE.FA_OPI_OPO && detectedType === PROFILE_TYPE.FA) detectedType = asked;
+        if (asked === PROFILE_TYPE.FA_OPI_OPO || asked === PROFILE_TYPE.FA_OPI_OPO_MF) {
+          // OPI/OPO sub-tabs: the Mutual Funds file is the one with TDS and Stamp Duty columns,
+          // even when they are blank on every row. The same check the upload makes.
+          const mfType = PROFILE_TYPE.FA_OPI_OPO_MF;
+          detectedType = hasDeductionColumns(file.data, { type: mfType, profile: profiles?.[mfType] || null })
+            ? mfType
+            : PROFILE_TYPE.FA_OPI_OPO;
+        } else {
+          detectedType = await detectFaFileType(file.data, { profiles });
+        }
       } catch (detectErr) {
         console.warn("previewHeaders: could not detect the transaction file type:", detectErr.message);
       }

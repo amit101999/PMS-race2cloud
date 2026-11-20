@@ -52,7 +52,9 @@ const FILE_BLURB = {
     FA_MUTUAL_FUND:
         "The mutual fund fund-accounting file. It carries the same 26 fields as the regular transaction file under one different heading, so it is mapped on its own. Its rows are matched only against the Mutual Funds custodian files.",
     FA_OPI_OPO:
-        "The OPI/OPO file: shares moved in or out from another system. Same columns as the Equity transaction file, without a Transaction ID.",
+        "The OPI/OPO Equity file: shares moved in or out from another system. Same columns as the Equity transaction file, without a Transaction ID.",
+    FA_OPI_OPO_MF:
+        "The OPI/OPO Mutual Funds file: units moved in or out from another system. The OPI/OPO Equity columns plus TDS and Stamp Duty.",
     FA_MUTUAL_FUND_TDS:
         "The mutual fund TDS file: one TDI and one TDO row per account. For now the file is only kept for its date; it does not change cash or holdings.",
     CUSTODY_RESIDENTIAL: "The deal allocation file your custodian sends for Resident accounts.",
@@ -938,7 +940,11 @@ export default function FieldMappingPanel({
         preview?.detectedType && requestedType && preview.detectedType !== requestedType;
 
     const fileKindLabel =
-        chosen === "FA" || chosen === "FA_MUTUAL_FUND" || chosen === "FA_OPI_OPO" || chosen === "FA_MUTUAL_FUND_TDS"
+        chosen === "FA" ||
+        chosen === "FA_MUTUAL_FUND" ||
+        chosen === "FA_OPI_OPO" ||
+        chosen === "FA_OPI_OPO_MF" ||
+        chosen === "FA_MUTUAL_FUND_TDS"
             ? "Fund accounting file"
             : "Custodian file";
 
