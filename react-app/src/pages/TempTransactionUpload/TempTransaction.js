@@ -61,12 +61,6 @@ const TABS = [
     { key: "opiOpo", label: "OPI/OPO" },
 ];
 
-/* The OPI/OPO tab's sub-tabs. Each has its own file layout, mapping, files, Commit and history. */
-const OPI_OPO_SUB_TABS = [
-    { kind: KIND.OPI_OPO, label: "Equity" },
-    { kind: KIND.OPI_OPO_MF, label: "Mutual Funds" },
-];
-
 /** One Commit block per date that has a file on the Mutual Funds tab. */
 function commitDatesOf(files, runIdPrefix) {
     const dates = [...new Set(files.map((f) => f.businessDate).filter(Boolean))].sort();
@@ -98,16 +92,18 @@ function commitDatesOf(files, runIdPrefix) {
  * OPI/OPO: shares moved in (OPI) or out (OPO) from another system. One file
  * may hold many trade dates and is committed once as a whole (OpiOpoUpload.js on
  * the server): no file date, no Transaction ID, no change window, and holdings
- * rebuilt but not cash. Two sub-tabs: Equity, and Mutual Funds (the same file
- * plus TDS and Stamp Duty).
+ * rebuilt but not cash. One upload takes Equity and Mutual Funds files; a file
+ * with TDS and Stamp Duty columns is a Mutual Funds file.
  *
  * The old single-page upload is kept below, commented out.
  */
 const TempTransaction = () => {
     const [activeTab, setActiveTab] = useState("equity");
-    /* The upload date, picked by the user. Every file uploaded is recorded under
-       it, and Match offers the dates of the files recorded under it. */
-    const [uploadDate, setUploadDate] = useState("");
+    /* The upload date, shared by the Equity, Mutual Funds, TDS and OPI/OPO tabs. It
+       starts as today on every open or refresh; the user can pick another day.
+       Every file uploaded is recorded under it, and Match offers the dates of the
+       files recorded under it. */
+    const [uploadDate, setUploadDate] = useState(todayIso);
     /* One match run per date on screen, oldest first. */
     const [runs, setRuns] = useState([]);
     const [day, setDay] = useState(null);
@@ -121,15 +117,8 @@ const TempTransaction = () => {
     /* The Commit blocks re-read their dates whenever a file is added or removed, not only
        when a date appears: a second file for an already committed date makes it Ready again. */
     const mfDatesKey = `${mfCommitDates.map((r) => r.businessDate).join(",")}|${mfFiles.map((f) => f.key).join(",")}`;
-    /* OPI/OPO tab: the sub-tab shown, and the files on its card. Each file gets its own Commit block. */
-    const [opiOpoKind, setOpiOpoKind] = useState(KIND.OPI_OPO);
+    /* OPI/OPO tab: the files on its card. Each file gets its own Commit block. */
     const [opiOpoFiles, setOpiOpoFiles] = useState([]);
-    const changeOpiOpoKind = (kind) => {
-        if (kind === opiOpoKind) return;
-        // The other sub-tab's files must not show as Commit blocks while the new card loads.
-        setOpiOpoFiles([]);
-        setOpiOpoKind(kind);
-    };
 
     const [historyItems, setHistoryItems] = useState([]);
     const [historyLoading, setHistoryLoading] = useState(false);
@@ -299,41 +288,21 @@ const TempTransaction = () => {
                     <TdsUploadPanel uploadDate={uploadDate} />
                 ) : activeTab === "opiOpo" ? (
                     <>
-                        <div className="txn-subtabs" role="tablist" aria-label="OPI/OPO asset type">
-                            {OPI_OPO_SUB_TABS.map((sub) => (
-                                <button
-                                    key={sub.kind}
-                                    type="button"
-                                    role="tab"
-                                    aria-selected={opiOpoKind === sub.kind}
-                                    className={`txn-tab ${opiOpoKind === sub.kind ? "active" : ""}`}
-                                    onClick={() => changeOpiOpoKind(sub.kind)}
-                                >
-                                    {sub.label}
-                                </button>
-                            ))}
-                        </div>
-
-                        {/* Keyed by sub-tab, so switching starts the card afresh with that sub-tab's files. */}
                         <CustodyMatchPanel
-                            key={opiOpoKind}
+                            key="opiOpo"
                             reloadMode
-                            kind={opiOpoKind}
+                            kind={KIND.OPI_OPO}
                             uploadDate={uploadDate}
                             onFaFilesChange={setOpiOpoFiles}
                             preCommitTick={preCommitTick}
                         />
 
-                        <OpiOpoCommitPanel
-                            key={`commit-${opiOpoKind}`}
-                            files={opiOpoFiles}
-                            onProgressChange={handlePreCommitProgress}
-                        />
+                        <OpiOpoCommitPanel files={opiOpoFiles} onProgressChange={handlePreCommitProgress} />
 
                         <div className="txo-section-head txo-section-head--tight">
                             <h2>History</h2>
                         </div>
-                        <CommitHistory key={`history-${opiOpoKind}`} refreshToken={preCommitTick} kind={opiOpoKind} />
+                        <CommitHistory refreshToken={preCommitTick} kind={KIND.OPI_OPO} />
                     </>
                 ) : activeTab === "cashBalance" ? (
                     <div className="temp-transaction-card cm-tab-empty">

@@ -43,6 +43,9 @@ const FA_FILE_TYPE_FOR_PROFILE = {
     [api.PROFILE_TYPE.FA_OPI_OPO_MF]: api.FA_FILE_TYPE.OPI_OPO_MF,
 };
 
+/* The OPI/OPO tab's two kinds of file, listed together on its one card. */
+const OPI_OPO_FA_FILE_TYPES = [api.FA_FILE_TYPE.OPI_OPO, api.FA_FILE_TYPE.OPI_OPO_MF];
+
 /** How often the screen asks the job how it is getting on. */
 const POLL_MS = 2500;
 
@@ -424,15 +427,15 @@ const CustodyMatchPanel = ({
     preCommitTick = 0,
     /* With reloadMode: the tab. MUTUAL_FUND is the Mutual Funds tab, which shows only the
        Fund Accounting card (no custodian file, no match) and takes mutual fund files only.
-       OPI_OPO / OPI_OPO_MF are the OPI/OPO tab's Equity and Mutual Funds sub-tabs: the same
-       single card, files whose rows are all OPI or OPO, and no change window. */
+       OPI_OPO is the OPI/OPO tab: the same single card, files whose rows are all OPI or OPO,
+       and no change window. It takes Equity and Mutual Funds files alike; each file's
+       columns decide which it is (TDS and Stamp Duty columns: Mutual Funds). */
     kind = api.KIND.EQUITY,
     /* Mutual Funds and OPI/OPO tabs: told the tab's files listed on the card, so the page can offer their dates for Commit. */
     onFaFilesChange,
 }) => {
     const isMf = reloadMode && kind === api.KIND.MUTUAL_FUND;
-    const isOpiOpoMf = reloadMode && kind === api.KIND.OPI_OPO_MF;
-    const isOpiOpo = (reloadMode && kind === api.KIND.OPI_OPO) || isOpiOpoMf;
+    const isOpiOpo = reloadMode && kind === api.KIND.OPI_OPO;
     /* Mutual Funds and OPI/OPO: no custodian file and no match, only the Fund Accounting card. */
     const faOnly = isMf || isOpiOpo;
     /* Schemes already used, from the stored custodian keys. Each entry knows its
@@ -508,7 +511,6 @@ const CustodyMatchPanel = ({
     /** Which transaction file the next pick is. Stays put between uploads, as the custodian type does. */
     const [faFileType, setFaFileType] = useState(() => {
         if (isMf) return api.FA_FILE_TYPE.MUTUAL_FUND;
-        if (isOpiOpoMf) return api.FA_FILE_TYPE.OPI_OPO_MF;
         if (isOpiOpo) return api.FA_FILE_TYPE.OPI_OPO;
         return api.FA_FILE_TYPE.REGULAR;
     });
@@ -732,10 +734,13 @@ const CustodyMatchPanel = ({
     const faFiles = useMemo(
         () =>
             (faDay?.fa?.raw || []).filter(
-                // Each tab lists only its own files: Equity the regular ones, Mutual Funds the mutual fund ones.
-                (f) => !removedKeys.has(f.key) && (!reloadMode || f.fileType === faFileType),
+                // Each tab lists only its own files: Equity the regular ones, Mutual Funds the mutual
+                // fund ones, OPI/OPO both of its kinds.
+                (f) =>
+                    !removedKeys.has(f.key) &&
+                    (!reloadMode || (isOpiOpo ? OPI_OPO_FA_FILE_TYPES.includes(f.fileType) : f.fileType === faFileType)),
             ),
-        [faDay, removedKeys, reloadMode, faFileType],
+        [faDay, removedKeys, reloadMode, isOpiOpo, faFileType],
     );
 
     useEffect(() => {
@@ -998,8 +1003,8 @@ const CustodyMatchPanel = ({
         setFaResult(null);
         try {
             if (isOpiOpo) {
-                const assetKind = isOpiOpoMf ? "MUTUAL_FUND" : "EQUITY";
-                const res = await api.uploadOpiOpoFile({ file, uploadDate, assetKind, replace });
+                // The server tells Equity from Mutual Funds by the file's columns, as the mapping window did.
+                const res = await api.uploadOpiOpoFile({ file, uploadDate, replace });
                 setFaWarnings(res.warnings || []);
                 reportJob({
                     id: `txn-fa-upload-${Date.now()}`,
@@ -1304,8 +1309,9 @@ const CustodyMatchPanel = ({
 
     /**
      * Same idea for the transaction file: Browse and drop both land here.
-     * An Equity file picked as Mutual Funds (or the reverse) is refused before
-     * the mapping window opens; the server tells them apart by TDS / Stamp Duty.
+     * Equity tab: a Mutual Funds file is refused before the mapping window opens;
+     * the server tells them apart by TDS / Stamp Duty. OPI/OPO tab: the same
+     * check picks the mapping instead of refusing.
      */
     const handleFaFilePicked = async (f) => {
         if (!f) return;
@@ -1316,6 +1322,24 @@ const CustodyMatchPanel = ({
            that the TDS and Stamp Duty columns are there instead. */
         if (isMf) {
             setPending({ kind: "fa", file: f, fileType: faFileType, profileType });
+            return;
+        }
+        /* OPI/OPO tab: one upload for both kinds. The file's columns decide which mapping
+           opens: with TDS and Stamp Duty columns it is a Mutual Funds file, otherwise Equity. */
+        if (isOpiOpo) {
+            setFaBusy(true);
+            try {
+                const preview = await api.previewHeaders(f, api.PROFILE_TYPE.FA_OPI_OPO);
+                const detected =
+                    preview?.detectedType === api.PROFILE_TYPE.FA_OPI_OPO_MF
+                        ? api.PROFILE_TYPE.FA_OPI_OPO_MF
+                        : api.PROFILE_TYPE.FA_OPI_OPO;
+                setPending({ kind: "fa", file: f, fileType: FA_FILE_TYPE_FOR_PROFILE[detected], profileType: detected });
+            } catch (err) {
+                setFaError({ message: err.message, detail: err.detail });
+            } finally {
+                setFaBusy(false);
+            }
             return;
         }
         setFaBusy(true);
@@ -1981,7 +2005,7 @@ const CustodyMatchPanel = ({
                 requestedType={pending?.profileType || null}
                 // The Mutual Funds tab maps mutual fund files only, the OPI/OPO tab OPI/OPO files only.
                 {...(isMf ? { types: [api.PROFILE_TYPE.FA_MUTUAL_FUND] } : {})}
-                {...(isOpiOpo ? { types: [isOpiOpoMf ? api.PROFILE_TYPE.FA_OPI_OPO_MF : api.PROFILE_TYPE.FA_OPI_OPO] } : {})}
+                {...(isOpiOpo && pending?.profileType ? { types: [pending.profileType] } : {})}
                 pickedDate={faOnly ? faDate : custodyDate}
                 onUpload={uploadPending}
                 onClose={() => setPending(null)}

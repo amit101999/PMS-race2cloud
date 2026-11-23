@@ -398,8 +398,8 @@ export const fingerprint = (t) =>
  * whole file, because the system cannot tell a new trade from a changed one
  * without the ID, nor which of two different rows with one ID is right.
  * OPI/OPO files carry no ID: that tab commits a whole file once and never has
- * to tell a changed row from a new one (OpiOpoUpload.js). Its Mutual Funds
- * sub-tab passes both flags: every row is a mutual fund, and every row OPI or OPO.
+ * to tell a changed row from a new one (OpiOpoUpload.js). A Mutual Funds
+ * OPI/OPO file passes both flags: every row is a mutual fund, and every row OPI or OPO.
  */
 export const fileProblems = (trades, { mutualFund = false, opiOpo = false } = {}) => {
   const problems = [];
@@ -416,15 +416,14 @@ export const fileProblems = (trades, { mutualFund = false, opiOpo = false } = {}
       });
       continue;
     }
-    // The Mutual Funds tab (and OPI/OPO's Mutual Funds sub-tab) takes every row of its file
-    // as a mutual fund, whatever the exchange.
-    if (!mutualFund && isMutualFundTrade(t.isin, t.exchange)) {
+    // The Mutual Funds tab takes every row of its file as a mutual fund, whatever the exchange.
+    // OPI/OPO files are not checked by ISIN at all: an Equity OPI/OPO file may carry INF
+    // ISINs too (business decision, 2026-11-23); the file's columns alone decide its kind.
+    if (!mutualFund && !opiOpo && isMutualFundTrade(t.isin, t.exchange)) {
       problems.push({
         row: t.rowNumber,
         code: "MUTUAL_FUND_ROW",
-        message: opiOpo
-          ? `${t.isin} on exchange DIR is a mutual fund. Upload it in the Mutual Funds sub-tab of OPI/OPO.`
-          : `${t.isin} on exchange DIR is a mutual fund trade. Upload it in the Mutual Funds tab.`,
+        message: `${t.isin} on exchange DIR is a mutual fund trade. Upload it in the Mutual Funds tab.`,
         column: "SYMBOLCODE",
         value: t.isin,
       });

@@ -206,7 +206,11 @@ const KIND = {
   },
 };
 
-/** Asset_Kind of the OPI/OPO sub-tabs' rows in Transaction_Commit_History (written by OpiOpoUpload.js). */
+/**
+ * Asset_Kind of the OPI/OPO tab's rows in Transaction_Commit_History (written by
+ * OpiOpoUpload.js): OPI_OPO for Equity files, OPI_OPO_MF for Mutual Funds files.
+ * The tab shows both in one History list.
+ */
 const OPI_OPO_ASSET_KINDS = ["OPI_OPO", "OPI_OPO_MF"];
 
 /** The tab a request is for, or null when it names an unknown one. */
@@ -1154,7 +1158,7 @@ export const listConsolidatedFiles = async (req, res) => {
 /* ──────────────────────────── commit history ───────────────────────────── */
 
 /**
- * GET /api/custody-match/reload/commit-history[?kind=MUTUAL_FUND|OPI_OPO|OPI_OPO_MF]
+ * GET /api/custody-match/reload/commit-history[?kind=MUTUAL_FUND|OPI_OPO]
  *
  * Only Mutual Funds and OPI/OPO commits fill Asset_Kind; a row without it is
  * Equity's, so Equity rows read the same whether or not the column exists yet.
@@ -1165,9 +1169,11 @@ export const listCommitHistory = async (req, res) => {
     if (!catalystApp) return noApp(res);
     // The OPI/OPO tab (OpiOpoUpload.js) writes its commits to the same table.
     const assetKind = String(req.query?.kind || KIND.EQUITY.key).trim().toUpperCase();
-    if (![KIND.EQUITY.key, KIND.MUTUAL_FUND.key, ...OPI_OPO_ASSET_KINDS].includes(assetKind)) {
-      return fail(res, 400, { code: "BAD_KIND", message: "kind must be EQUITY, MUTUAL_FUND, OPI_OPO or OPI_OPO_MF." });
+    if (![KIND.EQUITY.key, KIND.MUTUAL_FUND.key, "OPI_OPO"].includes(assetKind)) {
+      return fail(res, 400, { code: "BAD_KIND", message: "kind must be EQUITY, MUTUAL_FUND or OPI_OPO." });
     }
+    // OPI/OPO lists its Equity and Mutual Funds files' commits together.
+    const wanted = assetKind === "OPI_OPO" ? OPI_OPO_ASSET_KINDS : [assetKind];
 
     const rows = unwrap(
       await catalystApp
@@ -1176,7 +1182,7 @@ export const listCommitHistory = async (req, res) => {
       HISTORY_TABLE,
     );
     const ownRows = rows
-      .filter((row) => (String(row.Asset_Kind || "").trim().toUpperCase() || KIND.EQUITY.key) === assetKind)
+      .filter((row) => wanted.includes(String(row.Asset_Kind || "").trim().toUpperCase() || KIND.EQUITY.key))
       .slice(0, COMMIT_HISTORY_SHOWN);
     const items = ownRows.map((row) => ({
       id: String(row.ROWID),

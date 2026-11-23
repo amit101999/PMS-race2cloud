@@ -165,8 +165,7 @@ export const proceedToImport = (runIds) => json("/runs/proceed", "POST", { runId
  * server keeps each tab's files, window, Commit and history apart. The Mutual
  * Funds tab has no custodian file and no match.
  */
-/* OPI_OPO and OPI_OPO_MF are the OPI/OPO tab's Equity and Mutual Funds sub-tabs. */
-export const KIND = { EQUITY: "EQUITY", MUTUAL_FUND: "MUTUAL_FUND", OPI_OPO: "OPI_OPO", OPI_OPO_MF: "OPI_OPO_MF" };
+export const KIND = { EQUITY: "EQUITY", MUTUAL_FUND: "MUTUAL_FUND", OPI_OPO: "OPI_OPO" };
 
 const kindQuery = (kind) => (kind && kind !== KIND.EQUITY ? `kind=${encodeURIComponent(kind)}` : "");
 const withKind = (path, kind) => {
@@ -210,10 +209,10 @@ export const deleteTdsFile = (date, key) =>
 export const getTdsDownloadUrl = (key) => request(`/tds/download?key=${encodeURIComponent(key)}`);
 
 /* OPI/OPO tab: one file (any number of dates) is one Commit. fileId is the file's uploadedAtMs. */
-/* assetKind: the sub-tab, EQUITY or MUTUAL_FUND. */
+/* The server tells Equity from Mutual Funds files by their columns (TDS and Stamp Duty). */
 /* replace: the operator chose to replace an earlier upload of the same file (DUPLICATE_FILE). */
-export const uploadOpiOpoFile = ({ file, uploadDate, assetKind, replace = false }) =>
-  form("/opi-opo/file", { file, uploadDate, assetKind, replace: replace ? "true" : "" });
+export const uploadOpiOpoFile = ({ file, uploadDate, replace = false }) =>
+  form("/opi-opo/file", { file, uploadDate, replace: replace ? "true" : "" });
 export const getOpiOpoFile = (fileId) => request(`/opi-opo/${encodeURIComponent(fileId)}`);
 export const commitOpiOpoFile = (fileId, { startedBy = "" } = {}) =>
   json(`/opi-opo/${encodeURIComponent(fileId)}/commit`, "POST", { startedBy });
@@ -311,7 +310,7 @@ export const PROFILE_HELP = {
 export const FA_FILE_TYPE = {
   REGULAR: "REGULAR",
   MUTUAL_FUND: "MUTUAL_FUND",
-  /* The OPI/OPO tab's files: Equity sub-tab (no TDS / Stamp Duty) and Mutual Funds sub-tab. */
+  /* The OPI/OPO tab's files: Equity (no TDS / Stamp Duty columns) and Mutual Funds (with them). */
   OPI_OPO: "OPI_OPO",
   OPI_OPO_MF: "OPI_OPO_MF",
 };
