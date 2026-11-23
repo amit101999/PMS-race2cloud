@@ -15,18 +15,18 @@
  * already uploaded (same content), with no Transaction look-up, so it stays
  * quick. Commit is refused when any of the file's rows is already in our books
  * (same account, ISIN, OPI/OPO, trade date, settlement date, quantity and rate:
- * `fingerprint`, across both sub-tabs), so the same entries can never be booked
+ * `fingerprint`, across both kinds), so the same entries can never be booked
  * twice. A Commit only adds rows; it never removes any.
  *
- * Two sub-tabs, told apart by `assetKind` (SUB_TAB below):
- *   EQUITY       the Equity layout; mutual fund rows (INF on DIR) are refused
- *   MUTUAL_FUND  the same plus TDS and Stamp Duty; every row is booked as a
- *                mutual fund, and an OPI's cost is QTY × RATE + Stamp Duty
+ * One upload takes both kinds of file; the file's columns decide which (SUB_TAB below):
+ *   EQUITY       the Equity layout; any ISIN is taken (INE or INF, any exchange)
+ *   MUTUAL_FUND  the same plus TDS and Stamp Duty columns; every row is booked
+ *                as a mutual fund, and an OPI's cost is QTY × RATE + Stamp Duty
  *
  * fileId is the upload time in ms, which is also part of the raw file's key
  * (FA/<upload date>/raw-<OPI_OPO|OPI_OPO_MF>-<first>-<last>-<fileId>-<name>).
  * The rest lives in Stratus temporary-files opi-opo/<fileId>/:
- *   file.json      summary: sub-tab, rows, dates, affected clients and pairs, fingerprints, fileHash, committed
+ *   file.json      summary: kind (subTab), rows, dates, affected clients and pairs, fingerprints, fileHash, committed
  *   rows.csv       the rows as the 26 template columns (+ TDS, Stamp Duty for mutual funds), which the import reads
  *   progress.json  the Commit's step and counts
  * The Commit's lock is the Jobs row RELOAD_OPI_<fileId>; its holdings jobs are
@@ -83,8 +83,9 @@ const FOLDER = "opi-opo";
 const LOCK_PREFIX = "RELOAD_OPI_";
 
 /*
- * The two sub-tabs. assetKind is the Asset_Kind of their Commit history rows;
- * a file saved before the sub-tabs existed has no subTab and is Equity's.
+ * The two kinds of OPI/OPO file, saved as file.json's subTab. assetKind is the
+ * Asset_Kind of their Commit history rows; a file saved before Mutual Funds
+ * files were taken has no subTab and is Equity's.
  */
 const SUB_TAB = {
   EQUITY: {
@@ -222,7 +223,7 @@ const removeCopies = async (catalystApp, bucket, copies) => {
 
 /* ─────────────────────────────────── upload ─────────────────────────────── */
 
-/** Mutual Funds sub-tab: TDS, Stamp Duty and TRANEXPENSE, when filled, must be numbers of zero or more. */
+/** Mutual Funds file: TDS, Stamp Duty and TRANEXPENSE, when filled, must be numbers of zero or more. */
 const deductionProblems = (trades) => {
   const problems = [];
   for (const t of trades) {
@@ -248,7 +249,7 @@ const deductionProblems = (trades) => {
 };
 
 /**
- * POST /api/custody-match/opi-opo/file   form-data: file, uploadDate, assetKind (EQUITY | MUTUAL_FUND), replace
+ * POST /api/custody-match/opi-opo/file   form-data: file, uploadDate, replace
  *
  * Reads the file and keeps it for Commit. Nothing is booked here and the
  * Transaction table is not read, so this is quick. Every row must be OPI or OPO
@@ -272,30 +273,22 @@ export const uploadOpiOpoFile = async (req, res) => {
     const uploadDay = readUploadedOn(req.body?.uploadDate);
     if (uploadDay.error) return fail(res, 400, { code: "BAD_UPLOAD_DATE", message: uploadDay.error });
     const { uploadedOn } = uploadDay;
-    const subTab = SUB_TAB[String(req.body?.assetKind || SUB_TAB.EQUITY.key).trim().toUpperCase()];
-    if (!subTab) return fail(res, 400, { code: "BAD_KIND", message: "assetKind must be EQUITY or MUTUAL_FUND." });
 
-    const type = subTab.profileType;
+    /*
+     * The file's own columns decide its kind: the mutual fund file is the one with
+     * TDS and Stamp Duty columns (its rows may leave both blank), read through the
+     * Mutual Funds mapping; any other file is read as Equity. The mapping window
+     * detects it the same way, so the operator never picks the kind.
+     */
     const profiles = await loadFieldMapProfiles(catalystApp);
+    const mfType = SUB_TAB.MUTUAL_FUND.profileType;
+    const subTab = hasDeductionColumns(file.data, { type: mfType, profile: profiles[mfType] })
+      ? SUB_TAB.MUTUAL_FUND
+      : SUB_TAB.EQUITY;
+    const type = subTab.profileType;
     const profile = profiles[type];
     const headerError = validateFaHeader(file.data, { profile, type });
     if (headerError) return fail(res, 400, { ...headerError, fileName: file.name });
-    /*
-     * Each sub-tab takes only its own layout: the mutual fund file is the one with
-     * TDS and Stamp Duty columns, read through the Mutual Funds sub-tab's mapping
-     * (its rows may leave both blank). The mapping window detects it the same way.
-     */
-    const mfType = SUB_TAB.MUTUAL_FUND.profileType;
-    const mutualFundLayout = hasDeductionColumns(file.data, { type: mfType, profile: profiles[mfType] });
-    if (subTab.mutualFund !== mutualFundLayout) {
-      return fail(res, 400, {
-        code: "FA_FILE_TYPE_MISMATCH",
-        message: subTab.mutualFund
-          ? "This file has no TDS / Stamp Duty columns, so it is an Equity OPI/OPO file. Upload it in the Equity sub-tab."
-          : "This file has TDS / Stamp Duty columns, so it is a Mutual Funds OPI/OPO file. Upload it in the Mutual Funds sub-tab.",
-        fileName: file.name,
-      });
-    }
 
     // No businessDate: the rows may be dated on any day.
     const parsed = await parseFaFile(file.data, { profile, type });
