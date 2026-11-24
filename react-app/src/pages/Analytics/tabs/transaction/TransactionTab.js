@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useRef, useMemo, useCallback } from "react";
 import { BASE_URL } from "../../../../constant";
+import { Pagination } from "../../../../components/common/CommonComponents";
 import "./TransactionTab.css";
 
 const PAGE_SIZE_DEFAULT = 20;
@@ -182,7 +183,14 @@ const TransactionTab = ({ accountCode, asOnDate }) => {
   return (
     <div className="temp-transaction-card">
       <div className="transaction-tab-header">
-        <h3>Transaction History</h3>
+        <h3>
+          Transaction History
+          {!loading && totalCount > 0 && (
+            <span className="count-pill" style={{ marginLeft: 8 }}>
+              {totalCount.toLocaleString("en-IN")} transaction{totalCount === 1 ? "" : "s"}
+            </span>
+          )}
+        </h3>
 
         <div className="security-name-search" ref={secDropdownRef}>
           <label className="search-label">Security</label>
@@ -305,126 +313,12 @@ const TransactionTab = ({ accountCode, asOnDate }) => {
       )}
 
       {!loading && !error && data.length > 0 && totalPages > 1 && (
-        <div className="transaction-pagination">
-          <button
-            type="button"
-            className="transaction-page-btn"
-            disabled={currentPage <= 1 || loadingMore}
-            onClick={() => goToPage(1)}
-            title="First page"
-          >
-            «
-          </button>
-          <button
-            type="button"
-            className="transaction-page-btn"
-            disabled={currentPage <= 1 || loadingMore}
-            onClick={() => goToPage(currentPage - 1)}
-            title="Previous page"
-          >
-            Prev
-          </button>
-
-          {(() => {
-            const pages = [];
-            const maxVisible = 5;
-            let start = Math.max(
-              1,
-              currentPage - Math.floor(maxVisible / 2)
-            );
-            let end = start + maxVisible - 1;
-            if (end > totalPages) {
-              end = totalPages;
-              start = Math.max(1, end - maxVisible + 1);
-            }
-
-            if (start > 1) {
-              pages.push(
-                <button
-                  key={1}
-                  className="transaction-page-num"
-                  onClick={() => goToPage(1)}
-                  disabled={loadingMore}
-                >
-                  1
-                </button>
-              );
-              if (start > 2) {
-                pages.push(
-                  <span
-                    key="dots-l"
-                    className="transaction-page-dots"
-                  >
-                    …
-                  </span>
-                );
-              }
-            }
-
-            for (let i = start; i <= end; i++) {
-              pages.push(
-                <button
-                  key={i}
-                  className={`transaction-page-num ${i === currentPage ? "active" : ""}`}
-                  onClick={() => goToPage(i)}
-                  disabled={i === currentPage || loadingMore}
-                >
-                  {i}
-                </button>
-              );
-            }
-
-            if (end < totalPages) {
-              if (end < totalPages - 1) {
-                pages.push(
-                  <span
-                    key="dots-r"
-                    className="transaction-page-dots"
-                  >
-                    …
-                  </span>
-                );
-              }
-              pages.push(
-                <button
-                  key={totalPages}
-                  className="transaction-page-num"
-                  onClick={() => goToPage(totalPages)}
-                  disabled={loadingMore}
-                >
-                  {totalPages}
-                </button>
-              );
-            }
-
-            return pages;
-          })()}
-
-          <button
-            type="button"
-            className="transaction-page-btn"
-            disabled={currentPage >= totalPages || loadingMore}
-            onClick={() => goToPage(currentPage + 1)}
-            title="Next page"
-          >
-            Next
-          </button>
-          <button
-            type="button"
-            className="transaction-page-btn"
-            disabled={currentPage >= totalPages || loadingMore}
-            onClick={() => goToPage(totalPages)}
-            title="Last page"
-          >
-            »
-          </button>
-
-          <span className="transaction-page-info">
-            {loadingMore
-              ? "Loading…"
-              : `Page ${currentPage} of ${totalPages} • ${totalCount.toLocaleString("en-IN")} transaction${totalCount === 1 ? "" : "s"}`}
-          </span>
-        </div>
+        <Pagination
+          currentPage={currentPage}
+          pageSize={limit}
+          totalRows={totalCount}
+          onPageChange={goToPage}
+        />
       )}
         </>
       )}
