@@ -230,15 +230,15 @@
 }
 
 /* =========================================================================
- * Transaction Upload - visual theme
+ * App visual theme (first built for Transaction Upload)
  *
- * One layer on top of the shared styles, scoped to this page only
- * (.txn-fixed-head-page), so Custodian Upload and Holding Comparison keep
- * their look. Palette: the sidebar maroon, light tints of it, white, warm
- * neutrals, and the existing status colours for success, warning and info.
+ * One layer on top of the shared styles, applied to every page whose root
+ * carries .txn-ops, so all modules share one look. Palette: the sidebar
+ * maroon, light tints of it, white, warm neutrals, and the existing status
+ * colours for success, warning and info.
  * ========================================================================= */
 
-.txn-fixed-head-page {
+.txn-ops {
   --tu-brand: #8b1538;
   --tu-brand-strong: #6c0f2b;
   --tu-brand-bright: #a01b4c;
@@ -260,26 +260,26 @@
 
 /* -- fixed band: tabs + workflow ------------------------------------------ */
 
-.txn-fixed-head-page .txn-tabs {
+.txn-ops .txn-tabs {
   border-color: var(--tu-line);
   border-radius: var(--tu-radius);
   box-shadow: var(--tu-card-shadow);
 }
 
-.txn-fixed-head-page .txn-tab.active {
+.txn-ops .txn-tab.active {
   background: var(--tu-brand);
   border-color: var(--tu-brand);
   color: #ffffff;
   box-shadow: 0 2px 6px var(--tu-ring);
 }
 
-.txn-fixed-head-page .txn-tab:not(.active):hover {
+.txn-ops .txn-tab:not(.active):hover {
   background: var(--tu-tint-2);
   color: var(--tu-brand);
 }
 
 /* The workflow strip becomes a white card of its own under the tabs. */
-.txn-fixed-head-page .txn-sticky-head .txo-tracker-bar {
+.txn-ops .txn-sticky-head .txo-tracker-bar {
   margin: 0;
   padding: 12px 20px;
   background: #ffffff;
@@ -288,38 +288,38 @@
   box-shadow: var(--tu-card-shadow);
 }
 
-.txn-fixed-head-page .txo-tracker-node {
+.txn-ops .txo-tracker-node {
   width: 20px;
   height: 20px;
   border-color: var(--tu-line-strong);
 }
 
-.txn-fixed-head-page .txo-tracker-line {
+.txn-ops .txo-tracker-line {
   height: 3px;
   border-radius: 2px;
   background: var(--tu-line);
 }
 
-.txn-fixed-head-page .txo-tracker-line.is-filled {
+.txn-ops .txo-tracker-line.is-filled {
   background: linear-gradient(90deg, var(--tu-brand), var(--tu-brand-bright));
 }
 
-.txn-fixed-head-page .txo-tracker li.is-current .txo-tracker-node {
+.txn-ops .txo-tracker li.is-current .txo-tracker-node {
   box-shadow: inset 0 0 0 3px #ffffff, 0 0 0 4px var(--tu-tint-2);
 }
 
-.txn-fixed-head-page .txo-tracker-label {
+.txn-ops .txo-tracker-label {
   font-size: 11.5px;
 }
 
-.txn-fixed-head-page .cm-date input {
+.txn-ops .cm-date input {
   padding: 7px 10px;
   border-color: var(--tu-line-strong);
   border-radius: var(--tu-radius-sm);
   background: #ffffff;
 }
 
-.txn-fixed-head-page .cm-date input:focus-visible {
+.txn-ops .cm-date input:focus-visible {
   outline: none;
   border-color: var(--tu-brand);
   box-shadow: 0 0 0 3px var(--tu-ring);
@@ -327,7 +327,7 @@
 
 /* -- section titles: a short maroon bar before each ----------------------- */
 
-.txn-fixed-head-page .txo-section-head h2 {
+.txn-ops .txo-section-head h2 {
   display: flex;
   align-items: center;
   gap: 10px;
@@ -335,7 +335,7 @@
   font-weight: 700;
 }
 
-.txn-fixed-head-page .txo-section-head h2::before {
+.txn-ops .txo-section-head h2::before {
   content: "";
   width: 4px;
   height: 18px;
@@ -343,7 +343,7 @@
   background: linear-gradient(180deg, var(--tu-brand-bright), var(--tu-brand));
 }
 
-.txn-fixed-head-page .cm-col-title {
+.txn-ops .cm-col-title {
   margin-bottom: 10px;
   font-size: 12px;
   font-weight: 700;
@@ -354,21 +354,21 @@
 
 /* -- cards ---------------------------------------------------------------- */
 
-.txn-fixed-head-page .temp-transaction-card {
+.txn-ops .temp-transaction-card {
   border-color: var(--tu-line);
   border-radius: var(--tu-radius);
   box-shadow: var(--tu-card-shadow);
 }
 
 /* The two upload cards carry a thin maroon line on top, so the eye starts there. */
-.txn-fixed-head-page .cm-filecard {
+.txn-ops .cm-filecard {
   border-top: 3px solid var(--tu-brand);
 }
 
 /* -- inputs on the upload cards ------------------------------------------- */
 
-.txn-fixed-head-page .up-select,
-.txn-fixed-head-page .up-controls input[type="date"] {
+.txn-ops .up-select,
+.txn-ops .up-controls input[type="date"] {
   height: 38px;
   padding: 0 12px;
   border: 1px solid var(--tu-line-strong);
@@ -378,13 +378,13 @@
   transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
 
-.txn-fixed-head-page .up-select:hover:not(:disabled),
-.txn-fixed-head-page .up-controls input[type="date"]:hover:not(:disabled) {
+.txn-ops .up-select:hover:not(:disabled),
+.txn-ops .up-controls input[type="date"]:hover:not(:disabled) {
   border-color: var(--tu-tint-3);
 }
 
-.txn-fixed-head-page .up-select:focus-visible,
-.txn-fixed-head-page .up-controls input[type="date"]:focus-visible {
+.txn-ops .up-select:focus-visible,
+.txn-ops .up-controls input[type="date"]:focus-visible {
   outline: none;
   border-color: var(--tu-brand);
   box-shadow: 0 0 0 3px var(--tu-ring);
@@ -392,24 +392,24 @@
 
 /* -- upload box ----------------------------------------------------------- */
 
-.txn-fixed-head-page .up-zone {
+.txn-ops .up-zone {
   min-height: 132px;
   border: 1.5px dashed rgba(139, 21, 56, 0.28);
   border-radius: var(--tu-radius);
 }
 
-.txn-fixed-head-page .up-zone:hover {
+.txn-ops .up-zone:hover {
   border-color: rgba(139, 21, 56, 0.5);
 }
 
-.txn-fixed-head-page .up-zone.is-drag {
+.txn-ops .up-zone.is-drag {
   border-style: solid;
   border-color: var(--tu-brand);
   box-shadow: 0 0 0 4px var(--tu-tint-2);
 }
 
 /* The upload icon sits in a white circle. */
-.txn-fixed-head-page .up-zone-visual svg {
+.txn-ops .up-zone-visual svg {
   box-sizing: content-box;
   padding: 10px;
   margin-bottom: 6px;
@@ -418,57 +418,57 @@
   box-shadow: 0 2px 8px var(--tu-tint-3);
 }
 
-.txn-fixed-head-page .up-zone-title {
+.txn-ops .up-zone-title {
   font-size: 14px;
   font-weight: 700;
 }
 
 /* -- uploaded file list --------------------------------------------------- */
 
-.txn-fixed-head-page .up-filelist-head {
+.txn-ops .up-filelist-head {
   font-size: 11px;
   letter-spacing: 0.06em;
   text-transform: uppercase;
 }
 
-.txn-fixed-head-page .up-filelist {
+.txn-ops .up-filelist {
   gap: 0;
   border-color: var(--tu-line);
   border-radius: var(--tu-radius-sm);
   overflow-x: hidden;
 }
 
-.txn-fixed-head-page .up-file-row {
+.txn-ops .up-file-row {
   padding: 10px 12px;
   border-bottom-color: var(--tu-line);
   transition: background-color 0.15s ease;
 }
 
-.txn-fixed-head-page .up-file-row:hover {
+.txn-ops .up-file-row:hover {
   background: var(--tu-tint-1);
 }
 
-.txn-fixed-head-page .up-file-row svg {
+.txn-ops .up-file-row svg {
   color: var(--tu-brand);
   opacity: 0.6;
 }
 
-.txn-fixed-head-page .up-file-name {
+.txn-ops .up-file-name {
   font-weight: 600;
 }
 
-.txn-fixed-head-page .up-file-remove {
+.txn-ops .up-file-remove {
   border-radius: 6px;
 }
 
 /* -- Reconciliation: the counts become small tiles ------------------------ */
 
-.txn-fixed-head-page .cm-gate-summary {
+.txn-ops .cm-gate-summary {
   gap: 12px;
   border-bottom-color: var(--tu-line);
 }
 
-.txn-fixed-head-page .cm-gate-fact {
+.txn-ops .cm-gate-fact {
   min-width: 132px;
   padding: 10px 14px;
   border: 1px solid var(--tu-line);
@@ -476,26 +476,26 @@
   background: var(--tu-tint-1);
 }
 
-.txn-fixed-head-page .cm-gate-fact-label {
+.txn-ops .cm-gate-fact-label {
   font-size: 11px;
   letter-spacing: 0.04em;
   text-transform: uppercase;
   color: var(--txo-text-muted);
 }
 
-.txn-fixed-head-page .cm-gate-fact-value {
+.txn-ops .cm-gate-fact-value {
   font-size: 18px;
   font-weight: 700;
   color: var(--tu-brand);
 }
 
-.txn-fixed-head-page .cm-gate-row {
+.txn-ops .cm-gate-row {
   align-items: center;
 }
 
 /* -- buttons -------------------------------------------------------------- */
 
-.txn-fixed-head-page .cm-primary {
+.txn-ops .cm-primary {
   padding: 11px 22px;
   border-radius: var(--tu-radius-sm);
   background: linear-gradient(135deg, var(--tu-brand-bright), var(--tu-brand));
@@ -503,40 +503,40 @@
   transition: background 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
 }
 
-.txn-fixed-head-page .cm-primary:hover:not(:disabled) {
+.txn-ops .cm-primary:hover:not(:disabled) {
   background: linear-gradient(135deg, var(--tu-brand), var(--tu-brand-strong));
   box-shadow: 0 4px 14px var(--tu-ring);
   transform: translateY(-1px);
 }
 
-.txn-fixed-head-page .cm-primary:disabled {
+.txn-ops .cm-primary:disabled {
   background: #e6e1e3;
   color: #9a9095;
   box-shadow: none;
 }
 
-.txn-fixed-head-page .cm-primary--warn {
+.txn-ops .cm-primary--warn {
   background: linear-gradient(135deg, #b07a12, var(--txo-warning));
   box-shadow: 0 2px 8px rgba(154, 100, 0, 0.22);
 }
 
-.txn-fixed-head-page .cm-secondary {
+.txn-ops .cm-secondary {
   border-color: var(--tu-line-strong);
   border-radius: var(--tu-radius-sm);
 }
 
-.txn-fixed-head-page .cm-secondary:hover {
+.txn-ops .cm-secondary:hover {
   background: var(--tu-tint-1);
 }
 
-.txn-fixed-head-page .cm-blockers {
+.txn-ops .cm-blockers {
   padding-left: 0;
   font-weight: 500;
 }
 
 /* -- information boxes (duplicates, locked date) -------------------------- */
 
-.txn-fixed-head-page .cm-reload-result {
+.txn-ops .cm-reload-result {
   padding: 12px 14px;
   border: 1px solid var(--tu-line);
   border-left: 3px solid var(--tu-brand);
@@ -546,12 +546,12 @@
 
 /* -- history tables ------------------------------------------------------- */
 
-.txn-fixed-head-page .data-table-wrap {
+.txn-ops .data-table-wrap {
   border-color: var(--tu-line);
   border-radius: var(--tu-radius-sm);
 }
 
-.txn-fixed-head-page .data-table thead th {
+.txn-ops .data-table thead th {
   background: var(--tu-tint-2);
   color: var(--tu-brand-strong);
   font-size: 11.5px;
@@ -560,12 +560,44 @@
   border-bottom-color: var(--tu-line-strong);
 }
 
-.txn-fixed-head-page .data-table tbody tr:hover {
+.txn-ops .data-table tbody tr:hover {
   background: var(--tu-tint-1);
 }
 
+/* -- pagination ------------------------------------------------------------ */
+/* Pages built their own pagination with different sizes. Give every one the
+   same button size as the shared Pagination (.pager-btn), and the same 13px
+   for the "Page X of Y" text, so buttons and text read as one row. */
+
+.txn-ops .pagination button,
+.txn-ops .dividend-pagination button,
+.txn-ops .cash-page-btn {
+  padding: 3px 10px;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.5;
+  border-radius: 6px;
+}
+
+/* Numbered page buttons: square, same height as the buttons beside them. */
+.txn-ops .cash-page-num {
+  width: auto;
+  min-width: 28px;
+  height: 28px;
+  padding: 0 8px;
+  font-size: 13px;
+  line-height: 1;
+  border-radius: 6px;
+}
+
+.txn-ops .pagination span,
+.txn-ops .dividend-pagination span,
+.txn-ops .cash-page-info {
+  font-size: 13px;
+}
+
 @media (prefers-reduced-motion: reduce) {
-  .txn-fixed-head-page .cm-primary:hover:not(:disabled) {
+  .txn-ops .cm-primary:hover:not(:disabled) {
     transform: none;
   }
 }

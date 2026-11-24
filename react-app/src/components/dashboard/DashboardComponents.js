@@ -15,6 +15,8 @@ import {
   ExchangeCard,
 } from "../common/CommonComponents";
 import {BASE_URL} from "../../constant";
+import "../../pages/TempTransactionUpload/tokens.css";
+import "../../pages/TempTransactionUpload/TempTransaction.css";
 /* ===========================
    SUMMARY CARDS ROW
    =========================== */
@@ -494,8 +496,10 @@ export function RecentTradesSection() {
     borderTop: "1px solid #e5e7eb",
   };
 
+  // txn-ops gives the table the app theme; the card's own white background
+  // (inline style) still wins over the theme's page colour.
   return (
-    <Card style={{ marginTop: 24 }}>
+    <Card className="txn-ops" style={{ marginTop: 24 }}>
       <div style={headerRow}>
         <h2 style={{ fontSize: 14, fontWeight: 600, color: "#111827" }}>
           Recent Trades

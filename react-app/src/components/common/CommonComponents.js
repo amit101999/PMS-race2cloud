@@ -50,7 +50,7 @@ export function Button({
    CARDS
    =========================== */
 
-export function Card({ children, style = {} }) {
+export function Card({ children, className, style = {} }) {
   const base = {
     backgroundColor: "#ffffff",
     borderRadius: 16,
@@ -62,7 +62,11 @@ export function Card({ children, style = {} }) {
     overflow: "visible",
   };
 
-  return <div style={{ ...base, ...style }}>{children}</div>;
+  return (
+    <div className={className} style={{ ...base, ...style }}>
+      {children}
+    </div>
+  );
 }
 
 export function StatCard({ label, value, subLabel, style = {} }) {
@@ -331,9 +335,9 @@ export function Pagination({
   const containerStyle = {
     display: "flex",
     alignItems: "center",
-    justifyContent: "space-between",
+    justifyContent: "center",
     padding: "12px 16px",
-    fontSize: 12,
+    fontSize: 13,
     color: "#4b5563",
   };
 
@@ -342,16 +346,6 @@ export function Pagination({
     alignItems: "center",
     gap: 8,
   };
-
-  const buttonStyle = (disabled) => ({
-    padding: "4px 8px",
-    borderRadius: 4,
-    border: "1px solid #e5e7eb",
-    backgroundColor: disabled ? "#f9fafb" : "#ffffff",
-    color: disabled ? "#9ca3af" : "#374151",
-    fontSize: 11,
-    cursor: disabled ? "default" : "pointer",
-  });
 
   const selectStyle = {
     padding: "4px 8px",
@@ -375,15 +369,17 @@ export function Pagination({
       <div style={controlsStyle}>
         <button
           type="button"
-          style={buttonStyle(disabledPrev)}
-          onClick={!disabledPrev ? handleFirst : undefined}
+          className="pager-btn"
+          disabled={disabledPrev}
+          onClick={handleFirst}
         >
           « First
         </button>
         <button
           type="button"
-          style={buttonStyle(disabledPrev)}
-          onClick={!disabledPrev ? handlePrev : undefined}
+          className="pager-btn"
+          disabled={disabledPrev}
+          onClick={handlePrev}
         >
           ‹ Prev
         </button>
@@ -392,15 +388,17 @@ export function Pagination({
         </span>
         <button
           type="button"
-          style={buttonStyle(disabledNext)}
-          onClick={!disabledNext ? handleNext : undefined}
+          className="pager-btn"
+          disabled={disabledNext}
+          onClick={handleNext}
         >
           Next ›
         </button>
         <button
           type="button"
-          style={buttonStyle(disabledNext)}
-          onClick={!disabledNext ? handleLast : undefined}
+          className="pager-btn"
+          disabled={disabledNext}
+          onClick={handleLast}
         >
           Last »
         </button>

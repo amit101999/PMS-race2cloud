@@ -413,6 +413,43 @@
   }
 }
 
+/* ─────────────────────── Pagination buttons ─────────────────────── */
+/* Used by the shared Pagination component (First / Prev / Next / Last). */
+
+/* Same font size as the "Page X of Y" text beside it, with a slim padding,
+   so the buttons and the text read as one row. */
+.pager-btn {
+  padding: 3px 10px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.5;
+  color: var(--ds-text);
+  background: var(--ds-surface);
+  border: 1px solid #ddd4d8;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+
+.pager-btn:hover:not(:disabled) {
+  color: var(--ds-brand);
+  background: rgba(139, 21, 56, 0.06);
+  border-color: rgba(139, 21, 56, 0.35);
+}
+
+.pager-btn:focus-visible {
+  outline: none;
+  border-color: var(--ds-brand);
+  box-shadow: 0 0 0 3px rgba(139, 21, 56, 0.18);
+}
+
+.pager-btn:disabled {
+  color: var(--ds-text-faint);
+  background: var(--ds-surface-sunken);
+  cursor: not-allowed;
+}
+
 @keyframes ds-pulse {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.35; }
